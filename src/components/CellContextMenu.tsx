@@ -1,0 +1,169 @@
+import { useLayoutEffect, useRef, useState } from "react";
+
+const MENU_VIEWPORT_MARGIN = 8;
+
+type CellContextMenuProps = {
+  address: string;
+  x: number;
+  y: number;
+  canPasteSpecial: boolean;
+  isWrapped: boolean;
+  onClose: () => void;
+  onCut: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onPasteValues: () => void;
+  onPasteFormats: () => void;
+  onClearAll: () => void;
+  onClearContents: () => void;
+  onClearFormats: () => void;
+  onClearConditionalFormats: () => void;
+  onClearHyperlinks: () => void;
+  onClearValidation: () => void;
+  onClearComments: () => void;
+  onToggleWrapText: () => void;
+  onInsertRow: () => void;
+  onDeleteRow: () => void;
+  onInsertColumn: () => void;
+  onDeleteColumn: () => void;
+  onComment: () => void;
+  onLink: () => void;
+};
+
+export function CellContextMenu({
+  address,
+  x,
+  y,
+  canPasteSpecial,
+  isWrapped,
+  onClose,
+  onCut,
+  onCopy,
+  onPaste,
+  onPasteValues,
+  onPasteFormats,
+  onClearAll,
+  onClearContents,
+  onClearFormats,
+  onClearConditionalFormats,
+  onClearHyperlinks,
+  onClearValidation,
+  onClearComments,
+  onToggleWrapText,
+  onInsertRow,
+  onDeleteRow,
+  onInsertColumn,
+  onDeleteColumn,
+  onComment,
+  onLink
+}: CellContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+
+    if (!menu) {
+      setPosition({ left: x, top: y });
+      return;
+    }
+    const menuElement = menu;
+
+    function updatePosition() {
+      const rect = menuElement.getBoundingClientRect();
+      const maxLeft = Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - rect.width - MENU_VIEWPORT_MARGIN);
+      const maxTop = Math.max(MENU_VIEWPORT_MARGIN, window.innerHeight - rect.height - MENU_VIEWPORT_MARGIN);
+      const nextPosition = {
+        left: Math.min(Math.max(MENU_VIEWPORT_MARGIN, x), maxLeft),
+        top: Math.min(Math.max(MENU_VIEWPORT_MARGIN, y), maxTop)
+      };
+
+      setPosition((currentPosition) =>
+        currentPosition.left === nextPosition.left && currentPosition.top === nextPosition.top ? currentPosition : nextPosition
+      );
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    return () => window.removeEventListener("resize", updatePosition);
+  }, [x, y]);
+
+  function run(action: () => void) {
+    action();
+    onClose();
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      className="cell-context-menu"
+      role="menu"
+      aria-label="Cell context menu"
+      style={{ left: position.left, top: position.top }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="cell-context-menu-heading">{address}</div>
+      <button type="button" role="menuitem" onClick={() => run(onCut)}>
+        Cut
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onCopy)}>
+        Copy
+      </button>
+      <button type="button" role="menuitem" disabled={!canPasteSpecial} onClick={() => run(onPaste)}>
+        Paste
+      </button>
+      <button type="button" role="menuitem" disabled={!canPasteSpecial} onClick={() => run(onPasteValues)}>
+        Paste values
+      </button>
+      <button type="button" role="menuitem" disabled={!canPasteSpecial} onClick={() => run(onPasteFormats)}>
+        Paste formats
+      </button>
+      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <button type="button" role="menuitem" onClick={() => run(onClearAll)}>
+        Clear all
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearContents)}>
+        Clear contents
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearFormats)}>
+        Clear formats
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearConditionalFormats)}>
+        Clear conditional formats
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearHyperlinks)}>
+        Clear hyperlinks
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearValidation)}>
+        Clear validation
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onToggleWrapText)}>
+        {isWrapped ? "Unwrap text" : "Wrap text"}
+      </button>
+      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <button type="button" role="menuitem" onClick={() => run(onInsertRow)}>
+        Insert row above
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onDeleteRow)}>
+        Delete row
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onInsertColumn)}>
+        Insert column left
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onDeleteColumn)}>
+        Delete column
+      </button>
+      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <button type="button" role="menuitem" onClick={() => run(onComment)}>
+        Comment
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onClearComments)}>
+        Clear comments
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onLink)}>
+        Link
+      </button>
+    </div>
+  );
+}
