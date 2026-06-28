@@ -1,3 +1,5 @@
+import type { PivotDrilldownEntry, PivotMaterializedRowKind, PivotSheetMetadata } from "../types";
+
 export type PivotAggregator = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX";
 
 export type PivotConfig = {
@@ -19,11 +21,20 @@ type PivotGroup = {
   key: string[];
   total: AggregateState;
   columns: Map<string, AggregateState>;
+  records: string[][];
+  columnRecords: Map<string, string[][]>;
 };
 
 const PIVOT_LABEL_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 
 export function createPivotTable(rows: string[][], config: PivotConfig): string[][] {
+  return createPivotTableWithDrilldowns(rows, config).rows;
+}
+
+export function createPivotTableWithDrilldowns(rows: string[][], config: PivotConfig): {
+  rows: string[][];
+  metadata: PivotSheetMetadata;
+} {
   if (rows.length < 2) {
     throw new Error("Pivot tables need a header row and at least one data row.");
   }
@@ -37,15 +48,20 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
   const rowFieldIndexes = config.rowFields.map((field) => fieldIndexes[field]);
   const groups = new Map<string, PivotGroup>();
   const columnTotals = new Map<string, AggregateState>();
+  const columnTotalRecords = new Map<string, string[][]>();
   const columnValues: string[] = [];
   const grandTotal = createAggregateState();
+  const allSourceRows: string[][] = [];
 
   for (const row of rows.slice(1)) {
+    const sourceRow = headers.map((_, index) => String(row[index] ?? ""));
     const rowKey = rowFieldIndexes.map((index) => normalizeDimensionValue(row[index]));
     const rowKeyId = serializeKey(rowKey);
     const group = getOrCreateGroup(groups, rowKeyId, rowKey);
-    const rawValue = row[valueIndex] ?? "";
+    const rawValue = sourceRow[valueIndex] ?? "";
 
+    group.records.push(sourceRow);
+    allSourceRows.push(sourceRow);
     addAggregateValue(group.total, rawValue);
     addAggregateValue(grandTotal, rawValue);
 
@@ -57,6 +73,7 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
         group.columns.set(columnValue, columnState);
       }
       addAggregateValue(columnState, rawValue);
+      pushRecord(group.columnRecords, columnValue, sourceRow);
 
       let columnTotal = columnTotals.get(columnValue);
       if (!columnTotal) {
@@ -65,20 +82,29 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
         columnValues.push(columnValue);
       }
       addAggregateValue(columnTotal, rawValue);
+      pushRecord(columnTotalRecords, columnValue, sourceRow);
     }
   }
 
   const sortedGroups = Array.from(groups.values()).sort(comparePivotGroups);
   const sortedColumnValues = [...columnValues].sort(comparePivotLabels);
+  const drilldowns: Record<string, PivotDrilldownEntry> = {};
 
   if (!config.columnField) {
     const header = [...config.rowFields, `${config.aggregator} of ${config.valueField}`];
     const body = sortedGroups.map((group) => [...group.key, formatAggregate(group.total, config.aggregator)]);
-    return [
+    const pivotRows = [
       header,
       ...body,
       [...grandTotalCells(config.rowFields.length), formatAggregate(grandTotal, config.aggregator)]
     ];
+
+    sortedGroups.forEach((group, groupIndex) => {
+      addDrilldownEntry(drilldowns, groupIndex + 1, config.rowFields.length, rowFilters(config.rowFields, group.key), group.records);
+    });
+    addDrilldownEntry(drilldowns, pivotRows.length - 1, config.rowFields.length, {}, allSourceRows);
+
+    return createPivotResult(pivotRows, rows[0], config, drilldowns);
   }
 
   const header = [...config.rowFields, ...sortedColumnValues, "Grand Total"];
@@ -94,7 +120,129 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
     formatAggregate(grandTotal, config.aggregator)
   ];
 
-  return [header, ...body, grandTotalRow];
+  const pivotRows = [header, ...body, grandTotalRow];
+  sortedGroups.forEach((group, groupIndex) => {
+    const baseRow = groupIndex + 1;
+    sortedColumnValues.forEach((columnValue, columnIndexOffset) => {
+      const filters = { ...rowFilters(config.rowFields, group.key), [config.columnField!]: columnValue };
+      addDrilldownEntry(
+        drilldowns,
+        baseRow,
+        config.rowFields.length + columnIndexOffset,
+        filters,
+        group.columnRecords.get(columnValue) ?? []
+      );
+    });
+    addDrilldownEntry(
+      drilldowns,
+      baseRow,
+      config.rowFields.length + sortedColumnValues.length,
+      rowFilters(config.rowFields, group.key),
+      group.records
+    );
+  });
+
+  sortedColumnValues.forEach((columnValue, columnIndexOffset) => {
+    addDrilldownEntry(
+      drilldowns,
+      pivotRows.length - 1,
+      config.rowFields.length + columnIndexOffset,
+      { [config.columnField!]: columnValue },
+      columnTotalRecords.get(columnValue) ?? []
+    );
+  });
+  addDrilldownEntry(drilldowns, pivotRows.length - 1, header.length - 1, {}, allSourceRows);
+
+  return createPivotResult(pivotRows, rows[0], config, drilldowns);
+}
+
+export function materializePivotRows(metadata: PivotSheetMetadata): string[][] {
+  const width = Math.max(matrixWidth(metadata.baseRows), metadata.sourceHeaders.length);
+  const rows: string[][] = [];
+
+  metadata.baseRows.forEach((baseRow, baseRowIndex) => {
+    rows.push(padRow(baseRow, width));
+
+    for (const entry of expandedEntriesForBaseRow(metadata, baseRowIndex)) {
+      rows.push(padRow(metadata.sourceHeaders, width));
+      for (const sourceRow of entry.sourceRows) {
+        rows.push(padRow(sourceRow, width));
+      }
+    }
+  });
+
+  return rows;
+}
+
+export function getPivotDrilldownCell(
+  metadata: PivotSheetMetadata | undefined,
+  row: number,
+  column: number
+): { entry: PivotDrilldownEntry; expanded: boolean; sourceRowCount: number } | null {
+  if (!metadata) {
+    return null;
+  }
+
+  let materializedRow = 0;
+  for (let baseRow = 0; baseRow < metadata.baseRows.length; baseRow += 1) {
+    if (materializedRow === row) {
+      const entry = entriesForBaseRow(metadata, baseRow).find((candidate) => candidate.column === column);
+      return entry ? { entry, expanded: Boolean(metadata.expanded[entry.id]), sourceRowCount: entry.sourceRows.length } : null;
+    }
+
+    materializedRow += 1;
+    for (const entry of expandedEntriesForBaseRow(metadata, baseRow)) {
+      materializedRow += entry.sourceRows.length + 1;
+    }
+  }
+
+  return null;
+}
+
+export function getPivotMaterializedRowKind(
+  metadata: PivotSheetMetadata | undefined,
+  row: number
+): PivotMaterializedRowKind | null {
+  if (!metadata) {
+    return null;
+  }
+
+  let materializedRow = 0;
+  for (let baseRow = 0; baseRow < metadata.baseRows.length; baseRow += 1) {
+    if (materializedRow === row) {
+      return null;
+    }
+
+    materializedRow += 1;
+    for (const entry of expandedEntriesForBaseRow(metadata, baseRow)) {
+      if (materializedRow === row) {
+        return { kind: "detail-header", entryId: entry.id };
+      }
+      materializedRow += 1;
+
+      if (row >= materializedRow && row < materializedRow + entry.sourceRows.length) {
+        return { kind: "detail-row", entryId: entry.id };
+      }
+      materializedRow += entry.sourceRows.length;
+    }
+  }
+
+  return null;
+}
+
+export function togglePivotDrilldown(metadata: PivotSheetMetadata, entryId: string): PivotSheetMetadata {
+  if (!metadata.drilldowns[entryId]) {
+    return metadata;
+  }
+
+  const expanded = { ...metadata.expanded };
+  if (expanded[entryId]) {
+    delete expanded[entryId];
+  } else {
+    expanded[entryId] = true;
+  }
+
+  return { ...metadata, expanded };
 }
 
 function normalizeHeaders(headerRow: string[]): string[] {
@@ -135,7 +283,9 @@ function getOrCreateGroup(groups: Map<string, PivotGroup>, rowKeyId: string, row
     group = {
       key: rowKey,
       total: createAggregateState(),
-      columns: new Map()
+      columns: new Map(),
+      records: [],
+      columnRecords: new Map()
     };
     groups.set(rowKeyId, group);
   }
@@ -257,6 +407,80 @@ function normalizeDimensionValue(value: string | undefined): string {
 
 function serializeKey(key: string[]): string {
   return JSON.stringify(key);
+}
+
+function createPivotResult(
+  rows: string[][],
+  sourceHeaderRow: string[],
+  config: PivotConfig,
+  drilldowns: Record<string, PivotDrilldownEntry>
+) {
+  const metadata: PivotSheetMetadata = {
+    sourceHeaders: normalizeHeaders(sourceHeaderRow),
+    baseRows: rows.map((row) => [...row]),
+    config: {
+      rowFields: [...config.rowFields],
+      columnField: config.columnField,
+      valueField: config.valueField,
+      aggregator: config.aggregator
+    },
+    drilldowns,
+    expanded: {}
+  };
+
+  return { rows, metadata };
+}
+
+function addDrilldownEntry(
+  drilldowns: Record<string, PivotDrilldownEntry>,
+  baseRow: number,
+  column: number,
+  filters: Record<string, string>,
+  sourceRows: string[][]
+) {
+  if (sourceRows.length === 0) {
+    return;
+  }
+
+  const id = `drilldown-r${baseRow}-c${column}`;
+  drilldowns[id] = {
+    id,
+    baseRow,
+    column,
+    filters,
+    sourceRows: sourceRows.map((row) => [...row])
+  };
+}
+
+function rowFilters(rowFields: string[], rowKey: string[]): Record<string, string> {
+  return Object.fromEntries(rowFields.map((field, index) => [field, rowKey[index] ?? ""]));
+}
+
+function pushRecord(records: Map<string, string[][]>, key: string, row: string[]) {
+  const rows = records.get(key);
+  if (rows) {
+    rows.push(row);
+    return;
+  }
+  records.set(key, [row]);
+}
+
+function entriesForBaseRow(metadata: PivotSheetMetadata, baseRow: number): PivotDrilldownEntry[] {
+  return Object.values(metadata.drilldowns)
+    .filter((entry) => entry.baseRow === baseRow)
+    .sort((left, right) => left.column - right.column || left.id.localeCompare(right.id));
+}
+
+function expandedEntriesForBaseRow(metadata: PivotSheetMetadata, baseRow: number): PivotDrilldownEntry[] {
+  return entriesForBaseRow(metadata, baseRow).filter((entry) => metadata.expanded[entry.id]);
+}
+
+function matrixWidth(rows: string[][]): number {
+  return rows.reduce((width, row) => Math.max(width, row.length), 0);
+}
+
+function padRow(row: string[], width: number): string[] {
+  return [...row, ...Array(Math.max(width - row.length, 0)).fill("")];
 }
 
 function formatNumber(value: number): string {

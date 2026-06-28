@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from "react";
-import { ChevronDown, ListFilter } from "lucide-react";
+import { ChevronDown, ChevronRight, ListFilter } from "lucide-react";
 import { FormulaSuggestions, formulaSuggestionOptionId } from "./FormulaSuggestions";
 import type { CellFormat, CellRange, ConditionalFormatRule, DataValidationRule, SheetFilter, SheetModel } from "../types";
 import { columnIndexToName, formatCellAddress, getRangeAddresses, normalizeRange } from "../lib/addressing";
@@ -8,6 +8,7 @@ import { formatDisplayValue } from "../lib/displayFormat";
 import { getVisibleRows } from "../lib/filters";
 import type { FormulaEngine } from "../lib/formulaEngine";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../lib/formulaSuggestions";
+import { getPivotDrilldownCell, getPivotMaterializedRowKind } from "../lib/pivot";
 import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
@@ -49,6 +50,7 @@ type GridProps = {
   onAutoFilterColumn?: (column: number, values: string[]) => void;
   onClearAutoFilterColumn?: (column: number) => void;
   onSortAutoFilterColumn?: (column: number, direction: "asc" | "desc") => void;
+  onTogglePivotDrilldown?: (entryId: string) => void;
   onColumnResize?: (column: number, width: number) => void;
   onRowResize?: (row: number, height: number) => void;
 };
@@ -99,6 +101,7 @@ export function Grid({
   onAutoFilterColumn,
   onClearAutoFilterColumn,
   onSortAutoFilterColumn,
+  onTogglePivotDrilldown,
   onColumnResize,
   onRowResize
 }: GridProps) {
@@ -355,6 +358,7 @@ export function Grid({
             onAutoFilterColumn={onAutoFilterColumn}
             onClearAutoFilterColumn={onClearAutoFilterColumn}
             onSortAutoFilterColumn={onSortAutoFilterColumn}
+            onTogglePivotDrilldown={onTogglePivotDrilldown}
             onStartDrag={() => setIsDragging(true)}
             onExtendDrag={(address) => {
               if (isDragging) {
@@ -432,6 +436,7 @@ function RowFragment({
   onAutoFilterColumn,
   onClearAutoFilterColumn,
   onSortAutoFilterColumn,
+  onTogglePivotDrilldown,
   onStartDrag,
   onExtendDrag,
   isAutoFillDragging,
@@ -469,6 +474,7 @@ function RowFragment({
   onAutoFilterColumn?: (column: number, values: string[]) => void;
   onClearAutoFilterColumn?: (column: number) => void;
   onSortAutoFilterColumn?: (column: number, direction: "asc" | "desc") => void;
+  onTogglePivotDrilldown?: (entryId: string) => void;
   onStartDrag: () => void;
   onExtendDrag: (address: string) => void;
   isAutoFillDragging: boolean;
@@ -497,6 +503,7 @@ function RowFragment({
   }, [editingCell?.address, editingCell?.value]);
   const isRowSelected =
     selection.start.column === 0 && selection.end.column === sheet.columnCount - 1 && row >= selection.start.row && row <= selection.end.row;
+  const pivotRowKind = getPivotMaterializedRowKind(sheet.pivot, row);
 
   useEffect(() => {
     setActiveSuggestionIndex(0);
@@ -611,6 +618,7 @@ function RowFragment({
           isMergeAnchor && mergeInfo ? sumColumnWidths(columnWidths, mergeInfo.range.start.column, mergeInfo.range.end.column) : columnWidths[column];
         const cellHeight =
           isMergeAnchor && mergeInfo ? sumRowHeights(sheet, mergeInfo.range.start.row, mergeInfo.range.end.row) : rowHeight;
+        const pivotDrilldown = isMergeCovered ? null : getPivotDrilldownCell(sheet.pivot, row, column);
         const borderStyle = getBorderStyle(mergedFormat?.borders);
         const style =
           mergedFormat?.bold ||
@@ -665,6 +673,9 @@ function RowFragment({
               isAutoFilterMenuOpen ? "auto-filter-menu-open" : "",
               hasValidationDropdown ? "validation-list-cell" : "",
               isValidationDropdownOpen ? "validation-dropdown-open" : "",
+              pivotDrilldown ? "pivot-drilldown-cell" : "",
+              pivotRowKind?.kind === "detail-header" ? "pivot-detail-header-cell" : "",
+              pivotRowKind?.kind === "detail-row" ? "pivot-detail-row-cell" : "",
               mergedFormat?.wrapText ? "wrapped-cell" : "",
               isReadOnly ? "read-only-cell" : "",
               conditionalFormat ? "conditional-format-cell" : "",
@@ -676,7 +687,12 @@ function RowFragment({
               .join(" ")}
             style={style}
             aria-readonly={isReadOnly || undefined}
-            title={[isReadOnly ? "Read only" : "", comment ? `Comment: ${comment}` : "", hyperlink ? `Link: ${hyperlink}` : ""]
+            title={[
+              isReadOnly ? "Read only" : "",
+              pivotDrilldown ? `${pivotDrilldown.sourceRowCount} source ${pivotDrilldown.sourceRowCount === 1 ? "row" : "rows"}` : "",
+              comment ? `Comment: ${comment}` : "",
+              hyperlink ? `Link: ${hyperlink}` : ""
+            ]
               .filter(Boolean)
               .join("\n") || undefined}
             onMouseDown={(event) => {
@@ -702,6 +718,10 @@ function RowFragment({
               onCellContextMenu?.({ address, row, column, x: event.clientX, y: event.clientY });
             }}
             onDoubleClick={() => {
+              if (pivotDrilldown) {
+                onTogglePivotDrilldown?.(pivotDrilldown.entry.id);
+                return;
+              }
               if (!isMergeCovered) {
                 onStartEdit(address);
               }
@@ -833,6 +853,28 @@ function RowFragment({
               </div>
             ) : (
               <>
+                {pivotDrilldown ? (
+                  <button
+                    type="button"
+                    className="pivot-drilldown-toggle"
+                    aria-label={`${pivotDrilldown.expanded ? "Collapse" : "Expand"} drilldown for ${address}`}
+                    aria-expanded={pivotDrilldown.expanded}
+                    title={`${pivotDrilldown.expanded ? "Collapse" : "Expand"} ${pivotDrilldown.sourceRowCount} source ${
+                      pivotDrilldown.sourceRowCount === 1 ? "row" : "rows"
+                    }`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onTogglePivotDrilldown?.(pivotDrilldown.entry.id);
+                    }}
+                  >
+                    {pivotDrilldown.expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+                  </button>
+                ) : null}
                 {hyperlink ? (
                   <a
                     href={hyperlink}

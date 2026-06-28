@@ -1016,6 +1016,38 @@ test("creates nested row pivot tables from the builder", async ({ page }) => {
   await expect(page.getByRole("gridcell", { name: "C3 7", exact: true })).toBeVisible();
 });
 
+test("expands pivot drilldown rows inline", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("gridcell", { name: "A1", exact: true }).click();
+  await pasteGridData(
+    page,
+    "Region\tProduct\tSales\nWest\tHardware\t10\nWest\tSoftware\t20\nEast\tHardware\t8\nEast\tSoftware\t7"
+  );
+  await selectRange(page, "A1 Region", "C5 7");
+
+  await openRibbonTab(page, "Insert");
+  await page.getByRole("button", { name: "Pivot table", exact: true }).click();
+  await page.getByLabel("Pivot columns").selectOption("");
+  await page.getByLabel("Pivot row detail").selectOption("Product");
+  await page.getByRole("button", { name: "Create pivot table", exact: true }).click();
+
+  await page.getByRole("button", { name: "Expand drilldown for C2", exact: true }).click();
+
+  await expect(page.getByRole("gridcell", { name: "A3 Region", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "B3 Product", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "C3 Sales", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A4 East", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "B4 Hardware", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "C4 8", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "B5 Software", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Collapse drilldown for C2", exact: true }).click();
+
+  await expect(page.getByRole("gridcell", { name: "B3 Software", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "C4 8", exact: true })).not.toBeVisible();
+});
+
 test("summarizes, sorts, and replaces selected data", async ({ page }) => {
   await page.goto("/");
 

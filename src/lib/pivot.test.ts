@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPivotTable } from "./pivot";
+import { createPivotTable, createPivotTableWithDrilldowns, getPivotDrilldownCell, materializePivotRows } from "./pivot";
 
 describe("pivot", () => {
   const rows = [
@@ -165,5 +165,54 @@ describe("pivot", () => {
     expect(result[0]).toEqual(["Account", "Month 0", "Month 1", "Month 2", "Month 3", "Month 4", "Month 5", "Grand Total"]);
     expect(result.at(-1)).toEqual(["Grand Total", "500", "500", "500", "500", "500", "500", "3000"]);
     expect(duration).toBeLessThan(250);
+  });
+
+  it("tracks source rows for pivot drilldown cells", () => {
+    const pivot = createPivotTableWithDrilldowns(rows, {
+      rowFields: ["Region", "Product"],
+      valueField: "Sales",
+      aggregator: "SUM"
+    });
+
+    expect(pivot.rows).toEqual([
+      ["Region", "Product", "SUM of Sales"],
+      ["East", "Hardware", "8"],
+      ["East", "Software", "7"],
+      ["West", "Hardware", "10"],
+      ["West", "Software", "20"],
+      ["Grand Total", "", "45"]
+    ]);
+
+    const drilldown = getPivotDrilldownCell(pivot.metadata, 1, 2);
+    expect(drilldown).toMatchObject({
+      expanded: false,
+      sourceRowCount: 1,
+      entry: {
+        filters: { Region: "East", Product: "Hardware" },
+        sourceRows: [["East", "Hardware", "8"]]
+      }
+    });
+  });
+
+  it("materializes expanded pivot drilldown rows below the summary row", () => {
+    const pivot = createPivotTableWithDrilldowns(rows, {
+      rowFields: ["Region", "Product"],
+      valueField: "Sales",
+      aggregator: "SUM"
+    });
+    const drilldown = getPivotDrilldownCell(pivot.metadata, 1, 2);
+
+    const expandedRows = materializePivotRows({
+      ...pivot.metadata,
+      expanded: { [drilldown!.entry.id]: true }
+    });
+
+    expect(expandedRows.slice(0, 5)).toEqual([
+      ["Region", "Product", "SUM of Sales"],
+      ["East", "Hardware", "8"],
+      ["Region", "Product", "Sales"],
+      ["East", "Hardware", "8"],
+      ["East", "Software", "7"]
+    ]);
   });
 });
