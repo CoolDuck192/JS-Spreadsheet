@@ -5,11 +5,11 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "dev": "PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH vite --host 127.0.0.1",
-    "build": "PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH tsc -b && PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH vite build",
-    "test": "PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH vitest run",
-    "test:watch": "PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH vitest",
-    "test:e2e": "PATH=/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH playwright test"
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

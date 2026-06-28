@@ -16,22 +16,58 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 - CSV and XLSX import/export, including common cell styling, data validation rules, conditional formats, protected sheets with unlocked cells, freeze panes, named ranges, AutoFilter ranges, active sheet tabs, hidden sheet tabs, blank sheets, and workbook structure such as dimensions, merges, comments, hyperlinks, and hidden rows/columns.
 - Browser local-storage persistence with startup recovery for stale saved sheet state.
 
-## Commands
+## Install And Run
 
-This Codex desktop environment provides `pnpm` here:
+Prerequisites:
+
+- Git
+- Node.js 20 or newer
+- pnpm 11 or newer
+
+Clone the repository:
 
 ```bash
-/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pnpm install
-/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pnpm run dev
-/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pnpm test
-/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pnpm run build
-/Users/rishav/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/pnpm run test:e2e
+git clone https://github.com/CoolDuck192/JS-Spreadsheet.git
+cd JS-Spreadsheet
+```
+
+Install dependencies:
+
+```bash
+corepack enable
+corepack prepare pnpm@11.7.0 --activate
+pnpm install
+```
+
+Start the local dev server:
+
+```bash
+pnpm run dev
 ```
 
 The dev server defaults to:
 
 ```text
 http://127.0.0.1:5173
+```
+
+Build a production bundle:
+
+```bash
+pnpm run build
+```
+
+Run the test suite:
+
+```bash
+pnpm test
+```
+
+Run browser end-to-end tests:
+
+```bash
+pnpm exec playwright install
+pnpm run test:e2e
 ```
 
 ## Formula Engine
