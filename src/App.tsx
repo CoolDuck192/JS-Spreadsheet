@@ -27,7 +27,6 @@ import type {
   SheetChartType,
   SheetModel,
   NamedRange,
-  PivotSheetMetadata,
   WorkbookModel
 } from "./types";
 import {
@@ -49,12 +48,13 @@ import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { loadWorkbook, saveWorkbook } from "./lib/persistence";
 import {
+  createPivotDrilldownIndex,
   createPivotTableWithDrilldowns,
-  getPivotMaterializedRowKind,
-  materializePivotRows,
+  getPivotMaterializedBaseRow,
   togglePivotDrilldown,
   type PivotConfig
 } from "./lib/pivot";
+import { replaceGeneratedPivotSheetRows } from "./lib/pivotSheet";
 import { validateCellValue } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import {
@@ -1134,7 +1134,11 @@ export default function App() {
     const wasExpanded = Boolean(pivot.expanded[entryId]);
     const nextPivot = togglePivotDrilldown(pivot, entryId);
     const nextWorkbook = replaceGeneratedPivotSheetRows(workbook, activeSheet.id, nextPivot);
+    const nextSheet = nextWorkbook.sheets.find((sheet) => sheet.id === activeSheet.id);
     commitWorkbook(nextWorkbook, wasExpanded ? "Collapsed pivot drilldown" : "Expanded pivot drilldown");
+    if (nextSheet) {
+      setSelection(selectionForPivotDrilldown(nextPivot, entryId, nextSheet));
+    }
   }
 
   function validateRichPaste(mode: RichPasteMode, options: PasteRichRangeOptions = {}): boolean {
@@ -2344,102 +2348,17 @@ function findNamedRangeByName(namedRanges: NamedRange[], name: string): NamedRan
   return namedRanges.find((namedRange) => namedRange.name.toLowerCase() === normalizedName) ?? null;
 }
 
-function replaceGeneratedPivotSheetRows(
-  workbook: WorkbookModel,
-  sheetId: string,
-  pivot: PivotSheetMetadata
-): WorkbookModel {
-  const matrix = materializePivotRows(pivot);
-  const columnCount = Math.max(26, matrix.reduce((width, row) => Math.max(width, row.length), 0));
-  const rowCount = Math.max(100, matrix.length);
-  const cells: Record<string, CellContent> = {};
-
-  matrix.forEach((rowValues, row) => {
-    rowValues.forEach((content, column) => {
-      if (content !== "") {
-        cells[formatCellAddress({ row, column })] = content;
-      }
-    });
-  });
-
-  let nextWorkbook: WorkbookModel = {
-    ...workbook,
-    sheets: workbook.sheets.map((sheet) =>
-      sheet.id === sheetId
-        ? {
-            ...sheet,
-            rowCount,
-            columnCount,
-            cells,
-            formats: {},
-            comments: {},
-            hyperlinks: {},
-            validations: {},
-            conditionalFormats: [],
-            filters: [],
-            charts: [],
-            merges: [],
-            autoFilterRange: undefined,
-            pivot
-          }
-        : sheet
-    )
+function selectionForPivotDrilldown(pivot: NonNullable<SheetModel["pivot"]>, entryId: string, sheet: SheetModel): CellRange {
+  const entry = pivot.drilldowns[entryId];
+  const index = createPivotDrilldownIndex(pivot);
+  const row = entry ? getPivotMaterializedBaseRow(index, entry.baseRow) ?? 0 : 0;
+  const column = entry?.column ?? 0;
+  const coord = {
+    row: clamp(row, 0, Math.max(0, sheet.rowCount - 1)),
+    column: clamp(column, 0, Math.max(0, sheet.columnCount - 1))
   };
 
-  nextWorkbook = setCellFormat(nextWorkbook, sheetId, rowRange(0, columnCount), {
-    bold: true,
-    textColor: "#17634a",
-    backgroundColor: "#eaf7f2"
-  });
-
-  const grandTotalRow = materializedPivotBaseRow(pivot, pivot.baseRows.length - 1);
-  matrix.forEach((_, row) => {
-    const rowKind = getPivotMaterializedRowKind(pivot, row);
-    if (rowKind?.kind === "detail-header") {
-      nextWorkbook = setCellFormat(nextWorkbook, sheetId, rowRange(row, columnCount), {
-        bold: true,
-        textColor: "#475569",
-        backgroundColor: "#f8fafc"
-      });
-      return;
-    }
-
-    if (rowKind?.kind === "detail-row") {
-      nextWorkbook = setCellFormat(nextWorkbook, sheetId, rowRange(row, columnCount), {
-        textColor: "#334155",
-        backgroundColor: "#fffdf7"
-      });
-      return;
-    }
-
-    if (row > 0 && row === grandTotalRow) {
-      nextWorkbook = setCellFormat(nextWorkbook, sheetId, rowRange(row, columnCount), {
-        bold: true,
-        backgroundColor: "#f1f5f8"
-      });
-    }
-  });
-
-  return nextWorkbook;
-}
-
-function materializedPivotBaseRow(pivot: PivotSheetMetadata, targetBaseRow: number): number | null {
-  let materializedRow = 0;
-
-  for (let baseRow = 0; baseRow < pivot.baseRows.length; baseRow += 1) {
-    if (baseRow === targetBaseRow) {
-      return materializedRow;
-    }
-
-    materializedRow += 1;
-    for (const entry of Object.values(pivot.drilldowns)) {
-      if (entry.baseRow === baseRow && pivot.expanded[entry.id]) {
-        materializedRow += entry.sourceRows.length + 1;
-      }
-    }
-  }
-
-  return null;
+  return { start: coord, end: { ...coord } };
 }
 
 function selectedRangeToDisplayRows(sheet: SheetModel, selection: CellRange, formulaEngine: FormulaEngine): string[][] {

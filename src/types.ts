@@ -129,11 +129,12 @@ export type PivotDrilldownEntry = {
   baseRow: number;
   column: number;
   filters: Record<string, string>;
-  sourceRows: string[][];
+  sourceRowIndexes: number[];
 };
 
 export type PivotSheetMetadata = {
   sourceHeaders: string[];
+  sourceRows: string[][];
   baseRows: string[][];
   config: {
     rowFields: string[];

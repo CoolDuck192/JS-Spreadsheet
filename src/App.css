@@ -2001,12 +2001,18 @@ button {
 }
 
 .pivot-drilldown-toggle:hover,
-.pivot-drilldown-toggle:focus-visible,
 .pivot-drilldown-toggle[aria-expanded="true"] {
   border-color: rgba(34, 121, 93, 0.5);
   background: #fff;
   color: var(--accent-strong);
-  outline: none;
+}
+
+.pivot-drilldown-toggle:focus-visible {
+  border-color: rgba(34, 121, 93, 0.65);
+  background: #fff;
+  color: var(--accent-strong);
+  outline: 2px solid rgba(34, 121, 93, 0.55);
+  outline-offset: 2px;
 }
 
 .pivot-drilldown-toggle svg {

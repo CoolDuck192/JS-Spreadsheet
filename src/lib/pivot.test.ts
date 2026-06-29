@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createPivotTable, createPivotTableWithDrilldowns, getPivotDrilldownCell, materializePivotRows } from "./pivot";
+import {
+  createPivotDrilldownIndex,
+  createPivotTable,
+  createPivotTableWithDrilldowns,
+  getPivotDrilldownCell,
+  getPivotMaterializedBaseRow,
+  getPivotMaterializedRowKind,
+  materializePivotRows
+} from "./pivot";
 
 describe("pivot", () => {
   const rows = [
@@ -184,14 +192,17 @@ describe("pivot", () => {
     ]);
 
     const drilldown = getPivotDrilldownCell(pivot.metadata, 1, 2);
+    expect(pivot.metadata.sourceRows).toEqual(rows.slice(1));
     expect(drilldown).toMatchObject({
       expanded: false,
       sourceRowCount: 1,
+      sourceRows: [["East", "Hardware", "8"]],
       entry: {
         filters: { Region: "East", Product: "Hardware" },
-        sourceRows: [["East", "Hardware", "8"]]
+        sourceRowIndexes: [2]
       }
     });
+    expect("sourceRows" in drilldown!.entry).toBe(false);
   });
 
   it("materializes expanded pivot drilldown rows below the summary row", () => {
@@ -214,5 +225,27 @@ describe("pivot", () => {
       ["East", "Hardware", "8"],
       ["East", "Software", "7"]
     ]);
+  });
+
+  it("indexes pivot drilldowns for repeated render lookups", () => {
+    const pivot = createPivotTableWithDrilldowns(rows, {
+      rowFields: ["Region", "Product"],
+      valueField: "Sales",
+      aggregator: "SUM"
+    });
+    const drilldown = getPivotDrilldownCell(pivot.metadata, 1, 2);
+    const expandedMetadata = {
+      ...pivot.metadata,
+      expanded: { [drilldown!.entry.id]: true }
+    };
+
+    const index = createPivotDrilldownIndex(expandedMetadata);
+
+    expect(getPivotDrilldownCell(expandedMetadata, 1, 2, index)?.entry.id).toBe(drilldown!.entry.id);
+    expect(getPivotMaterializedRowKind(expandedMetadata, 2, index)).toEqual({
+      kind: "detail-header",
+      entryId: drilldown!.entry.id
+    });
+    expect(getPivotMaterializedBaseRow(index, 2)).toBe(4);
   });
 });

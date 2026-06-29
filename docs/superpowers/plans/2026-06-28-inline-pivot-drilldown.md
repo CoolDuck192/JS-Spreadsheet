@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Pivot Metadata Tests
+## Task 1: Pivot Metadata Tests
 
 **Files:**
 - Modify: `src/lib/pivot.test.ts`
@@ -25,7 +25,7 @@ Run: `pnpm exec vitest run src/lib/pivot.test.ts -t drilldown --reporter=dot`
 
 Expected: fail because the new pivot drilldown exports do not exist yet.
 
-### Task 2: Pivot Metadata Implementation
+## Task 2: Pivot Metadata Implementation
 
 **Files:**
 - Modify: `src/types.ts`
@@ -49,7 +49,7 @@ Run: `pnpm exec vitest run src/lib/pivot.test.ts -t drilldown --reporter=dot`
 
 Expected: pass.
 
-### Task 3: App And Grid Integration
+## Task 3: App And Grid Integration
 
 **Files:**
 - Modify: `src/App.tsx`
@@ -80,7 +80,7 @@ Run: `pnpm exec playwright test tests/spreadsheet.spec.ts -g "expands pivot dril
 
 Expected: pass.
 
-### Task 4: Full Verification And PR
+## Task 4: Full Verification And PR
 
 **Files:**
 - Verify all changed files

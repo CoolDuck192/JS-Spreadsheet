@@ -8,7 +8,7 @@ import { formatDisplayValue } from "../lib/displayFormat";
 import { getVisibleRows } from "../lib/filters";
 import type { FormulaEngine } from "../lib/formulaEngine";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../lib/formulaSuggestions";
-import { getPivotDrilldownCell, getPivotMaterializedRowKind } from "../lib/pivot";
+import { createPivotDrilldownIndex, getPivotDrilldownCell, getPivotMaterializedRowKind, type PivotDrilldownIndex } from "../lib/pivot";
 import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
@@ -150,6 +150,7 @@ export function Grid({
   const gridClassName = ["grid-scroll", showGridlines ? "" : "grid-scroll--no-gridlines"].filter(Boolean).join(" ");
   const gridColumnCount = columns.length + (showHeaders ? 1 : 0);
   const conditionalRuleValuesCache = useMemo(() => new Map<string, string[]>(), [formulaEngine, sheet]);
+  const pivotDrilldownIndex = useMemo(() => (sheet.pivot ? createPivotDrilldownIndex(sheet.pivot) : null), [sheet.pivot]);
 
   function getConditionalRuleValues(rule: ConditionalFormatRule): readonly string[] {
     const cachedValues = conditionalRuleValuesCache.get(rule.id);
@@ -352,6 +353,7 @@ export function Grid({
             getCellValidation={getCellValidation}
             getCellConditionalFormatRules={getCellConditionalFormatRules}
             getConditionalRuleValues={getConditionalRuleValues}
+            pivotDrilldownIndex={pivotDrilldownIndex}
             isDragging={isDragging}
             onSelectionChange={onSelectionChange}
             onCellContextMenu={onCellContextMenu}
@@ -430,6 +432,7 @@ function RowFragment({
   getCellValidation,
   getCellConditionalFormatRules,
   getConditionalRuleValues,
+  pivotDrilldownIndex,
   isDragging,
   onSelectionChange,
   onCellContextMenu,
@@ -468,6 +471,7 @@ function RowFragment({
   getCellValidation: (address: string) => DataValidationRule | null | undefined;
   getCellConditionalFormatRules: (address: string) => ConditionalFormatRule[];
   getConditionalRuleValues: (rule: ConditionalFormatRule) => readonly string[];
+  pivotDrilldownIndex: PivotDrilldownIndex | null;
   isDragging: boolean;
   onSelectionChange: (range: CellRange) => void;
   onCellContextMenu?: (event: { address: string; row: number; column: number; x: number; y: number }) => void;
@@ -503,7 +507,7 @@ function RowFragment({
   }, [editingCell?.address, editingCell?.value]);
   const isRowSelected =
     selection.start.column === 0 && selection.end.column === sheet.columnCount - 1 && row >= selection.start.row && row <= selection.end.row;
-  const pivotRowKind = getPivotMaterializedRowKind(sheet.pivot, row);
+  const pivotRowKind = getPivotMaterializedRowKind(sheet.pivot, row, pivotDrilldownIndex);
 
   useEffect(() => {
     setActiveSuggestionIndex(0);
@@ -618,7 +622,8 @@ function RowFragment({
           isMergeAnchor && mergeInfo ? sumColumnWidths(columnWidths, mergeInfo.range.start.column, mergeInfo.range.end.column) : columnWidths[column];
         const cellHeight =
           isMergeAnchor && mergeInfo ? sumRowHeights(sheet, mergeInfo.range.start.row, mergeInfo.range.end.row) : rowHeight;
-        const pivotDrilldown = isMergeCovered ? null : getPivotDrilldownCell(sheet.pivot, row, column);
+        const pivotDrilldown = isMergeCovered ? null : getPivotDrilldownCell(sheet.pivot, row, column, pivotDrilldownIndex);
+        const canTogglePivotDrilldown = Boolean(pivotDrilldown && onTogglePivotDrilldown);
         const borderStyle = getBorderStyle(mergedFormat?.borders);
         const style =
           mergedFormat?.bold ||
@@ -673,7 +678,7 @@ function RowFragment({
               isAutoFilterMenuOpen ? "auto-filter-menu-open" : "",
               hasValidationDropdown ? "validation-list-cell" : "",
               isValidationDropdownOpen ? "validation-dropdown-open" : "",
-              pivotDrilldown ? "pivot-drilldown-cell" : "",
+              canTogglePivotDrilldown ? "pivot-drilldown-cell" : "",
               pivotRowKind?.kind === "detail-header" ? "pivot-detail-header-cell" : "",
               pivotRowKind?.kind === "detail-row" ? "pivot-detail-row-cell" : "",
               mergedFormat?.wrapText ? "wrapped-cell" : "",
@@ -689,7 +694,9 @@ function RowFragment({
             aria-readonly={isReadOnly || undefined}
             title={[
               isReadOnly ? "Read only" : "",
-              pivotDrilldown ? `${pivotDrilldown.sourceRowCount} source ${pivotDrilldown.sourceRowCount === 1 ? "row" : "rows"}` : "",
+              canTogglePivotDrilldown && pivotDrilldown
+                ? `${pivotDrilldown.sourceRowCount} source ${pivotDrilldown.sourceRowCount === 1 ? "row" : "rows"}`
+                : "",
               comment ? `Comment: ${comment}` : "",
               hyperlink ? `Link: ${hyperlink}` : ""
             ]
@@ -718,7 +725,7 @@ function RowFragment({
               onCellContextMenu?.({ address, row, column, x: event.clientX, y: event.clientY });
             }}
             onDoubleClick={() => {
-              if (pivotDrilldown) {
+              if (canTogglePivotDrilldown && pivotDrilldown) {
                 onTogglePivotDrilldown?.(pivotDrilldown.entry.id);
                 return;
               }
@@ -853,7 +860,7 @@ function RowFragment({
               </div>
             ) : (
               <>
-                {pivotDrilldown ? (
+                {canTogglePivotDrilldown && pivotDrilldown ? (
                   <button
                     type="button"
                     className="pivot-drilldown-toggle"
@@ -870,6 +877,9 @@ function RowFragment({
                       event.preventDefault();
                       event.stopPropagation();
                       onTogglePivotDrilldown?.(pivotDrilldown.entry.id);
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
                     }}
                   >
                     {pivotDrilldown.expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
