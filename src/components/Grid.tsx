@@ -18,7 +18,9 @@ import {
 import { validateCellValue } from "../lib/validation";
 
 const DEFAULT_VIEWPORT_HEIGHT = 560;
+const DEFAULT_VIEWPORT_WIDTH = 4096;
 const ROW_OVERSCAN = 8;
+const COLUMN_OVERSCAN = 4;
 
 type GridProps = {
   sheet: SheetModel;
@@ -108,35 +110,35 @@ export function Grid({
   const [isDragging, setIsDragging] = useState(false);
   const [autoFillDrag, setAutoFillDrag] = useState<{ source: CellRange; target: CellRange } | null>(null);
   const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: DEFAULT_VIEWPORT_HEIGHT });
+  const [viewport, setViewport] = useState({
+    scrollTop: 0,
+    scrollLeft: 0,
+    height: DEFAULT_VIEWPORT_HEIGHT,
+    width: DEFAULT_VIEWPORT_WIDTH
+  });
   const normalizedSelection = normalizeRange(selection);
-  const columns = Array.from({ length: sheet.columnCount }, (_, column) => column).filter(
-    (column) => !(sheet.hiddenColumns ?? {})[String(column)]
+  const columns = useMemo(
+    () => Array.from({ length: sheet.columnCount }, (_, column) => column).filter((column) => !(sheet.hiddenColumns ?? {})[String(column)]),
+    [sheet.columnCount, sheet.hiddenColumns]
   );
-  const columnWidths = Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft));
-  const filteredRows = getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
-    formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row, column }))
-  ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]);
-  const rowMeasurements = useMemo(() => measureRows(sheet, filteredRows, resizeDraft), [filteredRows, resizeDraft, sheet]);
-  const firstVisibleIndex = Math.max(0, findFirstVisibleRow(rowMeasurements, viewport.scrollTop) - ROW_OVERSCAN);
-  const lastVisibleIndex = Math.min(
-    rowMeasurements.length,
-    findLastVisibleRow(rowMeasurements, viewport.scrollTop + viewport.height) + ROW_OVERSCAN + 1
+  const columnWidths = useMemo(
+    () => Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft)),
+    [resizeDraft, sheet]
   );
-  const visibleRowMeasurements = rowMeasurements.slice(firstVisibleIndex, Math.max(firstVisibleIndex + 1, lastVisibleIndex));
-  const frozenTopRow =
-    freezeTopRow &&
-    filteredRows.includes(0) &&
-    firstVisibleIndex > 0 &&
-    !visibleRowMeasurements.some((measurement) => measurement.row === 0);
-  const rows = frozenTopRow
-    ? [{ row: 0, height: rowHeight(sheet, 0, resizeDraft) }, ...visibleRowMeasurements]
-    : visibleRowMeasurements;
-  const topSpacerHeight = Math.max(
-    0,
-    (rowMeasurements[firstVisibleIndex]?.start ?? 0) - (frozenTopRow ? rowHeight(sheet, 0, resizeDraft) : 0)
+  const columnMeasurements = useMemo(() => measureColumns(columns, columnWidths), [columnWidths, columns]);
+  const visibleColumnMeasurements = useMemo(
+    () => getVisibleColumnMeasurements(columnMeasurements, viewport.scrollLeft, viewport.width, freezeFirstColumn),
+    [columnMeasurements, freezeFirstColumn, viewport.scrollLeft, viewport.width]
   );
-  const bottomSpacerHeight = Math.max(0, (rowMeasurements.at(-1)?.end ?? 0) - (visibleRowMeasurements.at(-1)?.end ?? 0));
+  const visibleColumns = useMemo(() => visibleColumnMeasurements.map((measurement) => measurement.column), [visibleColumnMeasurements]);
+  const columnGridLines = useMemo(() => createColumnGridLines(columns, showHeaders), [columns, showHeaders]);
+  const rowWindow = useMemo(
+    () => getVisibleRowWindow(sheet, formulaEngine, viewport.scrollTop, viewport.height, resizeDraft, freezeTopRow),
+    [freezeTopRow, formulaEngine, resizeDraft, sheet, viewport.height, viewport.scrollTop]
+  );
+  const rows = rowWindow.rows;
+  const topSpacerHeight = rowWindow.topSpacerHeight;
+  const bottomSpacerHeight = rowWindow.bottomSpacerHeight;
   const isWholeSheetSelected =
     normalizedSelection.start.row === 0 &&
     normalizedSelection.start.column === 0 &&
@@ -164,7 +166,12 @@ export function Grid({
   }
 
   useEffect(() => {
-    setViewport({ scrollTop: 0, height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT });
+    setViewport({
+      scrollTop: 0,
+      scrollLeft: 0,
+      height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
+      width: scrollRef?.current?.clientWidth || DEFAULT_VIEWPORT_WIDTH
+    });
     if (scrollRef?.current) {
       scrollRef.current.scrollTop = 0;
       scrollRef.current.scrollLeft = 0;
@@ -222,10 +229,17 @@ export function Grid({
       onScroll={(event) => {
         const nextViewport = {
           scrollTop: event.currentTarget.scrollTop,
-          height: event.currentTarget.clientHeight || DEFAULT_VIEWPORT_HEIGHT
+          scrollLeft: event.currentTarget.scrollLeft,
+          height: event.currentTarget.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
+          width: event.currentTarget.clientWidth || DEFAULT_VIEWPORT_WIDTH
         };
         setViewport((current) =>
-          current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height ? current : nextViewport
+          current.scrollTop === nextViewport.scrollTop &&
+          current.scrollLeft === nextViewport.scrollLeft &&
+          current.height === nextViewport.height &&
+          current.width === nextViewport.width
+            ? current
+            : nextViewport
         );
       }}
       onPaste={(event) => {
@@ -267,63 +281,63 @@ export function Grid({
           />
         ) : null}
         {showHeaders
-          ? columns.map((column) => {
-          const columnName = columnIndexToName(column);
-          const isColumnSelected =
-            normalizedSelection.start.row === 0 &&
-            normalizedSelection.end.row === sheet.rowCount - 1 &&
-            column >= normalizedSelection.start.column &&
-            column <= normalizedSelection.end.column;
+          ? visibleColumns.map((column) => {
+              const columnName = columnIndexToName(column);
+              const isColumnSelected =
+                normalizedSelection.start.row === 0 &&
+                normalizedSelection.end.row === sheet.rowCount - 1 &&
+                column >= normalizedSelection.start.column &&
+                column <= normalizedSelection.end.column;
 
-          return (
-          <div
-            key={column}
-            className={["column-header", isColumnSelected ? "selected-header" : ""].filter(Boolean).join(" ")}
-            role="columnheader"
-            aria-label={`Column ${columnName}`}
-            aria-selected={isColumnSelected}
-            tabIndex={0}
-            style={{ width: columnWidths[column] }}
-            onClick={() =>
-              onSelectionChange({
-                start: { row: 0, column },
-                end: { row: sheet.rowCount - 1, column }
-              })
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onSelectionChange({
-                  start: { row: 0, column },
-                  end: { row: sheet.rowCount - 1, column }
-                });
-              }
-            }}
-          >
-            {columnName}
-            <button
-              type="button"
-              className="column-resize-handle"
-              aria-label={`Resize column ${columnName}`}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setResizeDraft({
-                  kind: "column",
-                  index: column,
-                  startClient: event.clientX,
-                  startSize: columnWidth(sheet, column, null),
-                  size: columnWidth(sheet, column, null)
-                });
-              }}
-            />
-          </div>
-          );
-        })
+              return (
+                <div
+                  key={column}
+                  className={["column-header", isColumnSelected ? "selected-header" : ""].filter(Boolean).join(" ")}
+                  role="columnheader"
+                  aria-label={`Column ${columnName}`}
+                  aria-selected={isColumnSelected}
+                  tabIndex={0}
+                  style={{ gridColumn: columnGridLines.get(column), width: columnWidths[column] }}
+                  onClick={() =>
+                    onSelectionChange({
+                      start: { row: 0, column },
+                      end: { row: sheet.rowCount - 1, column }
+                    })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectionChange({
+                        start: { row: 0, column },
+                        end: { row: sheet.rowCount - 1, column }
+                      });
+                    }
+                  }}
+                >
+                  {columnName}
+                  <button
+                    type="button"
+                    className="column-resize-handle"
+                    aria-label={`Resize column ${columnName}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setResizeDraft({
+                        kind: "column",
+                        index: column,
+                        startClient: event.clientX,
+                        startSize: columnWidth(sheet, column, null),
+                        size: columnWidth(sheet, column, null)
+                      });
+                    }}
+                  />
+                </div>
+              );
+            })
           : null}
         {topSpacerHeight > 0 ? (
           <div
@@ -336,8 +350,9 @@ export function Grid({
             key={row}
             row={row}
             rowHeight={height}
-            columns={columns}
+            columns={visibleColumns}
             columnWidths={columnWidths}
+            columnGridLines={columnGridLines}
             sheet={sheet}
             formulaEngine={formulaEngine}
             selection={normalizedSelection}
@@ -417,6 +432,7 @@ function RowFragment({
   rowHeight,
   columns,
   columnWidths,
+  columnGridLines,
   sheet,
   formulaEngine,
   selection,
@@ -456,6 +472,7 @@ function RowFragment({
   rowHeight: number;
   columns: number[];
   columnWidths: number[];
+  columnGridLines: Map<number, number>;
   sheet: SheetModel;
   formulaEngine: FormulaEngine;
   selection: CellRange;
@@ -532,7 +549,7 @@ function RowFragment({
           aria-label={`Row ${row + 1}`}
           aria-selected={isRowSelected}
           tabIndex={0}
-          style={{ height: rowHeight }}
+          style={{ gridColumn: 1, height: rowHeight }}
           onClick={() => onSelectRow(row)}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
@@ -625,7 +642,7 @@ function RowFragment({
         const pivotDrilldown = isMergeCovered ? null : getPivotDrilldownCell(sheet.pivot, row, column, pivotDrilldownIndex);
         const canTogglePivotDrilldown = Boolean(pivotDrilldown && onTogglePivotDrilldown);
         const borderStyle = getBorderStyle(mergedFormat?.borders);
-        const style =
+        const style: CSSProperties =
           mergedFormat?.bold ||
           mergedFormat?.italic ||
           mergedFormat?.textColor ||
@@ -643,6 +660,7 @@ function RowFragment({
                 alignItems: verticalAlignToFlex(mergedFormat?.verticalAlign),
                 whiteSpace: mergedFormat?.wrapText ? "normal" : undefined,
                 ...borderStyle,
+                gridColumn: columnGridLines.get(column),
                 width: cellWidth,
                 minWidth: cellWidth,
                 maxWidth: cellWidth,
@@ -650,6 +668,7 @@ function RowFragment({
                 minHeight: cellHeight
               }
             : {
+                gridColumn: columnGridLines.get(column),
                 width: cellWidth,
                 minWidth: cellWidth,
                 maxWidth: cellWidth,
@@ -1166,6 +1185,122 @@ function rowHeight(sheet: SheetModel, row: number, resizeDraft: ResizeDraft | nu
   return clampRowHeight((sheet.rowHeights ?? {})[String(row)] ?? DEFAULT_ROW_HEIGHT);
 }
 
+function createColumnGridLines(columns: readonly number[], showHeaders: boolean): Map<number, number> {
+  const headerOffset = showHeaders ? 1 : 0;
+  return new Map(columns.map((column, index) => [column, index + headerOffset + 1]));
+}
+
+function measureColumns(columns: readonly number[], columnWidths: readonly number[]) {
+  let cursor = 0;
+  return columns.map((column) => {
+    const width = columnWidths[column] ?? DEFAULT_COLUMN_WIDTH;
+    const measurement = {
+      column,
+      width,
+      start: cursor,
+      end: cursor + width
+    };
+    cursor += width;
+    return measurement;
+  });
+}
+
+function getVisibleColumnMeasurements(
+  measurements: ReturnType<typeof measureColumns>,
+  scrollLeft: number,
+  viewportWidth: number,
+  freezeFirstColumn: boolean
+) {
+  if (measurements.length === 0) {
+    return measurements;
+  }
+
+  const firstVisibleIndex = Math.max(0, findFirstVisibleColumn(measurements, scrollLeft) - COLUMN_OVERSCAN);
+  const lastVisibleIndex = Math.min(
+    measurements.length,
+    findLastVisibleColumn(measurements, scrollLeft + viewportWidth) + COLUMN_OVERSCAN + 1
+  );
+  const visible = measurements.slice(firstVisibleIndex, Math.max(firstVisibleIndex + 1, lastVisibleIndex));
+  const firstColumn = measurements[0];
+  if (!freezeFirstColumn || firstColumn.column !== 0 || firstVisibleIndex === 0 || visible.some((measurement) => measurement.column === 0)) {
+    return visible;
+  }
+
+  return [firstColumn, ...visible];
+}
+
+function getVisibleRowWindow(
+  sheet: SheetModel,
+  formulaEngine: FormulaEngine,
+  scrollTop: number,
+  viewportHeight: number,
+  resizeDraft: ResizeDraft | null,
+  freezeTopRow: boolean
+) {
+  if (canUseUniformRowWindow(sheet, resizeDraft)) {
+    return getUniformRowWindow(sheet.rowCount, scrollTop, viewportHeight, freezeTopRow);
+  }
+
+  const filteredRows = getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
+    formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row, column }))
+  ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]);
+  const rowMeasurements = measureRows(sheet, filteredRows, resizeDraft);
+  const firstVisibleIndex = Math.max(0, findFirstVisibleRow(rowMeasurements, scrollTop) - ROW_OVERSCAN);
+  const lastVisibleIndex = Math.min(
+    rowMeasurements.length,
+    findLastVisibleRow(rowMeasurements, scrollTop + viewportHeight) + ROW_OVERSCAN + 1
+  );
+  const visibleRowMeasurements = rowMeasurements.slice(firstVisibleIndex, Math.max(firstVisibleIndex + 1, lastVisibleIndex));
+  const frozenTopRow =
+    freezeTopRow &&
+    filteredRows.includes(0) &&
+    firstVisibleIndex > 0 &&
+    !visibleRowMeasurements.some((measurement) => measurement.row === 0);
+  const rows = frozenTopRow
+    ? [{ row: 0, height: rowHeight(sheet, 0, resizeDraft) }, ...visibleRowMeasurements]
+    : visibleRowMeasurements;
+  const topSpacerHeight = Math.max(
+    0,
+    (rowMeasurements[firstVisibleIndex]?.start ?? 0) - (frozenTopRow ? rowHeight(sheet, 0, resizeDraft) : 0)
+  );
+  const bottomSpacerHeight = Math.max(0, (rowMeasurements.at(-1)?.end ?? 0) - (visibleRowMeasurements.at(-1)?.end ?? 0));
+
+  return {
+    rows,
+    topSpacerHeight,
+    bottomSpacerHeight
+  };
+}
+
+function canUseUniformRowWindow(sheet: SheetModel, resizeDraft: ResizeDraft | null): boolean {
+  return (
+    resizeDraft?.kind !== "row" &&
+    Object.keys(sheet.rowHeights ?? {}).length === 0 &&
+    Object.keys(sheet.hiddenRows ?? {}).length === 0 &&
+    (sheet.filters ?? []).length === 0
+  );
+}
+
+function getUniformRowWindow(rowCount: number, scrollTop: number, viewportHeight: number, freezeTopRow: boolean) {
+  const firstRow = Math.max(0, Math.floor(scrollTop / DEFAULT_ROW_HEIGHT) - ROW_OVERSCAN);
+  const endRowExclusive = Math.min(
+    rowCount,
+    Math.max(firstRow + 1, Math.ceil((scrollTop + viewportHeight) / DEFAULT_ROW_HEIGHT) + ROW_OVERSCAN + 1)
+  );
+  const visibleRows = Array.from({ length: Math.max(0, endRowExclusive - firstRow) }, (_, offset) => ({
+    row: firstRow + offset,
+    height: DEFAULT_ROW_HEIGHT
+  }));
+  const frozenTopRow = freezeTopRow && firstRow > 0 && rowCount > 0 && !visibleRows.some((measurement) => measurement.row === 0);
+  const rows = frozenTopRow ? [{ row: 0, height: DEFAULT_ROW_HEIGHT }, ...visibleRows] : visibleRows;
+
+  return {
+    rows,
+    topSpacerHeight: Math.max(0, firstRow * DEFAULT_ROW_HEIGHT - (frozenTopRow ? DEFAULT_ROW_HEIGHT : 0)),
+    bottomSpacerHeight: Math.max(0, (rowCount - endRowExclusive) * DEFAULT_ROW_HEIGHT)
+  };
+}
+
 function getMergeInfo(sheet: SheetModel, row: number, column: number) {
   const merge = (sheet.merges ?? []).find((candidate) =>
     isInSelection(row, column, normalizeRange(candidate.range))
@@ -1257,6 +1392,16 @@ function findFirstVisibleRow(rows: ReturnType<typeof measureRows>, scrollTop: nu
 function findLastVisibleRow(rows: ReturnType<typeof measureRows>, viewportBottom: number): number {
   const index = rows.findIndex((row) => row.start > viewportBottom);
   return index < 0 ? rows.length - 1 : Math.max(0, index - 1);
+}
+
+function findFirstVisibleColumn(columns: ReturnType<typeof measureColumns>, scrollLeft: number): number {
+  const index = columns.findIndex((column) => column.end >= scrollLeft);
+  return index < 0 ? Math.max(columns.length - 1, 0) : index;
+}
+
+function findLastVisibleColumn(columns: ReturnType<typeof measureColumns>, viewportRight: number): number {
+  const index = columns.findIndex((column) => column.start > viewportRight);
+  return index < 0 ? columns.length - 1 : Math.max(0, index - 1);
 }
 
 function addressToCoord(address: string) {

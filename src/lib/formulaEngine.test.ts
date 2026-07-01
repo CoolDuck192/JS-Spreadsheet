@@ -4,7 +4,7 @@ import {
   defineNamedRange,
   setCellContent
 } from "./workbook";
-import { createFormulaEngine } from "./formulaEngine";
+import { createFormulaEngine, createFormulaSheetMatrix } from "./formulaEngine";
 
 describe("formulaEngine", () => {
   it("shows raw values and formula results", () => {
@@ -73,5 +73,28 @@ describe("formulaEngine", () => {
 
     expect(engine.getDisplayValue(workbook.activeSheetId, "A1")).toBe("#DIV/0!");
     expect(engine.getDisplayValue(workbook.activeSheetId, "A2")).toBe("#NAME?");
+  });
+
+  it("builds formula matrices to formula-relevant bounds instead of full sheet dimensions", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "10");
+    workbook = setCellContent(workbook, sheetId, "B1", "=SUM(A1:A5000)");
+    workbook = defineNamedRange(workbook, sheetId, "Inputs", {
+      start: { row: 0, column: 0 },
+      end: { row: 9, column: 0 }
+    });
+    const sheet = {
+      ...workbook.sheets[0],
+      rowCount: 100_000,
+      columnCount: 400
+    };
+
+    const matrix = createFormulaSheetMatrix(sheet, workbook.namedRanges.filter((range) => range.sheetId === sheetId));
+
+    expect(matrix).toHaveLength(5000);
+    expect(Math.max(...matrix.map((row) => row.length))).toBe(2);
+    expect(matrix[0]).toEqual(["10", "=SUM(A1:A5000)"]);
+    expect(matrix[4999]).toEqual([]);
   });
 });
