@@ -1045,7 +1045,7 @@ test("expands pivot drilldown rows inline", async ({ page }) => {
 
   await page.getByRole("button", { name: "Collapse drilldown for C2", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "B3 Software", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A3 East", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "C3 7", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "C2 8", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("gridcell", { name: "C4 8", exact: true })).not.toBeVisible();

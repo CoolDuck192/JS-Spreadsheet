@@ -196,12 +196,12 @@ describe("pivot", () => {
     expect(drilldown).toMatchObject({
       expanded: false,
       sourceRowCount: 1,
-      sourceRows: [["East", "Hardware", "8"]],
       entry: {
         filters: { Region: "East", Product: "Hardware" },
         sourceRowIndexes: [2]
       }
     });
+    expect("sourceRows" in drilldown!).toBe(false);
     expect("sourceRows" in drilldown!.entry).toBe(false);
   });
 

@@ -33,7 +33,6 @@ export type PivotDrilldownCell = {
   entry: PivotDrilldownEntry;
   expanded: boolean;
   sourceRowCount: number;
-  sourceRows: string[][];
 };
 
 export type PivotDrilldownIndex = {
@@ -238,8 +237,7 @@ export function getPivotDrilldownCell(
     return null;
   }
 
-  const sourceRows = sourceRowsForEntry(metadata, entry);
-  return { entry, expanded: Boolean(metadata.expanded[entry.id]), sourceRowCount: sourceRows.length, sourceRows };
+  return { entry, expanded: Boolean(metadata.expanded[entry.id]), sourceRowCount: sourceRowCount(metadata, entry) };
 }
 
 export function getPivotMaterializedRowKind(
