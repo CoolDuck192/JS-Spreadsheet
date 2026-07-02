@@ -47,7 +47,14 @@ import { createFormulaEngine } from "./lib/formulaEngine";
 import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { loadWorkbook, saveWorkbook } from "./lib/persistence";
-import { createPivotTable, type PivotConfig } from "./lib/pivot";
+import {
+  createPivotDrilldownIndex,
+  createPivotTableWithDrilldowns,
+  getPivotMaterializedBaseRow,
+  togglePivotDrilldown,
+  type PivotConfig
+} from "./lib/pivot";
+import { replaceGeneratedPivotSheetRows } from "./lib/pivotSheet";
 import { validateCellValue } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import {
@@ -1103,27 +1110,34 @@ export default function App() {
   function handleCreatePivotTable(config: PivotConfig) {
     try {
       const sourceRows = selectedRangeToDisplayRows(activeSheet, selection, formulaEngine);
-      const pivotRows = createPivotTable(sourceRows, config);
+      const pivot = createPivotTableWithDrilldowns(sourceRows, config);
       const pivotName = nextPivotSheetName(workbook);
       let nextWorkbook = addSheet(workbook, pivotName);
       const pivotSheetId = nextWorkbook.activeSheetId;
 
-      nextWorkbook = pasteMatrix(nextWorkbook, pivotSheetId, "A1", pivotRows);
-      nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(0, pivotRows[0].length), {
-        bold: true,
-        textColor: "#17634a",
-        backgroundColor: "#eaf7f2"
-      });
-      nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(pivotRows.length - 1, pivotRows[0].length), {
-        bold: true,
-        backgroundColor: "#f1f5f8"
-      });
+      nextWorkbook = replaceGeneratedPivotSheetRows(nextWorkbook, pivotSheetId, pivot.metadata);
 
       commitWorkbook(nextWorkbook, `Created ${pivotName}`);
       setSelection(INITIAL_SELECTION);
       setPivotPanelOpen(false);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not create pivot table");
+    }
+  }
+
+  function handleTogglePivotDrilldown(entryId: string) {
+    const pivot = activeSheet.pivot;
+    if (!pivot || !pivot.drilldowns[entryId]) {
+      return;
+    }
+
+    const wasExpanded = Boolean(pivot.expanded[entryId]);
+    const nextPivot = togglePivotDrilldown(pivot, entryId);
+    const nextWorkbook = replaceGeneratedPivotSheetRows(workbook, activeSheet.id, nextPivot);
+    const nextSheet = nextWorkbook.sheets.find((sheet) => sheet.id === activeSheet.id);
+    commitWorkbook(nextWorkbook, wasExpanded ? "Collapsed pivot drilldown" : "Expanded pivot drilldown");
+    if (nextSheet) {
+      setSelection(selectionForPivotDrilldown(nextPivot, entryId, nextSheet));
     }
   }
 
@@ -2037,6 +2051,7 @@ export default function App() {
           onAutoFilterColumn={applyAutoFilterColumn}
           onClearAutoFilterColumn={clearAutoFilterColumn}
           onSortAutoFilterColumn={sortAutoFilterColumn}
+          onTogglePivotDrilldown={handleTogglePivotDrilldown}
           onColumnResize={handleColumnResize}
           onRowResize={handleRowResize}
         />
@@ -2331,6 +2346,19 @@ function parseNameBoxRange(value: string, sheet: SheetModel): CellRange | null {
 function findNamedRangeByName(namedRanges: NamedRange[], name: string): NamedRange | null {
   const normalizedName = name.trim().toLowerCase();
   return namedRanges.find((namedRange) => namedRange.name.toLowerCase() === normalizedName) ?? null;
+}
+
+function selectionForPivotDrilldown(pivot: NonNullable<SheetModel["pivot"]>, entryId: string, sheet: SheetModel): CellRange {
+  const entry = pivot.drilldowns[entryId];
+  const index = createPivotDrilldownIndex(pivot);
+  const row = entry ? getPivotMaterializedBaseRow(index, entry.baseRow) ?? 0 : 0;
+  const column = entry?.column ?? 0;
+  const coord = {
+    row: clamp(row, 0, Math.max(0, sheet.rowCount - 1)),
+    column: clamp(column, 0, Math.max(0, sheet.columnCount - 1))
+  };
+
+  return { start: coord, end: { ...coord } };
 }
 
 function selectedRangeToDisplayRows(sheet: SheetModel, selection: CellRange, formulaEngine: FormulaEngine): string[][] {

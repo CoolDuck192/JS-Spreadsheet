@@ -122,6 +122,35 @@ export type SheetProtection = {
   unlockedCells: Record<string, boolean>;
 };
 
+export type PivotAggregatorName = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX";
+
+export type PivotDrilldownEntry = {
+  id: string;
+  baseRow: number;
+  column: number;
+  filters: Record<string, string>;
+  sourceRowIndexes: number[];
+};
+
+export type PivotSheetMetadata = {
+  sourceHeaders: string[];
+  sourceRows: string[][];
+  baseRows: string[][];
+  config: {
+    rowFields: string[];
+    columnField?: string;
+    valueField: string;
+    aggregator: PivotAggregatorName;
+  };
+  drilldowns: Record<string, PivotDrilldownEntry>;
+  expanded: Record<string, boolean>;
+};
+
+export type PivotMaterializedRowKind = {
+  kind: "detail-header" | "detail-row";
+  entryId: string;
+};
+
 export type NamedRange = {
   name: string;
   sheetId: string;
@@ -152,6 +181,7 @@ export type SheetModel = {
   charts: SheetChart[];
   merges: SheetMerge[];
   protection: SheetProtection;
+  pivot?: PivotSheetMetadata;
 };
 
 export type WorkbookModel = {
