@@ -677,6 +677,35 @@ test("keeps large pasted datasets responsive with bounded rendering and pivot cr
   await expect(page.getByRole("gridcell", { name: "E1 Grand Total", exact: true })).toBeVisible();
 });
 
+test("keeps wide formula pastes responsive and calculated", async ({ page }) => {
+  test.setTimeout(60000);
+  await page.goto("/");
+
+  const rowCount = 5000;
+  const columnCount = 50;
+  const rows = Array.from({ length: rowCount }, (_, rowIndex) => {
+    const sheetRow = rowIndex + 1;
+    return Array.from({ length: columnCount }, (_, columnIndex) => {
+      if (columnIndex < 5) {
+        return String((rowIndex + 1) * (columnIndex + 1));
+      }
+      if (columnIndex === 5) {
+        return `=SUM(A${sheetRow}:E${sheetRow})`;
+      }
+      return `R${sheetRow}C${columnIndex + 1}`;
+    }).join("\t");
+  });
+
+  await page.getByRole("gridcell", { name: "A1", exact: true }).click();
+  const pasteStartedAt = await page.evaluate(() => performance.now());
+  await pasteGridData(page, rows.join("\n"));
+
+  await expect(page.getByRole("gridcell", { name: "F2 30", exact: true })).toBeVisible();
+  const pasteDuration = await page.evaluate((startedAt) => performance.now() - startedAt, pasteStartedAt);
+  expect(pasteDuration).toBeLessThan(15000);
+  expect(await page.getByRole("gridcell").count()).toBeLessThan(1200);
+});
+
 test("inserts AutoSum formulas from selected ranges", async ({ page }) => {
   await page.goto("/");
 

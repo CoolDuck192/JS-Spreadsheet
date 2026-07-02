@@ -1,6 +1,7 @@
 import { DetailedCellError, HyperFormula } from "hyperformula";
 import type { CellContent, CellRange, NamedRange, SheetModel, WorkbookModel } from "../types";
 import { parseCellAddress } from "./addressing";
+import { extractFormulaReferences } from "./formulaReferences";
 import { getCellContent } from "./workbook";
 
 export type FormulaEngine = {
@@ -43,7 +44,15 @@ export function createFormulaEngine(workbook: WorkbookModel): FormulaEngine {
 }
 
 function buildEngineState(workbook: WorkbookModel): EngineState {
-  const sheets = Object.fromEntries(workbook.sheets.map((sheet) => [sheet.name, sheetToMatrix(sheet)]));
+  const sheets = Object.fromEntries(
+    workbook.sheets.map((sheet) => [
+      sheet.name,
+      createFormulaSheetMatrix(
+        sheet,
+        (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId === sheet.id)
+      )
+    ])
+  );
   const namedExpressions = (workbook.namedRanges ?? []).flatMap((namedRange) => {
     const sheet = workbook.sheets.find((candidate) => candidate.id === namedRange.sheetId);
     return sheet ? [namedRangeToExpression(namedRange, sheet)] : [];
@@ -69,13 +78,58 @@ function buildEngineState(workbook: WorkbookModel): EngineState {
   };
 }
 
-function sheetToMatrix(sheet: SheetModel): CellContent[][] {
-  return Array.from({ length: sheet.rowCount }, (_, row) =>
-    Array.from({ length: sheet.columnCount }, (_, column) => {
+export function createFormulaSheetMatrix(sheet: SheetModel, namedRanges: readonly NamedRange[] = []): CellContent[][] {
+  const bounds = getFormulaMatrixBounds(sheet, namedRanges);
+
+  return Array.from({ length: bounds.rowCount }, (_, row) => {
+    const values: CellContent[] = [];
+    for (let column = 0; column < bounds.columnCount; column += 1) {
       const address = `${columnName(column)}${row + 1}`;
-      return sheet.cells[address] ?? null;
-    })
-  );
+      if (address in sheet.cells) {
+        values[column] = sheet.cells[address] ?? null;
+      }
+    }
+    return trimTrailingEmptyCells(values);
+  });
+}
+
+function getFormulaMatrixBounds(sheet: SheetModel, namedRanges: readonly NamedRange[]) {
+  let maxRow = 0;
+  let maxColumn = 0;
+
+  function includeRange(range: CellRange) {
+    maxRow = Math.max(maxRow, range.start.row, range.end.row);
+    maxColumn = Math.max(maxColumn, range.start.column, range.end.column);
+  }
+
+  for (const [address, content] of Object.entries(sheet.cells)) {
+    const coord = parseCellAddress(address);
+    maxRow = Math.max(maxRow, coord.row);
+    maxColumn = Math.max(maxColumn, coord.column);
+
+    if (typeof content === "string" && content.startsWith("=")) {
+      for (const reference of extractFormulaReferences(content)) {
+        includeRange(reference.range);
+      }
+    }
+  }
+
+  for (const namedRange of namedRanges) {
+    includeRange(namedRange.range);
+  }
+
+  return {
+    rowCount: Math.max(1, maxRow + 1),
+    columnCount: Math.max(1, maxColumn + 1)
+  };
+}
+
+function trimTrailingEmptyCells(values: CellContent[]): CellContent[] {
+  let end = values.length;
+  while (end > 0 && (values[end - 1] === null || values[end - 1] === undefined)) {
+    end -= 1;
+  }
+  return values.slice(0, end);
 }
 
 function columnName(index: number): string {

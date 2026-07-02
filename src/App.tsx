@@ -205,11 +205,10 @@ export default function App() {
     () => getFormulaDependents(activeSheet, selection),
     [activeSheet, selection]
   );
-  const pivotSourceRows = useMemo(
-    () => selectedRangeToDisplayRows(activeSheet, selection, formulaEngine),
-    [activeSheet, formulaEngine, selection]
+  const pivotHeaders = useMemo(
+    () => (isPivotPanelOpen ? getPivotHeadersForSelection(activeSheet, selection, formulaEngine) : []),
+    [activeSheet, formulaEngine, isPivotPanelOpen, selection]
   );
-  const pivotHeaders = useMemo(() => getPivotHeaders(pivotSourceRows), [pivotSourceRows]);
   const dataValidationRules = useMemo(
     () => summarizeDataValidationRules(activeSheet.validations ?? {}),
     [activeSheet.validations]
@@ -1245,15 +1244,17 @@ export default function App() {
       return;
     }
 
-    const start = parseCellAddress(activeAddress);
-    for (let rowOffset = 0; rowOffset < matrix.length; rowOffset += 1) {
-      for (let columnOffset = 0; columnOffset < matrix[rowOffset].length; columnOffset += 1) {
-        const address = formatCellAddress({ row: start.row + rowOffset, column: start.column + columnOffset });
-        if (!ensureEditableAddress(address)) {
-          return;
-        }
-        if (!validateCellCommit(address, matrix[rowOffset][columnOffset])) {
-          return;
+    if (shouldValidatePastedCells(activeSheet)) {
+      const start = parseCellAddress(activeAddress);
+      for (let rowOffset = 0; rowOffset < matrix.length; rowOffset += 1) {
+        for (let columnOffset = 0; columnOffset < matrix[rowOffset].length; columnOffset += 1) {
+          const address = formatCellAddress({ row: start.row + rowOffset, column: start.column + columnOffset });
+          if (!ensureEditableAddress(address)) {
+            return;
+          }
+          if (!validateCellCommit(address, matrix[rowOffset][columnOffset])) {
+            return;
+          }
         }
       }
     }
@@ -2384,19 +2385,31 @@ function inferSourceRange(sheet: SheetModel, selection: CellRange): CellRange {
     return normalized;
   }
 
-  const populatedCoords = Object.keys(sheet.cells).map(parseCellAddress);
-  if (populatedCoords.length === 0) {
+  let minRow = Number.POSITIVE_INFINITY;
+  let minColumn = Number.POSITIVE_INFINITY;
+  let maxRow = 0;
+  let maxColumn = 0;
+
+  for (const address of Object.keys(sheet.cells)) {
+    const coord = parseCellAddress(address);
+    minRow = Math.min(minRow, coord.row);
+    minColumn = Math.min(minColumn, coord.column);
+    maxRow = Math.max(maxRow, coord.row);
+    maxColumn = Math.max(maxColumn, coord.column);
+  }
+
+  if (!Number.isFinite(minRow) || !Number.isFinite(minColumn)) {
     return normalized;
   }
 
   return {
     start: {
-      row: Math.min(...populatedCoords.map((coord) => coord.row)),
-      column: Math.min(...populatedCoords.map((coord) => coord.column))
+      row: minRow,
+      column: minColumn
     },
     end: {
-      row: Math.max(...populatedCoords.map((coord) => coord.row)),
-      column: Math.max(...populatedCoords.map((coord) => coord.column))
+      row: maxRow,
+      column: maxColumn
     }
   };
 }
@@ -2415,6 +2428,14 @@ function trimEmptyEdges(rows: string[][]): string[][] {
   }
 
   return keptRows.map((row) => row.slice(0, lastColumn + 1));
+}
+
+function shouldValidatePastedCells(sheet: SheetModel): boolean {
+  return (
+    Boolean(sheet.protection?.isProtected) ||
+    Object.keys(sheet.protection?.lockedCells ?? {}).length > 0 ||
+    Object.keys(sheet.validations ?? {}).length > 0
+  );
 }
 
 function summarizeSelection(sheet: SheetModel, selection: CellRange, formulaEngine: FormulaEngine): string {
@@ -2495,6 +2516,17 @@ function pluralize(count: number, singular: string): string {
 
 function getPivotHeaders(rows: string[][]): string[] {
   return Array.from(new Set((rows[0] ?? []).map((header) => header.trim()).filter(Boolean)));
+}
+
+function getPivotHeadersForSelection(sheet: SheetModel, selection: CellRange, formulaEngine: FormulaEngine): string[] {
+  const range = inferSourceRange(sheet, selection);
+  const headerRow: string[] = [];
+
+  for (let column = range.start.column; column <= range.end.column; column += 1) {
+    headerRow.push(formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row: range.start.row, column })));
+  }
+
+  return getPivotHeaders([headerRow]);
 }
 
 function lastNonEmptyIndex(row: string[]): number {

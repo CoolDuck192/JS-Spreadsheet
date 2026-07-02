@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Grid } from "./Grid";
 import { createFormulaEngine } from "../lib/formulaEngine";
+import type { FormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
 
 describe("Grid", () => {
@@ -181,6 +182,55 @@ describe("Grid", () => {
 
     expect(screen.getByRole("gridcell", { name: "A121 Deep row" })).toBeInTheDocument();
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(1600);
+  });
+
+  it("renders only a bounded viewport for wide pasted sheets", () => {
+    const sheet: SheetModel = {
+      id: "sheet-1",
+      name: "Wide data",
+      rowCount: 1000,
+      columnCount: 400,
+      cells: {
+        A1: "Top left",
+        AJ1: "Visible wide value"
+      },
+      formats: {},
+      columnWidths: {},
+      rowHeights: {},
+      comments: {},
+      hyperlinks: {},
+      validations: {},
+      conditionalFormats: [],
+      filters: [],
+      charts: [],
+      merges: [],
+      protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
+    };
+    const formulaEngine: FormulaEngine = {
+      getDisplayValue: (_sheetId, address) => String(sheet.cells[address] ?? ""),
+      getRawContent: (_sheetId, address) => sheet.cells[address] ?? null,
+      rebuild: () => undefined
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={formulaEngine}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A1 Top left" })).toBeInTheDocument();
+    expect(screen.getAllByRole("gridcell").length).toBeLessThan(2000);
   });
 
   it("marks frozen top-row and first-column cells for sticky pane styling", () => {
