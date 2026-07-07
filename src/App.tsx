@@ -262,10 +262,13 @@ export default function App() {
       // every commit. Export to .xlsx is the durable path for datasets that big.
       let populatedCells = 0;
       for (const sheet of workbook.sheets) {
-        populatedCells += Object.keys(sheet.cells).length;
-        if (populatedCells > AUTOSAVE_CELL_LIMIT) {
-          setStatus("Workbook too large for browser autosave — use Export XLSX to save");
-          return;
+        for (const address in sheet.cells) {
+          void address;
+          populatedCells += 1;
+          if (populatedCells > AUTOSAVE_CELL_LIMIT) {
+            setStatus("Workbook too large for browser autosave — use Export XLSX to save");
+            return;
+          }
         }
       }
       if (!saveWorkbook(window.localStorage, workbook)) {
@@ -2589,6 +2592,21 @@ function trimEmptyEdges(rows: string[][]): string[][] {
   return keptRows.map((row) => row.slice(0, lastColumn + 1));
 }
 
+// Threshold check without materializing a key array — stops as soon as the
+// target is reached, so it costs min(target, populated) iterations and no
+// allocation even on million-cell sheets.
+function hasAtLeastCellCount(cells: SheetModel["cells"], target: number): boolean {
+  let count = 0;
+  for (const address in cells) {
+    void address;
+    count += 1;
+    if (count >= target) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function countSelectedCells(selection: CellRange): number {
   const range = normalizeRange(selection);
   return (range.end.row - range.start.row + 1) * (range.end.column - range.start.column + 1);
@@ -2622,8 +2640,7 @@ function summarizeSelection(sheet: SheetModel, selection: CellRange, formulaEngi
   // the rectangle directly; whole-column/sheet selections walk populated cells.
   const selectionArea =
     (range.end.row - range.start.row + 1) * (range.end.column - range.start.column + 1);
-  const populatedCount = Object.keys(sheet.cells).length;
-  if (selectionArea <= populatedCount) {
+  if (hasAtLeastCellCount(sheet.cells, selectionArea)) {
     for (let row = range.start.row; row <= range.end.row; row += 1) {
       for (let column = range.start.column; column <= range.end.column; column += 1) {
         const address = formatCellAddress({ row, column });
