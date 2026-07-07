@@ -194,7 +194,7 @@ function worksheetToSheet(worksheet: ExcelJS.Worksheet, index: number): SheetMod
       maxRow = Math.max(maxRow, rowNumber - 1);
       maxColumn = Math.max(maxColumn, columnNumber - 1);
 
-      const content = excelValueToCellContent(cell.value);
+      const content = excelCellToCellContent(cell);
       if (content !== null) {
         cells[address] = content;
       }
@@ -1176,6 +1176,20 @@ function excelColorToHex(color: unknown): string | undefined {
   return /^[0-9A-F]{6}$/.test(rgb) ? `#${rgb.toLowerCase()}` : undefined;
 }
 
+function excelCellToCellContent(cell: ExcelJS.Cell): CellContent {
+  const value = cell.value;
+  // Shared-formula cells: cell.value.sharedFormula is the MASTER CELL'S ADDRESS, not a
+  // formula. ExcelJS's cell.formula getter translates the master formula to this cell's
+  // position, which is what a 1:1 import needs.
+  if (isSharedFormulaValue(value)) {
+    const translated = cell.formula;
+    return typeof translated === "string" && translated.length > 0
+      ? `=${translated}`
+      : excelValueToCellContent(value.result ?? null);
+  }
+  return excelValueToCellContent(value);
+}
+
 function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
   if (value === null || value === undefined || value === "") {
     return null;
@@ -1184,13 +1198,16 @@ function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
     return value;
   }
   if (value instanceof Date) {
-    return value.toISOString();
+    return dateToCellContent(value);
   }
   if (isFormulaValue(value)) {
     return `=${value.formula}`;
   }
   if (isSharedFormulaValue(value)) {
-    return `=${value.sharedFormula}`;
+    // value.sharedFormula is the master cell's ADDRESS — emitting "=<address>"
+    // would misrepresent the computation. Shared formulas are translated in
+    // excelCellToCellContent (which has the Cell); here fall back to the result.
+    return excelValueToCellContent(value.result ?? null);
   }
   if (isHyperlinkValue(value)) {
     return value.text || value.hyperlink;
@@ -1202,6 +1219,13 @@ function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
     return value.error;
   }
   return String(value);
+}
+
+// Midnight-UTC dates (the common case for Excel date cells) become plain ISO dates the
+// formula engine parses as date serials; anything with a time keeps the full timestamp.
+function dateToCellContent(value: Date): string {
+  const iso = value.toISOString();
+  return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso;
 }
 
 function excelValueToHyperlink(value: ExcelJS.CellValue): string {

@@ -4,8 +4,14 @@ import { createBlankWorkbook } from "./workbook";
 export const WORKBOOK_STORAGE_KEY = "javascript-spreadsheet-workbook";
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
-export function saveWorkbook(storage: Storage, workbook: WorkbookModel): void {
-  storage.setItem(WORKBOOK_STORAGE_KEY, JSON.stringify(workbook));
+export function saveWorkbook(storage: Storage, workbook: WorkbookModel): boolean {
+  try {
+    storage.setItem(WORKBOOK_STORAGE_KEY, JSON.stringify(workbook));
+    return true;
+  } catch {
+    // Quota exceeded or storage unavailable — the workbook stays usable in memory.
+    return false;
+  }
 }
 
 export function loadWorkbook(storage: Storage): WorkbookModel {

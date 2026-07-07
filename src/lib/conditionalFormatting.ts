@@ -56,11 +56,13 @@ export function getConditionalDataBarForValue(
     }
 
     const ruleValues = options.getRuleValues?.(rule) ?? [];
-    const maxValue = Math.max(
-      ...ruleValues
-        .map((candidate) => parseNumericValue(candidate))
-        .filter((candidate): candidate is number => candidate !== null && candidate > 0)
-    );
+    let maxValue = Number.NEGATIVE_INFINITY;
+    for (const candidate of ruleValues) {
+      const parsed = parseNumericValue(candidate);
+      if (parsed !== null && parsed > maxValue) {
+        maxValue = parsed;
+      }
+    }
 
     if (!Number.isFinite(maxValue) || maxValue <= 0) {
       return dataBar;

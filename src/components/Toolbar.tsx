@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Bold,
   ChartColumn,
+  Cloud,
   MessageSquare,
   Columns3,
   Copy,
@@ -113,6 +114,7 @@ type ToolbarProps = {
   onImport: () => void;
   onExport: () => void;
   onImportXlsx: () => void;
+  onImportGoogleSheet: () => void;
   onExportXlsx: () => void;
   onPrint: () => void;
   onUndo: () => void;
@@ -308,6 +310,7 @@ function WorkbookGroup(props: ToolbarProps) {
       <ToolbarButton label="Export CSV" onClick={props.onExport} icon={<Download />} />
       <ToolbarButton label="Import XLSX" onClick={props.onImportXlsx} icon={<Upload />} />
       <ToolbarButton label="Export XLSX" onClick={props.onExportXlsx} icon={<Download />} />
+      <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Cloud />} />
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
     </ToolbarGroup>
   );
@@ -679,7 +682,9 @@ function ToolbarButton({
       type="button"
       className={className}
       aria-label={label}
-      title={label}
+      // Compact buttons get an instant CSS tooltip from aria-label; keeping the
+      // native title too would show a second, delayed tooltip on top of it.
+      title={compact ? undefined : label}
       onClick={onClick}
       disabled={disabled}
     >

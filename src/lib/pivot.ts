@@ -13,6 +13,20 @@ type AggregateState = {
   sum: number;
   min: number | null;
   max: number | null;
+  sourceRows: number[];
+};
+
+/**
+ * Per-cell drill-down map parallel to the pivot table: each entry lists the
+ * indexes (into the input `rows` array) of the source data rows that were
+ * aggregated into that cell, or null for cells with nothing to drill into
+ * (header row, empty intersections).
+ */
+export type PivotDrillDownGrid = Array<Array<number[] | null>>;
+
+export type PivotTableWithDetails = {
+  table: string[][];
+  drillDown: PivotDrillDownGrid;
 };
 
 type PivotGroup = {
@@ -24,6 +38,10 @@ type PivotGroup = {
 const PIVOT_LABEL_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 
 export function createPivotTable(rows: string[][], config: PivotConfig): string[][] {
+  return createPivotTableWithDetails(rows, config).table;
+}
+
+export function createPivotTableWithDetails(rows: string[][], config: PivotConfig): PivotTableWithDetails {
   if (rows.length < 2) {
     throw new Error("Pivot tables need a header row and at least one data row.");
   }
@@ -40,14 +58,15 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
   const columnValues: string[] = [];
   const grandTotal = createAggregateState();
 
-  for (const row of rows.slice(1)) {
+  for (let sourceIndex = 1; sourceIndex < rows.length; sourceIndex += 1) {
+    const row = rows[sourceIndex];
     const rowKey = rowFieldIndexes.map((index) => normalizeDimensionValue(row[index]));
     const rowKeyId = serializeKey(rowKey);
     const group = getOrCreateGroup(groups, rowKeyId, rowKey);
     const rawValue = row[valueIndex] ?? "";
 
-    addAggregateValue(group.total, rawValue);
-    addAggregateValue(grandTotal, rawValue);
+    addAggregateValue(group.total, rawValue, sourceIndex);
+    addAggregateValue(grandTotal, rawValue, sourceIndex);
 
     if (columnIndex !== undefined && config.columnField) {
       const columnValue = normalizeDimensionValue(row[columnIndex]);
@@ -56,7 +75,7 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
         columnState = createAggregateState();
         group.columns.set(columnValue, columnState);
       }
-      addAggregateValue(columnState, rawValue);
+      addAggregateValue(columnState, rawValue, sourceIndex);
 
       let columnTotal = columnTotals.get(columnValue);
       if (!columnTotal) {
@@ -64,7 +83,7 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
         columnTotals.set(columnValue, columnTotal);
         columnValues.push(columnValue);
       }
-      addAggregateValue(columnTotal, rawValue);
+      addAggregateValue(columnTotal, rawValue, sourceIndex);
     }
   }
 
@@ -74,11 +93,17 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
   if (!config.columnField) {
     const header = [...config.rowFields, `${config.aggregator} of ${config.valueField}`];
     const body = sortedGroups.map((group) => [...group.key, formatAggregate(group.total, config.aggregator)]);
-    return [
+    const table = [
       header,
       ...body,
       [...grandTotalCells(config.rowFields.length), formatAggregate(grandTotal, config.aggregator)]
     ];
+    const drillDown: PivotDrillDownGrid = [
+      header.map(() => null),
+      ...sortedGroups.map((group) => header.map(() => stateDrillDown(group.total))),
+      header.map(() => stateDrillDown(grandTotal))
+    ];
+    return { table, drillDown };
   }
 
   const header = [...config.rowFields, ...sortedColumnValues, "Grand Total"];
@@ -94,7 +119,25 @@ export function createPivotTable(rows: string[][], config: PivotConfig): string[
     formatAggregate(grandTotal, config.aggregator)
   ];
 
-  return [header, ...body, grandTotalRow];
+  const drillDown: PivotDrillDownGrid = [
+    header.map(() => null),
+    ...sortedGroups.map((group) => [
+      ...group.key.map(() => stateDrillDown(group.total)),
+      ...sortedColumnValues.map((columnValue) => stateDrillDown(group.columns.get(columnValue))),
+      stateDrillDown(group.total)
+    ]),
+    [
+      ...grandTotalCells(config.rowFields.length).map(() => stateDrillDown(grandTotal)),
+      ...sortedColumnValues.map((columnValue) => stateDrillDown(columnTotals.get(columnValue))),
+      stateDrillDown(grandTotal)
+    ]
+  ];
+
+  return { table: [header, ...body, grandTotalRow], drillDown };
+}
+
+function stateDrillDown(state: AggregateState | undefined): number[] | null {
+  return state && state.sourceRows.length > 0 ? [...state.sourceRows] : null;
 }
 
 function normalizeHeaders(headerRow: string[]): string[] {
@@ -172,11 +215,13 @@ function createAggregateState(): AggregateState {
     numericCount: 0,
     sum: 0,
     min: null,
-    max: null
+    max: null,
+    sourceRows: []
   };
 }
 
-function addAggregateValue(state: AggregateState, rawValue: string) {
+function addAggregateValue(state: AggregateState, rawValue: string, sourceIndex: number) {
+  state.sourceRows.push(sourceIndex);
   if (String(rawValue).trim() !== "") {
     state.nonEmptyCount += 1;
   }

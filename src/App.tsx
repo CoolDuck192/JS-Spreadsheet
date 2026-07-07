@@ -44,10 +44,12 @@ import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
 import { createFormulaEngine } from "./lib/formulaEngine";
+import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth";
+import { importWorkbookFromGoogleSheets } from "./lib/googleSheets";
 import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { loadWorkbook, saveWorkbook } from "./lib/persistence";
-import { createPivotTable, type PivotConfig } from "./lib/pivot";
+import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
 import { validateCellValue } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import {
@@ -130,6 +132,16 @@ const INITIAL_SELECTION: CellRange = {
   start: { row: 0, column: 0 },
   end: { row: 0, column: 0 }
 };
+const AUTOSAVE_DEBOUNCE_MS = 300;
+// ~100k populated cells serialize to several MB — past most browsers' localStorage
+// quota, and the JSON.stringify alone would stall every edit.
+const AUTOSAVE_CELL_LIMIT = 100_000;
+
+let googleTokenProvider: TokenProvider | null = null;
+function getGoogleTokenProvider(clientId: string): TokenProvider {
+  googleTokenProvider ??= createBrowserTokenProvider(clientId);
+  return googleTokenProvider;
+}
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 25;
@@ -170,6 +182,15 @@ export default function App() {
   const [formatPainter, setFormatPainter] = useState<FormatPainterState | null>(null);
   const [cellContextMenu, setCellContextMenu] = useState<{ address: string; x: number; y: number } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(100);
+  const [isDropTargetActive, setDropTargetActive] = useState(false);
+  // Drill-down metadata for pivot sheets created this session, keyed by sheet id.
+  // Double-clicking a pivot value cell opens the contributing source rows, like Excel.
+  // Sheet ids are reused after deletion, so entries are pruned on sheet delete,
+  // cleared on workbook replacement, and cross-checked against the stored table
+  // before use (covers undo/redo resurrecting an id for an unrelated sheet).
+  const [pivotDrillDowns, setPivotDrillDowns] = useState<
+    Record<string, { sourceRows: string[][]; drillDown: PivotDrillDownGrid; table: string[][] }>
+  >({});
   const [showGridlines, setShowGridlines] = useState(true);
   const [showHeaders, setShowHeaders] = useState(true);
   const [showFormulaBar, setShowFormulaBar] = useState(true);
@@ -188,19 +209,41 @@ export default function App() {
     () => getNamedRangeForSelection(workbook, activeSheet.id, selection)?.name ?? formatSelectionAddress(selection),
     [activeSheet.id, selection, workbook]
   );
-  const formulaEngine = useMemo(() => createFormulaEngine(workbook), [workbook]);
+  const formulaEngineRef = useRef<FormulaEngine | null>(null);
+  // Deliberate render-phase sync: update() is an idempotent diff (same workbook →
+  // no-op), so useMemo recomputes/discards and StrictMode double-invokes are safe,
+  // and the grid must read the NEW workbook's values in the same render — an
+  // effect-based update would leave the tree stale with no re-render to fix it
+  // (the engine's identity never changes). Revisit with useSyncExternalStore when
+  // the component is extracted for embedding.
+  const formulaEngine = useMemo(() => {
+    if (formulaEngineRef.current === null) {
+      formulaEngineRef.current = createFormulaEngine(workbook);
+    } else {
+      formulaEngineRef.current.update(workbook);
+    }
+    return formulaEngineRef.current;
+  }, [workbook]);
+
+  useEffect(() => {
+    const engine = formulaEngineRef.current;
+    // Release HyperFormula resources on unmount. The engine self-revives if a
+    // StrictMode simulated remount keeps using this instance.
+    return () => engine?.destroy();
+  }, []);
   const activeFormat = getCellFormat(workbook, activeSheet.id, activeAddress);
   const formulaSuggestions = useMemo(() => getFormulaSuggestions(formulaDraft), [formulaDraft]);
   const activeFormulaContent = getCellContent(workbook, activeSheet.id, activeAddress);
   const activeFormula = typeof activeFormulaContent === "string" && activeFormulaContent.startsWith("=") ? activeFormulaContent : "";
   const formulaAuditPrecedents = useMemo(() => extractFormulaReferences(activeFormula), [activeFormula]);
   const formulaAuditDependents = useMemo(
-    () => getFormulaDependents(activeSheet, selection),
-    [activeSheet, selection]
+    // Scans every formula in the sheet — only worth it while the audit panel is open.
+    () => (isFormulaAuditOpen ? getFormulaDependents(activeSheet, selection) : []),
+    [activeSheet, isFormulaAuditOpen, selection]
   );
   const pivotSourceRows = useMemo(
-    () => selectedRangeToDisplayRows(activeSheet, selection, formulaEngine),
-    [activeSheet, formulaEngine, selection]
+    () => (isPivotPanelOpen ? selectedRangeToDisplayRows(activeSheet, selection, formulaEngine) : []),
+    [activeSheet, formulaEngine, isPivotPanelOpen, selection]
   );
   const pivotHeaders = useMemo(() => getPivotHeaders(pivotSourceRows), [pivotSourceRows]);
   const dataValidationRules = useMemo(
@@ -213,7 +256,26 @@ export default function App() {
   );
 
   useEffect(() => {
-    saveWorkbook(window.localStorage, workbook);
+    const timeout = window.setTimeout(() => {
+      // Serializing a huge workbook costs ~1s per edit and exceeds localStorage
+      // quota anyway; skip autosave beyond the threshold instead of stalling
+      // every commit. Export to .xlsx is the durable path for datasets that big.
+      let populatedCells = 0;
+      for (const sheet of workbook.sheets) {
+        for (const address in sheet.cells) {
+          void address;
+          populatedCells += 1;
+          if (populatedCells > AUTOSAVE_CELL_LIMIT) {
+            setStatus("Workbook too large for browser autosave — use Export XLSX to save");
+            return;
+          }
+        }
+      }
+      if (!saveWorkbook(window.localStorage, workbook)) {
+        setStatus("Autosave failed — browser storage is full");
+      }
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
   }, [workbook]);
 
   useEffect(() => {
@@ -285,7 +347,14 @@ export default function App() {
     if (!validateCellCommit(address, value)) {
       return false;
     }
-    commitWorkbook(setCellContent(workbook, activeSheet.id, address, value));
+    let nextWorkbook = setCellContent(workbook, activeSheet.id, address, value);
+    // Excel behavior: typing a date into an unformatted cell applies a date format,
+    // so the engine's date serial renders as a date instead of a raw number.
+    if (typeof value === "string" && isDateLikeEntry(value) && !getCellFormat(workbook, activeSheet.id, address).numberFormat) {
+      const coord = parseCellAddress(address);
+      nextWorkbook = setCellFormat(nextWorkbook, activeSheet.id, { start: coord, end: coord }, { numberFormat: "date" });
+    }
+    commitWorkbook(nextWorkbook);
     return true;
   }
 
@@ -1100,13 +1169,55 @@ export default function App() {
     );
   }
 
+  function showPivotDrillDown(address: string): boolean {
+    const meta = pivotDrillDowns[activeSheet.id];
+    if (!meta) {
+      return false;
+    }
+
+    const coord = parseCellAddress(address);
+    const indexes = meta.drillDown[coord.row]?.[coord.column];
+    if (!indexes || indexes.length === 0) {
+      return false;
+    }
+
+    // Staleness guard: the sheet id may now belong to a different sheet (ids are
+    // reused; undo can also rewind past the pivot's creation). Only drill down if
+    // the cell still holds the value this pivot produced.
+    const expected = meta.table[coord.row]?.[coord.column] ?? "";
+    const actual = getCellContent(workbook, activeSheet.id, address);
+    if (String(actual ?? "") !== expected) {
+      return false;
+    }
+
+    const rows = [meta.sourceRows[0], ...indexes.map((index) => meta.sourceRows[index])];
+    const detailsName = nextDetailsSheetName(workbook);
+    let nextWorkbook = addSheet(workbook, detailsName);
+    const detailsSheetId = nextWorkbook.activeSheetId;
+    nextWorkbook = pasteMatrix(nextWorkbook, detailsSheetId, "A1", rows);
+    nextWorkbook = setCellFormat(nextWorkbook, detailsSheetId, rowRange(0, rows[0].length), {
+      bold: true,
+      backgroundColor: "#eaf7f2"
+    });
+    commitWorkbook(
+      nextWorkbook,
+      `Showing ${indexes.length} source ${indexes.length === 1 ? "row" : "rows"} in ${detailsName}`
+    );
+    setSelection(INITIAL_SELECTION);
+    return true;
+  }
+
   function handleCreatePivotTable(config: PivotConfig) {
     try {
       const sourceRows = selectedRangeToDisplayRows(activeSheet, selection, formulaEngine);
-      const pivotRows = createPivotTable(sourceRows, config);
+      const { table: pivotRows, drillDown } = createPivotTableWithDetails(sourceRows, config);
       const pivotName = nextPivotSheetName(workbook);
       let nextWorkbook = addSheet(workbook, pivotName);
       const pivotSheetId = nextWorkbook.activeSheetId;
+      setPivotDrillDowns((current) => ({
+        ...current,
+        [pivotSheetId]: { sourceRows, drillDown, table: pivotRows }
+      }));
 
       nextWorkbook = pasteMatrix(nextWorkbook, pivotSheetId, "A1", pivotRows);
       nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(0, pivotRows[0].length), {
@@ -1443,7 +1554,16 @@ export default function App() {
   }
 
   function handleDeleteSheet() {
-    commitWorkbook(deleteSheet(workbook, activeSheet.id), "Deleted sheet");
+    const deletedSheetId = activeSheet.id;
+    commitWorkbook(deleteSheet(workbook, deletedSheetId), "Deleted sheet");
+    setPivotDrillDowns((current) => {
+      if (!(deletedSheetId in current)) {
+        return current;
+      }
+      const { [deletedSheetId]: removed, ...rest } = current;
+      void removed;
+      return rest;
+    });
     setSelection(INITIAL_SELECTION);
   }
 
@@ -1498,6 +1618,7 @@ export default function App() {
   function handleNewWorkbook() {
     const next = createBlankWorkbook();
     setHistory(createHistory(next));
+    setPivotDrillDowns({});
     setSelection(INITIAL_SELECTION);
     setFormatPainter(null);
     setStatus("New workbook");
@@ -1513,6 +1634,7 @@ export default function App() {
       try {
         const rows = parseCsv(String(reader.result ?? ""));
         setHistory((current) => commitHistory(current, replaceActiveSheetWithRows(current.present, rows)));
+        setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
@@ -1545,12 +1667,39 @@ export default function App() {
       .then(async (buffer) => {
         const nextWorkbook = await importWorkbookFromXlsx(buffer);
         setHistory((current) => commitHistory(current, nextWorkbook));
+        setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
       })
       .catch((error: unknown) => {
         setStatus(error instanceof Error ? error.message : "XLSX import failed");
+      });
+  }
+
+  function handleImportGoogleSheet() {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    if (!clientId) {
+      setStatus("Set VITE_GOOGLE_CLIENT_ID (a Google OAuth client id) to link Google Sheets");
+      return;
+    }
+
+    const input = window.prompt("Paste a Google Sheets URL (or spreadsheet id):");
+    if (!input) {
+      return;
+    }
+
+    setStatus("Connecting to Google Sheets…");
+    importWorkbookFromGoogleSheets(input, getGoogleTokenProvider(clientId))
+      .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
+        setHistory((current) => commitHistory(current, nextWorkbook));
+        setPivotDrillDowns({});
+        setSelection(INITIAL_SELECTION);
+        setFormatPainter(null);
+        setStatus(`Linked ${spreadsheetTitle}`);
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Google Sheets import failed");
       });
   }
 
@@ -1698,8 +1847,46 @@ export default function App() {
     commitWorkbook(nextWorkbook, `Replaced ${changedCells} ${changedCells === 1 ? "cell" : "cells"}`);
   }
 
+  function handleFileDrop(event: React.DragEvent) {
+    event.preventDefault();
+    setDropTargetActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".xlsx")) {
+      handleImportXlsx(file);
+    } else if (name.endsWith(".csv")) {
+      handleImportCsv(file);
+    } else {
+      setStatus("Drop an .xlsx or .csv file to import it");
+    }
+  }
+
   return (
-    <main className="app-shell" onKeyDown={handleShellKeyCommand}>
+    <main
+      className="app-shell"
+      onKeyDown={handleShellKeyCommand}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+          setDropTargetActive(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDropTargetActive(false);
+        }
+      }}
+      onDrop={handleFileDrop}
+    >
+      {isDropTargetActive ? (
+        <div className="file-drop-overlay" aria-hidden="true">
+          Drop to import workbook
+        </div>
+      ) : null}
       <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
         <Toolbar
           canUndo={history.past.length > 0}
@@ -1708,6 +1895,7 @@ export default function App() {
           onImport={() => fileInputRef.current?.click()}
           onExport={handleExportCsv}
           onImportXlsx={() => xlsxInputRef.current?.click()}
+          onImportGoogleSheet={handleImportGoogleSheet}
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
@@ -2018,6 +2206,9 @@ export default function App() {
           scrollRef={gridScrollRef}
           onSelectionChange={handleSelectionChange}
           onStartEdit={(address) => {
+            if (showPivotDrillDown(address)) {
+              return;
+            }
             if (!ensureEditableAddress(address)) {
               return;
             }
@@ -2095,7 +2286,7 @@ export default function App() {
         <StatusBar
           status={status}
           activeAddress={activeAddress}
-          selectedCount={getRangeAddresses(selection).length}
+          selectedCount={countSelectedCells(selection)}
           selectionSummary={selectionSummary}
           formulaFunctions="HyperFormula 418+ functions"
           zoomLevel={zoomLevel}
@@ -2356,21 +2547,33 @@ function inferSourceRange(sheet: SheetModel, selection: CellRange): CellRange {
     return normalized;
   }
 
-  const populatedCoords = Object.keys(sheet.cells).map(parseCellAddress);
-  if (populatedCoords.length === 0) {
+  let minRow = Number.POSITIVE_INFINITY;
+  let minColumn = Number.POSITIVE_INFINITY;
+  let maxRow = Number.NEGATIVE_INFINITY;
+  let maxColumn = Number.NEGATIVE_INFINITY;
+  for (const address in sheet.cells) {
+    const coord = parseCellAddress(address);
+    minRow = Math.min(minRow, coord.row);
+    minColumn = Math.min(minColumn, coord.column);
+    maxRow = Math.max(maxRow, coord.row);
+    maxColumn = Math.max(maxColumn, coord.column);
+  }
+  if (!Number.isFinite(minRow)) {
     return normalized;
   }
 
   return {
-    start: {
-      row: Math.min(...populatedCoords.map((coord) => coord.row)),
-      column: Math.min(...populatedCoords.map((coord) => coord.column))
-    },
-    end: {
-      row: Math.max(...populatedCoords.map((coord) => coord.row)),
-      column: Math.max(...populatedCoords.map((coord) => coord.column))
-    }
+    start: { row: minRow, column: minColumn },
+    end: { row: maxRow, column: maxColumn }
   };
+}
+
+// Matches the entry formats the formula engine is configured to parse as dates
+// (see ENGINE_CONFIG.dateFormats): ISO YYYY-MM-DD, MM/DD/YYYY, and MM/DD/YY.
+const DATE_ENTRY_PATTERN = /^\s*(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}\/(\d{4}|\d{2}))\s*$/;
+
+function isDateLikeEntry(value: string): boolean {
+  return DATE_ENTRY_PATTERN.test(value);
 }
 
 function trimEmptyEdges(rows: string[][]): string[][] {
@@ -2389,23 +2592,87 @@ function trimEmptyEdges(rows: string[][]): string[][] {
   return keptRows.map((row) => row.slice(0, lastColumn + 1));
 }
 
+// Threshold check without materializing a key array — stops as soon as the
+// target is reached, so it costs min(target, populated) iterations and no
+// allocation even on million-cell sheets.
+function hasAtLeastCellCount(cells: SheetModel["cells"], target: number): boolean {
+  let count = 0;
+  for (const address in cells) {
+    void address;
+    count += 1;
+    if (count >= target) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function countSelectedCells(selection: CellRange): number {
+  const range = normalizeRange(selection);
+  return (range.end.row - range.start.row + 1) * (range.end.column - range.start.column + 1);
+}
+
 function summarizeSelection(sheet: SheetModel, selection: CellRange, formulaEngine: FormulaEngine): string {
-  const values = getRangeAddresses(selection).map((address) => formulaEngine.getDisplayValue(sheet.id, address));
-  const nonEmptyValues = values.filter((value) => value.trim() !== "");
-  if (nonEmptyValues.length === 0) {
+  const range = normalizeRange(selection);
+  let nonEmptyCount = 0;
+  let numericCount = 0;
+  let sum = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+
+  const accumulate = (address: string) => {
+    const value = formulaEngine.getDisplayValue(sheet.id, address);
+    if (value.trim() === "") {
+      return;
+    }
+    nonEmptyCount += 1;
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      numericCount += 1;
+      sum += numeric;
+      min = Math.min(min, numeric);
+      max = Math.max(max, numeric);
+    }
+  };
+
+  // Work is bounded by min(selection area, populated cells): small selections walk
+  // the rectangle directly; whole-column/sheet selections walk populated cells.
+  const selectionArea =
+    (range.end.row - range.start.row + 1) * (range.end.column - range.start.column + 1);
+  if (hasAtLeastCellCount(sheet.cells, selectionArea)) {
+    for (let row = range.start.row; row <= range.end.row; row += 1) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        const address = formatCellAddress({ row, column });
+        if (address in sheet.cells) {
+          accumulate(address);
+        }
+      }
+    }
+  } else {
+    for (const address in sheet.cells) {
+      const coord = parseCellAddress(address);
+      if (
+        coord.row >= range.start.row &&
+        coord.row <= range.end.row &&
+        coord.column >= range.start.column &&
+        coord.column <= range.end.column
+      ) {
+        accumulate(address);
+      }
+    }
+  }
+
+  if (nonEmptyCount === 0) {
     return "Count 0";
   }
 
-  const numericValues = nonEmptyValues.map((value) => Number(value)).filter((value) => Number.isFinite(value));
-  if (numericValues.length === 0) {
-    return `Count ${nonEmptyValues.length}`;
+  if (numericCount === 0) {
+    return `Count ${nonEmptyCount}`;
   }
 
-  const sum = numericValues.reduce((total, value) => total + value, 0);
-  const min = Math.min(...numericValues);
-  const max = Math.max(...numericValues);
-  return `Count ${nonEmptyValues.length}  Sum ${formatSummaryNumber(sum)}  Avg ${formatSummaryNumber(
-    sum / numericValues.length
+  return `Count ${nonEmptyCount}  Sum ${formatSummaryNumber(sum)}  Avg ${formatSummaryNumber(
+    sum / numericCount
   )}  Min ${formatSummaryNumber(min)}  Max ${formatSummaryNumber(max)}`;
 }
 
@@ -2479,12 +2746,20 @@ function lastNonEmptyIndex(row: string[]): number {
 }
 
 function nextPivotSheetName(workbook: WorkbookModel): string {
+  return nextGeneratedSheetName(workbook, "Pivot");
+}
+
+function nextDetailsSheetName(workbook: WorkbookModel): string {
+  return nextGeneratedSheetName(workbook, "Details");
+}
+
+function nextGeneratedSheetName(workbook: WorkbookModel, base: string): string {
   const existingNames = new Set(workbook.sheets.map((sheet) => sheet.name));
   let index = 1;
-  let name = `Pivot ${index}`;
+  let name = `${base} ${index}`;
   while (existingNames.has(name)) {
     index += 1;
-    name = `Pivot ${index}`;
+    name = `${base} ${index}`;
   }
   return name;
 }
