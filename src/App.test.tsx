@@ -1406,11 +1406,11 @@ describe("App", () => {
     const formulaInput = screen.getByLabelText("Formula input");
     await user.click(formulaInput);
     await user.type(formulaInput, "=av");
-    fireEvent.keyDown(formulaInput, { key: "ArrowRight" });
+    fireEvent.keyDown(formulaInput, { key: "ArrowDown" });
 
     expect(screen.getByRole("option", { name: "AVEDEV" })).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(formulaInput, { key: "Enter" });
+    fireEvent.keyDown(formulaInput, { key: "Tab" });
 
     expect(formulaInput).toHaveValue("=AVEDEV(");
   });
@@ -1434,7 +1434,7 @@ describe("App", () => {
     expect(screen.getByRole("option", { name: "AVEDEV" })).toHaveAttribute("aria-selected", "true");
     expect(formulaInput).toHaveAttribute("aria-activedescendant", "formula-bar-suggestions-option-avedev");
 
-    fireEvent.keyDown(formulaInput, { key: "Enter" });
+    fireEvent.keyDown(formulaInput, { key: "Tab" });
 
     expect(formulaInput).toHaveValue("=AVEDEV(");
   });
@@ -1474,6 +1474,39 @@ describe("App", () => {
     expect(screen.getByLabelText("Cell editor A1")).toHaveValue("=SUM(");
   });
 
+  it("commits non-function formulas with Enter without autocomplete hijacking", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    await user.type(editor, "=1+2");
+
+    // No function-name prefix is being typed, so no suggestions may appear.
+    expect(screen.queryByRole("listbox", { name: "Formula suggestions" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    expect(await screen.findByRole("gridcell", { name: "A1 3" })).toHaveTextContent("3");
+  });
+
+  it("keeps Enter committing the raw text even while suggestions are visible", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    await user.type(editor, "=av");
+
+    expect(screen.getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
+
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    // Enter commits what was typed (an unknown name evaluates to #NAME?) instead of
+    // silently replacing the input with the highlighted suggestion.
+    expect(await screen.findByRole("gridcell", { name: "A1 #NAME?" })).toBeInTheDocument();
+  });
+
   it("accepts formula suggestions from the keyboard in a cell editor", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1491,7 +1524,7 @@ describe("App", () => {
     await user.dblClick(screen.getByRole("gridcell", { name: "A1" }));
     const editor = screen.getByLabelText("Cell editor A1");
     await user.type(editor, "=av");
-    fireEvent.keyDown(editor, { key: "ArrowRight" });
+    fireEvent.keyDown(editor, { key: "ArrowDown" });
 
     expect(screen.getByRole("option", { name: "AVEDEV" })).toHaveAttribute("aria-selected", "true");
 

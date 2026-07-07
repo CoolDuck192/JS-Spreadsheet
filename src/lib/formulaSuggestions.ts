@@ -55,7 +55,10 @@ export function getFormulaSuggestions(input: string): FormulaSuggestion[] {
 
   const prefix = getFormulaPrefix(input);
   if (prefix.length === 0) {
-    return FORMULA_SUGGESTIONS.slice(0, MAX_FORMULA_SUGGESTIONS);
+    // Suggest popular functions only on a bare "=". Once the formula body starts with
+    // anything that isn't a function name (e.g. "=1+2"), autocomplete must stay out
+    // of the way so Enter commits the formula, matching Excel.
+    return formulaBody.length === 0 ? FORMULA_SUGGESTIONS.slice(0, MAX_FORMULA_SUGGESTIONS) : [];
   }
 
   return FORMULA_SUGGESTIONS.filter((suggestion) => suggestion.name.startsWith(prefix)).slice(0, MAX_FORMULA_SUGGESTIONS);

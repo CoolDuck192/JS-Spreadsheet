@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPivotTable } from "./pivot";
+import { createPivotTable, createPivotTableWithDetails } from "./pivot";
 
 describe("pivot", () => {
   const rows = [
@@ -24,6 +24,41 @@ describe("pivot", () => {
       ["West", "10", "20", "30"],
       ["Grand Total", "18", "27", "45"]
     ]);
+  });
+
+  it("maps every value cell to its contributing source rows for drill-down", () => {
+    const { table, drillDown } = createPivotTableWithDetails(rows, {
+      rowFields: ["Region"],
+      columnField: "Product",
+      valueField: "Sales",
+      aggregator: "SUM"
+    });
+
+    expect(table[1]).toEqual(["East", "8", "7", "15"]);
+    // Header row has nothing to drill into.
+    expect(drillDown[0]).toEqual([null, null, null, null]);
+    // East/Hardware = source row 3, East/Software = row 4, East total = both.
+    expect(drillDown[1]).toEqual([[3, 4], [3], [4], [3, 4]]);
+    // West/Hardware = row 1, West/Software = row 2.
+    expect(drillDown[2]).toEqual([[1, 2], [1], [2], [1, 2]]);
+    // Grand-total row drills into column totals and the full data set.
+    expect(drillDown[3]).toEqual([[1, 2, 3, 4], [1, 3], [2, 4], [1, 2, 3, 4]]);
+  });
+
+  it("returns null drill-down for empty row/column intersections", () => {
+    const { drillDown, table } = createPivotTableWithDetails(
+      [
+        ["Region", "Product", "Sales"],
+        ["West", "Hardware", "10"],
+        ["East", "Software", "7"]
+      ],
+      { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "SUM" }
+    );
+
+    // East has no Hardware entry: the empty intersection is not drillable.
+    expect(table[1]).toEqual(["East", "", "7", "7"]);
+    expect(drillDown[1][1]).toBeNull();
+    expect(drillDown[1][2]).toEqual([2]);
   });
 
   it("creates a row-only pivot with averages", () => {

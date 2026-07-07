@@ -113,6 +113,7 @@ type ToolbarProps = {
   onImport: () => void;
   onExport: () => void;
   onImportXlsx: () => void;
+  onImportGoogleSheet: () => void;
   onExportXlsx: () => void;
   onPrint: () => void;
   onUndo: () => void;
@@ -308,6 +309,7 @@ function WorkbookGroup(props: ToolbarProps) {
       <ToolbarButton label="Export CSV" onClick={props.onExport} icon={<Download />} />
       <ToolbarButton label="Import XLSX" onClick={props.onImportXlsx} icon={<Upload />} />
       <ToolbarButton label="Export XLSX" onClick={props.onExportXlsx} icon={<Download />} />
+      <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Upload />} />
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
     </ToolbarGroup>
   );

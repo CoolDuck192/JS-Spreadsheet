@@ -776,19 +776,22 @@ function RowFragment({
                       }}
                       onBlur={() => onCommitEdit(address, editingCell.value)}
                       onKeyDown={(event) => {
-                        if ((event.key === "ArrowRight" || event.key === "ArrowDown") && visibleSuggestions.length > 0) {
+                        // Excel semantics: Up/Down navigate the autocomplete list, Tab accepts
+                        // the highlighted suggestion, and Enter ALWAYS commits the cell.
+                        // Left/Right are left alone so the user can move the text caret.
+                        if (event.key === "ArrowDown" && visibleSuggestions.length > 0) {
                           event.preventDefault();
                           setActiveSuggestionIndex((current) => wrapSuggestionIndex(current + 1, visibleSuggestions.length));
                           return;
                         }
 
-                        if ((event.key === "ArrowLeft" || event.key === "ArrowUp") && visibleSuggestions.length > 0) {
+                        if (event.key === "ArrowUp" && visibleSuggestions.length > 0) {
                           event.preventDefault();
                           setActiveSuggestionIndex((current) => wrapSuggestionIndex(current - 1, visibleSuggestions.length));
                           return;
                         }
 
-                        if ((event.key === "Tab" || event.key === "Enter") && visibleSuggestions.length > 0) {
+                        if (event.key === "Tab" && visibleSuggestions.length > 0) {
                           event.preventDefault();
                           const suggestion = visibleSuggestions[wrapSuggestionIndex(activeSuggestionIndex, visibleSuggestions.length)];
                           if (suggestion) {

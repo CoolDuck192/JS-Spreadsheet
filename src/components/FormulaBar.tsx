@@ -91,19 +91,21 @@ export function FormulaBar({
             onCommit();
           }}
           onKeyDown={(event) => {
-            if ((event.key === "ArrowRight" || event.key === "ArrowDown") && visibleSuggestions.length > 0) {
+            // Excel semantics: Up/Down navigate suggestions, Tab accepts, Enter always
+            // commits the input. Left/Right keep moving the text caret.
+            if (event.key === "ArrowDown" && visibleSuggestions.length > 0) {
               event.preventDefault();
               moveActiveSuggestion(1);
               return;
             }
 
-            if ((event.key === "ArrowLeft" || event.key === "ArrowUp") && visibleSuggestions.length > 0) {
+            if (event.key === "ArrowUp" && visibleSuggestions.length > 0) {
               event.preventDefault();
               moveActiveSuggestion(-1);
               return;
             }
 
-            if ((event.key === "Tab" || event.key === "Enter") && visibleSuggestions.length > 0) {
+            if (event.key === "Tab" && visibleSuggestions.length > 0) {
               event.preventDefault();
               commitActiveSuggestion();
               return;

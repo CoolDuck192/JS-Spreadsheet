@@ -2776,3 +2776,20 @@ button {
     position: static;
   }
 }
+
+.file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(23, 99, 74, 0.12);
+  border: 3px dashed #17634a;
+  border-radius: 8px;
+  margin: 8px;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #17634a;
+  pointer-events: none;
+}
