@@ -60,12 +60,10 @@ button {
   display: grid;
   grid-template-rows: auto auto;
   gap: 6px;
-  min-height: 104px;
-  padding: 6px 9px 8px;
+  padding: 6px 12px 10px;
   border-bottom: 1px solid var(--border);
   background: linear-gradient(#fbfdff, var(--chrome));
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .ribbon-header {
@@ -119,15 +117,14 @@ button {
 .ribbon-panel {
   display: flex;
   align-items: stretch;
-  gap: 6px;
+  row-gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
-  min-height: 60px;
-  padding: 6px;
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  min-height: 66px;
+  padding: 6px 4px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 0 6px 6px;
-  background: rgba(255, 255, 255, 0.68);
-  overflow-x: hidden;
+  background: #fff;
 }
 
 .brand {
@@ -159,84 +156,140 @@ button {
   font-size: 11px;
 }
 
+/* Excel-style groups: no boxes — hairline separators between clusters, with the
+   group name sitting quietly underneath its controls. */
 .toolbar-group {
-  display: grid;
-  grid-template-rows: auto auto;
-  gap: 4px;
-  align-content: start;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: space-between;
+  gap: 5px;
   flex: 0 1 auto;
   max-width: 100%;
-  min-height: 60px;
-  padding: 5px 6px 4px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.62);
+  padding: 2px 12px 0;
+  border-right: 1px solid #e4eae6;
+}
+
+.toolbar-group:last-child {
+  border-right: 0;
 }
 
 .toolbar-group-label {
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 800;
+  color: #7c8b84;
+  font-size: 9.5px;
+  font-weight: 650;
   line-height: 1;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .toolbar-group-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   flex-wrap: wrap;
-  min-height: 32px;
+  min-height: 36px;
 }
 
 .toolbar-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex: 0 0 auto;
-  height: 31px;
-  max-width: 156px;
+  height: 34px;
+  max-width: 168px;
   border: 1px solid transparent;
-  border-radius: 5px;
-  background: #fff;
-  padding: 0 8px;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 9px;
+  color: #2c3a34;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition-property: background-color, border-color, transform, color;
+  transition-duration: 120ms;
+  transition-timing-function: ease;
 }
 
 .toolbar-button:hover:not(:disabled),
 .toolbar-button:focus-visible:not(:disabled) {
-  border-color: rgba(34, 121, 93, 0.38);
-  background: #edf8f4;
+  background: #e9f4ef;
+  color: var(--accent-strong);
   outline: none;
 }
 
-.active-toolbar-button {
+.toolbar-button:focus-visible:not(:disabled) {
   border-color: rgba(34, 121, 93, 0.45);
+}
+
+.toolbar-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.active-toolbar-button {
+  border-color: rgba(34, 121, 93, 0.4);
   background: #dff3eb;
   color: var(--accent-strong);
 }
 
 .toolbar-button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .toolbar-button svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
 }
 
 .compact-toolbar-button {
-  width: 32px;
+  position: relative;
+  width: 34px;
   justify-content: center;
   padding: 0;
 }
 
 .compact-toolbar-button span {
   display: none;
+}
+
+/* Instant labels for icon-only buttons: hover any icon and its name appears
+   right away instead of relying on the browser's slow native tooltip. */
+.compact-toolbar-button::after {
+  content: attr(aria-label);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  translate: -50%;
+  z-index: 60;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: #24352e;
+  color: #f4faf7;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition-property: opacity;
+  transition-duration: 100ms;
+}
+
+.compact-toolbar-button:hover::after,
+.compact-toolbar-button:focus-visible::after {
+  opacity: 1;
+  transition-delay: 320ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar-button {
+    transition-duration: 0ms;
+  }
+
+  .toolbar-button:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 .toolbar-button span {
@@ -257,21 +310,22 @@ button {
   align-items: center;
   gap: 5px;
   flex: 0 0 auto;
-  height: 31px;
+  height: 34px;
   max-width: 142px;
   border: 1px solid transparent;
-  border-radius: 5px;
-  background: #fff;
+  border-radius: 6px;
+  background: transparent;
   padding: 0 7px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition-property: background-color, border-color;
+  transition-duration: 120ms;
 }
 
 .color-control:hover,
 .color-control:focus-within {
-  border-color: rgba(34, 121, 93, 0.38);
-  background: #edf8f4;
+  background: #e9f4ef;
 }
 
 .color-control svg {
@@ -323,16 +377,18 @@ button {
 }
 
 .select-control select {
-  height: 31px;
-  max-width: 108px;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  height: 32px;
+  max-width: 120px;
+  border: 1px solid #dbe4e0;
+  border-radius: 6px;
   background: #fff;
   padding: 0 24px 0 8px;
   color: var(--text);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition-property: background-color, border-color;
+  transition-duration: 120ms;
 }
 
 .compact-select-control select {
@@ -1714,6 +1770,14 @@ button {
 
 .grid-row-spacer {
   pointer-events: none;
+  /* Phantom gridlines: while fast scrolling outpaces the rendered row window,
+     the not-yet-rendered area reads as more grid instead of a white flash. */
+  background-image: linear-gradient(to bottom, #e3e8e3 1px, transparent 1px);
+  background-size: 100% 28px;
+}
+
+.grid-scroll--no-gridlines .grid-row-spacer {
+  background-image: none;
 }
 
 .corner-cell,
@@ -2509,6 +2573,8 @@ button {
   background: #f9fbfc;
   color: var(--muted);
   font-size: 12px;
+  /* Live counts/sums update constantly; keep digits from jittering the layout. */
+  font-variant-numeric: tabular-nums;
   overflow-x: auto;
   white-space: nowrap;
 }

@@ -1760,6 +1760,12 @@ export function setActiveSheet(workbook: WorkbookModel, sheetId: string): Workbo
   return { ...workbook, activeSheetId: sheetId };
 }
 
+// Each history entry pins a workbook snapshot. Snapshots share unchanged sheets
+// and cell values structurally, but the edited sheet's cells record (its keys) is
+// a fresh copy per edit — on a 100k-cell sheet that is megabytes per entry, so an
+// unbounded past grows without limit. 100 undo steps matches Excel's default.
+const MAX_UNDO_HISTORY = 100;
+
 export function createHistory(initial: WorkbookModel): HistoryState {
   return {
     past: [],
@@ -1773,8 +1779,9 @@ export function commitHistory(history: HistoryState, present: WorkbookModel): Hi
     return history;
   }
 
+  const past = [...history.past, history.present];
   return {
-    past: [...history.past, history.present],
+    past: past.length > MAX_UNDO_HISTORY ? past.slice(past.length - MAX_UNDO_HISTORY) : past,
     present,
     future: []
   };

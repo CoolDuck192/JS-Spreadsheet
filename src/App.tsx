@@ -133,6 +133,9 @@ const INITIAL_SELECTION: CellRange = {
   end: { row: 0, column: 0 }
 };
 const AUTOSAVE_DEBOUNCE_MS = 300;
+// ~100k populated cells serialize to several MB — past most browsers' localStorage
+// quota, and the JSON.stringify alone would stall every edit.
+const AUTOSAVE_CELL_LIMIT = 100_000;
 
 let googleTokenProvider: TokenProvider | null = null;
 function getGoogleTokenProvider(clientId: string): TokenProvider {
@@ -234,8 +237,9 @@ export default function App() {
   const activeFormula = typeof activeFormulaContent === "string" && activeFormulaContent.startsWith("=") ? activeFormulaContent : "";
   const formulaAuditPrecedents = useMemo(() => extractFormulaReferences(activeFormula), [activeFormula]);
   const formulaAuditDependents = useMemo(
-    () => getFormulaDependents(activeSheet, selection),
-    [activeSheet, selection]
+    // Scans every formula in the sheet — only worth it while the audit panel is open.
+    () => (isFormulaAuditOpen ? getFormulaDependents(activeSheet, selection) : []),
+    [activeSheet, isFormulaAuditOpen, selection]
   );
   const pivotSourceRows = useMemo(
     () => (isPivotPanelOpen ? selectedRangeToDisplayRows(activeSheet, selection, formulaEngine) : []),
@@ -253,6 +257,17 @@ export default function App() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
+      // Serializing a huge workbook costs ~1s per edit and exceeds localStorage
+      // quota anyway; skip autosave beyond the threshold instead of stalling
+      // every commit. Export to .xlsx is the durable path for datasets that big.
+      let populatedCells = 0;
+      for (const sheet of workbook.sheets) {
+        populatedCells += Object.keys(sheet.cells).length;
+        if (populatedCells > AUTOSAVE_CELL_LIMIT) {
+          setStatus("Workbook too large for browser autosave — use Export XLSX to save");
+          return;
+        }
+      }
       if (!saveWorkbook(window.localStorage, workbook)) {
         setStatus("Autosave failed — browser storage is full");
       }
@@ -2587,22 +2602,10 @@ function summarizeSelection(sheet: SheetModel, selection: CellRange, formulaEngi
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
 
-  // Iterate only populated cells so whole-column/whole-sheet selections stay O(data),
-  // not O(selection area).
-  for (const address in sheet.cells) {
-    const coord = parseCellAddress(address);
-    if (
-      coord.row < range.start.row ||
-      coord.row > range.end.row ||
-      coord.column < range.start.column ||
-      coord.column > range.end.column
-    ) {
-      continue;
-    }
-
+  const accumulate = (address: string) => {
     const value = formulaEngine.getDisplayValue(sheet.id, address);
     if (value.trim() === "") {
-      continue;
+      return;
     }
     nonEmptyCount += 1;
 
@@ -2612,6 +2615,34 @@ function summarizeSelection(sheet: SheetModel, selection: CellRange, formulaEngi
       sum += numeric;
       min = Math.min(min, numeric);
       max = Math.max(max, numeric);
+    }
+  };
+
+  // Work is bounded by min(selection area, populated cells): small selections walk
+  // the rectangle directly; whole-column/sheet selections walk populated cells.
+  const selectionArea =
+    (range.end.row - range.start.row + 1) * (range.end.column - range.start.column + 1);
+  const populatedCount = Object.keys(sheet.cells).length;
+  if (selectionArea <= populatedCount) {
+    for (let row = range.start.row; row <= range.end.row; row += 1) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        const address = formatCellAddress({ row, column });
+        if (address in sheet.cells) {
+          accumulate(address);
+        }
+      }
+    }
+  } else {
+    for (const address in sheet.cells) {
+      const coord = parseCellAddress(address);
+      if (
+        coord.row >= range.start.row &&
+        coord.row <= range.end.row &&
+        coord.column >= range.start.column &&
+        coord.column <= range.end.column
+      ) {
+        accumulate(address);
+      }
     }
   }
 

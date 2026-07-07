@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { ChevronDown, ListFilter } from "lucide-react";
 import { FormulaSuggestions, formulaSuggestionOptionId } from "./FormulaSuggestions";
 import type { CellFormat, CellRange, ConditionalFormatRule, DataValidationRule, SheetFilter, SheetModel } from "../types";
@@ -17,7 +17,7 @@ import {
 import { validateCellValue } from "../lib/validation";
 
 const DEFAULT_VIEWPORT_HEIGHT = 560;
-const ROW_OVERSCAN = 8;
+const ROW_OVERSCAN = 16;
 
 type GridProps = {
   sheet: SheetModel;
@@ -106,14 +106,28 @@ export function Grid({
   const [autoFillDrag, setAutoFillDrag] = useState<{ source: CellRange; target: CellRange } | null>(null);
   const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: DEFAULT_VIEWPORT_HEIGHT });
-  const normalizedSelection = normalizeRange(selection);
-  const columns = Array.from({ length: sheet.columnCount }, (_, column) => column).filter(
-    (column) => !(sheet.hiddenColumns ?? {})[String(column)]
+  const scrollFrameRef = useRef<number | null>(null);
+  const normalizedSelection = useMemo(() => normalizeRange(selection), [selection]);
+  // Everything derived from the sheet alone is memoized on the sheet snapshot's
+  // identity: scroll/selection renders must stay O(visible rows), not O(rowCount).
+  const columns = useMemo(
+    () =>
+      Array.from({ length: sheet.columnCount }, (_, column) => column).filter(
+        (column) => !(sheet.hiddenColumns ?? {})[String(column)]
+      ),
+    [sheet]
   );
-  const columnWidths = Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft));
-  const filteredRows = getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
-    formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row, column }))
-  ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]);
+  const columnWidths = useMemo(
+    () => Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft)),
+    [sheet, resizeDraft]
+  );
+  const filteredRows = useMemo(
+    () =>
+      getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
+        formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row, column }))
+      ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]),
+    [formulaEngine, sheet]
+  );
   const rowMeasurements = useMemo(() => measureRows(sheet, filteredRows, resizeDraft), [filteredRows, resizeDraft, sheet]);
   const firstVisibleIndex = Math.max(0, findFirstVisibleRow(rowMeasurements, viewport.scrollTop) - ROW_OVERSCAN);
   const lastVisibleIndex = Math.min(
@@ -159,6 +173,113 @@ export function Grid({
     return values;
   }
 
+  // Rows are memoized components; every callback handed to them must be
+  // referentially stable or the memo never hits. The ref always holds the latest
+  // implementations/state, and the stable wrappers read through it.
+  const latestRef = useRef({
+    sheet,
+    isDragging,
+    selectionStart: selection.start,
+    normalizedSelection,
+    onSelectionChange,
+    onStartEdit,
+    onEditValueChange,
+    onCommitEdit,
+    onCancelEdit,
+    onCellContextMenu,
+    onAutoFilterColumn,
+    onClearAutoFilterColumn,
+    onSortAutoFilterColumn,
+    getCellFormat,
+    getCellComment,
+    getCellHyperlink,
+    getCellReadOnly,
+    getCellValidation,
+    getCellConditionalFormatRules,
+    getConditionalRuleValues
+  });
+  latestRef.current = {
+    sheet,
+    isDragging,
+    selectionStart: selection.start,
+    normalizedSelection,
+    onSelectionChange,
+    onStartEdit,
+    onEditValueChange,
+    onCommitEdit,
+    onCancelEdit,
+    onCellContextMenu,
+    onAutoFilterColumn,
+    onClearAutoFilterColumn,
+    onSortAutoFilterColumn,
+    getCellFormat,
+    getCellComment,
+    getCellHyperlink,
+    getCellReadOnly,
+    getCellValidation,
+    getCellConditionalFormatRules,
+    getConditionalRuleValues
+  };
+
+  const stableRowCallbacks = useMemo(
+    () => ({
+      onSelectionChange: (range: CellRange) => latestRef.current.onSelectionChange(range),
+      onStartEdit: (address: string) => latestRef.current.onStartEdit(address),
+      onEditValueChange: (value: string) => latestRef.current.onEditValueChange(value),
+      onCommitEdit: (address: string, value: string) => latestRef.current.onCommitEdit(address, value),
+      onCancelEdit: () => latestRef.current.onCancelEdit(),
+      onCellContextMenu: (event: { address: string; row: number; column: number; x: number; y: number }) =>
+        latestRef.current.onCellContextMenu?.(event),
+      onAutoFilterColumn: (column: number, values: string[]) => latestRef.current.onAutoFilterColumn?.(column, values),
+      onClearAutoFilterColumn: (column: number) => latestRef.current.onClearAutoFilterColumn?.(column),
+      onSortAutoFilterColumn: (column: number, direction: "asc" | "desc") =>
+        latestRef.current.onSortAutoFilterColumn?.(column, direction),
+      getCellFormat: (address: string) => latestRef.current.getCellFormat(address),
+      getCellComment: (address: string) => latestRef.current.getCellComment(address),
+      getCellHyperlink: (address: string) => latestRef.current.getCellHyperlink(address),
+      getCellReadOnly: (address: string) => latestRef.current.getCellReadOnly(address),
+      getCellValidation: (address: string) => latestRef.current.getCellValidation(address),
+      getCellConditionalFormatRules: (address: string) => latestRef.current.getCellConditionalFormatRules(address),
+      getConditionalRuleValues: (rule: ConditionalFormatRule) => latestRef.current.getConditionalRuleValues(rule)
+    }),
+    []
+  );
+
+  const handleStartDrag = useCallback(() => setIsDragging(true), []);
+  const handleExtendDrag = useCallback((address: string) => {
+    const current = latestRef.current;
+    if (current.isDragging) {
+      current.onSelectionChange({ start: current.selectionStart, end: addressToCoord(address) });
+    }
+  }, []);
+  const handleStartAutoFill = useCallback(() => {
+    setIsDragging(false);
+    const source = latestRef.current.normalizedSelection;
+    setAutoFillDrag({ source, target: source });
+  }, []);
+  const handlePreviewAutoFill = useCallback((row: number, column: number) => {
+    setAutoFillDrag((current) => (current ? { ...current, target: createAutoFillTarget(current.source, row, column) } : current));
+  }, []);
+  const handleSelectRow = useCallback((selectedRow: number) => {
+    const current = latestRef.current;
+    current.onSelectionChange({
+      start: { row: selectedRow, column: 0 },
+      end: { row: selectedRow, column: current.sheet.columnCount - 1 }
+    });
+  }, []);
+  const handleStartRowResize = useCallback((row: number, event: React.MouseEvent<HTMLButtonElement>) => {
+    const currentSheet = latestRef.current.sheet;
+    setResizeDraft({
+      kind: "row",
+      index: row,
+      startClient: event.clientY,
+      startSize: rowHeight(currentSheet, row, null),
+      size: rowHeight(currentSheet, row, null)
+    });
+  }, []);
+
+  const editingRow = editingCell ? addressToCoord(editingCell.address).row : -1;
+
   useEffect(() => {
     setViewport({ scrollTop: 0, height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT });
     if (scrollRef?.current) {
@@ -166,6 +287,28 @@ export function Grid({
       scrollRef.current.scrollLeft = 0;
     }
   }, [scrollRef, sheet.id]);
+
+  useEffect(() => {
+    const element = scrollRef?.current;
+    if (!element || typeof ResizeObserver === "undefined") {
+      return undefined;
+    }
+    const observer = new ResizeObserver(() => {
+      const height = element.clientHeight || DEFAULT_VIEWPORT_HEIGHT;
+      setViewport((current) => (current.height === height ? current : { ...current, height }));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scrollRef]);
+
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!resizeDraft) {
@@ -216,13 +359,27 @@ export function Grid({
       tabIndex={0}
       onKeyDown={onKeyCommand}
       onScroll={(event) => {
-        const nextViewport = {
-          scrollTop: event.currentTarget.scrollTop,
-          height: event.currentTarget.clientHeight || DEFAULT_VIEWPORT_HEIGHT
+        // Leading + trailing throttle: respond to the first scroll event of a frame
+        // immediately, coalesce the rest into one trailing update. A fast fling
+        // renders once per frame instead of once per scroll event.
+        const element = event.currentTarget;
+        const applyViewport = () => {
+          const nextViewport = {
+            scrollTop: element.scrollTop,
+            height: element.clientHeight || DEFAULT_VIEWPORT_HEIGHT
+          };
+          setViewport((current) =>
+            current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height ? current : nextViewport
+          );
         };
-        setViewport((current) =>
-          current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height ? current : nextViewport
-        );
+        if (scrollFrameRef.current !== null) {
+          return;
+        }
+        applyViewport();
+        scrollFrameRef.current = requestAnimationFrame(() => {
+          scrollFrameRef.current = null;
+          applyViewport();
+        });
       }}
       onPaste={(event) => {
         event.preventDefault();
@@ -328,7 +485,7 @@ export function Grid({
           />
         ) : null}
         {rows.map(({ row, height }) => (
-          <RowFragment
+          <MemoRowFragment
             key={row}
             row={row}
             rowHeight={height}
@@ -337,62 +494,34 @@ export function Grid({
             sheet={sheet}
             formulaEngine={formulaEngine}
             selection={normalizedSelection}
-            editingCell={editingCell}
+            editingCell={editingRow === row ? editingCell : null}
             showHeaders={showHeaders}
             showFormulas={showFormulas}
             freezeTopRow={freezeTopRow}
             freezeFirstColumn={freezeFirstColumn}
-            getCellFormat={getCellFormat}
-            getCellComment={getCellComment}
-            getCellHyperlink={getCellHyperlink}
-            getCellReadOnly={getCellReadOnly}
-            getCellValidation={getCellValidation}
-            getCellConditionalFormatRules={getCellConditionalFormatRules}
-            getConditionalRuleValues={getConditionalRuleValues}
-            isDragging={isDragging}
-            onSelectionChange={onSelectionChange}
-            onCellContextMenu={onCellContextMenu}
-            onAutoFilterColumn={onAutoFilterColumn}
-            onClearAutoFilterColumn={onClearAutoFilterColumn}
-            onSortAutoFilterColumn={onSortAutoFilterColumn}
-            onStartDrag={() => setIsDragging(true)}
-            onExtendDrag={(address) => {
-              if (isDragging) {
-                onSelectionChange({ start: selection.start, end: addressToCoord(address) });
-              }
-            }}
+            getCellFormat={stableRowCallbacks.getCellFormat}
+            getCellComment={stableRowCallbacks.getCellComment}
+            getCellHyperlink={stableRowCallbacks.getCellHyperlink}
+            getCellReadOnly={stableRowCallbacks.getCellReadOnly}
+            getCellValidation={stableRowCallbacks.getCellValidation}
+            getCellConditionalFormatRules={stableRowCallbacks.getCellConditionalFormatRules}
+            getConditionalRuleValues={stableRowCallbacks.getConditionalRuleValues}
+            onSelectionChange={stableRowCallbacks.onSelectionChange}
+            onCellContextMenu={stableRowCallbacks.onCellContextMenu}
+            onAutoFilterColumn={stableRowCallbacks.onAutoFilterColumn}
+            onClearAutoFilterColumn={stableRowCallbacks.onClearAutoFilterColumn}
+            onSortAutoFilterColumn={stableRowCallbacks.onSortAutoFilterColumn}
+            onStartDrag={handleStartDrag}
+            onExtendDrag={handleExtendDrag}
             isAutoFillDragging={Boolean(autoFillDrag)}
-            onStartAutoFill={() => {
-              setIsDragging(false);
-              setAutoFillDrag({ source: normalizedSelection, target: normalizedSelection });
-            }}
-            onPreviewAutoFill={(row, column) => {
-              setAutoFillDrag((current) => {
-                if (!current) {
-                  return current;
-                }
-                return { ...current, target: createAutoFillTarget(current.source, row, column) };
-              });
-            }}
-            onStartEdit={onStartEdit}
-            onEditValueChange={onEditValueChange}
-            onCommitEdit={onCommitEdit}
-            onCancelEdit={onCancelEdit}
-            onSelectRow={(selectedRow) =>
-              onSelectionChange({
-                start: { row: selectedRow, column: 0 },
-                end: { row: selectedRow, column: sheet.columnCount - 1 }
-              })
-            }
-            onStartRowResize={(event) => {
-              setResizeDraft({
-                kind: "row",
-                index: row,
-                startClient: event.clientY,
-                startSize: rowHeight(sheet, row, null),
-                size: rowHeight(sheet, row, null)
-              });
-            }}
+            onStartAutoFill={handleStartAutoFill}
+            onPreviewAutoFill={handlePreviewAutoFill}
+            onStartEdit={stableRowCallbacks.onStartEdit}
+            onEditValueChange={stableRowCallbacks.onEditValueChange}
+            onCommitEdit={stableRowCallbacks.onCommitEdit}
+            onCancelEdit={stableRowCallbacks.onCancelEdit}
+            onSelectRow={handleSelectRow}
+            onStartRowResize={handleStartRowResize}
           />
         ))}
         {bottomSpacerHeight > 0 ? (
@@ -405,6 +534,11 @@ export function Grid({
     </div>
   );
 }
+
+// Rows re-render only when their own props change: scrolling mounts new rows,
+// typing re-renders just the editing row, and an edit commit (new sheet
+// snapshot) refreshes the visible window.
+const MemoRowFragment = memo(RowFragment);
 
 function RowFragment({
   row,
@@ -426,7 +560,6 @@ function RowFragment({
   getCellValidation,
   getCellConditionalFormatRules,
   getConditionalRuleValues,
-  isDragging,
   onSelectionChange,
   onCellContextMenu,
   onAutoFilterColumn,
@@ -463,7 +596,6 @@ function RowFragment({
   getCellValidation: (address: string) => DataValidationRule | null | undefined;
   getCellConditionalFormatRules: (address: string) => ConditionalFormatRule[];
   getConditionalRuleValues: (rule: ConditionalFormatRule) => readonly string[];
-  isDragging: boolean;
   onSelectionChange: (range: CellRange) => void;
   onCellContextMenu?: (event: { address: string; row: number; column: number; x: number; y: number }) => void;
   onAutoFilterColumn?: (column: number, values: string[]) => void;
@@ -479,7 +611,7 @@ function RowFragment({
   onCommitEdit: (address: string, value: string) => void;
   onCancelEdit: () => void;
   onSelectRow: (row: number) => void;
-  onStartRowResize: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onStartRowResize: (row: number, event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [dismissedEditingSuggestion, setDismissedEditingSuggestion] = useState<{ address: string; value: string } | null>(null);
@@ -542,7 +674,7 @@ function RowFragment({
             onMouseDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              onStartRowResize(event);
+              onStartRowResize(row, event);
             }}
           />
         </div>
@@ -691,9 +823,9 @@ function RowFragment({
                 onPreviewAutoFill(row, column);
                 return;
               }
-              if (isDragging) {
-                onExtendDrag(address);
-              }
+              // Drag gating lives inside the stable handler so rows don't have to
+              // re-render when a selection drag starts or ends.
+              onExtendDrag(address);
             }}
             onClick={() => onSelectionChange({ start: { row, column }, end: { row, column } })}
             onContextMenu={(event) => {

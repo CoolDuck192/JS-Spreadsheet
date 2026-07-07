@@ -682,7 +682,9 @@ function ToolbarButton({
       type="button"
       className={className}
       aria-label={label}
-      title={label}
+      // Compact buttons get an instant CSS tooltip from aria-label; keeping the
+      // native title too would show a second, delayed tooltip on top of it.
+      title={compact ? undefined : label}
       onClick={onClick}
       disabled={disabled}
     >
