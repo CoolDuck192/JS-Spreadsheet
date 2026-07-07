@@ -87,9 +87,13 @@ pnpm run test:e2e
 
 ## Project Docs
 
-- [GitHub wiki](https://github.com/CoolDuck192/JS-Spreadsheet/wiki) — getting started, features tour, Google Sheets setup, embedding, performance notes.
-- `docs/audit-2026-07-07.md` — full audit backlog (known issues with failure scenarios and fix sketches).
-- `src/lib/formulaEngine.perf.test.ts` — the 100k-row performance regression benchmark (set `SKIP_PERF_ASSERT=1` on slow CI runners).
+- [docs/getting-started.md](docs/getting-started.md) — prerequisites, setup, dev vs production preview, tests, first five minutes.
+- [docs/features.md](docs/features.md) — full feature tour (grid, formulas, pivots with drill-down, import/export, data tools).
+- [docs/google-sheets-connector.md](docs/google-sheets-connector.md) — one-time OAuth setup and how the connector works.
+- [docs/embedding.md](docs/embedding.md) — using the library entry point headlessly or embedding the UI in your own app.
+- [docs/performance.md](docs/performance.md) — measured 100k-row numbers, how the app stays fast, memory guards.
+- [docs/architecture.md](docs/architecture.md) — source layout, the immutable-snapshot + incremental-engine design.
+- [docs/audit-2026-07-07.md](docs/audit-2026-07-07.md) — known-issues backlog with failure scenarios and fix sketches.
 
 ## Formula Engine
 
