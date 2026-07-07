@@ -51,7 +51,7 @@ export function getVisibleRows(
   return rows;
 }
 
-function isRowVisibleForFilter(
+export function isRowVisibleForFilter(
   row: number,
   filter: SheetFilter,
   getCellDisplayValue: (row: number, column: number) => string

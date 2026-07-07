@@ -1,4 +1,4 @@
-export type PivotAggregator = "SUM" | "COUNT" | "AVERAGE" | "MIN" | "MAX";
+export type PivotAggregator = "SUM" | "COUNT" | "COUNTNUMS" | "AVERAGE" | "MIN" | "MAX" | "PRODUCT";
 
 export type PivotConfig = {
   rowFields: string[];
@@ -13,8 +13,12 @@ type AggregateState = {
   sum: number;
   min: number | null;
   max: number | null;
+  product: number | null;
   sourceRows: number[];
 };
+
+/** Label shown for empty dimension values, matching Excel's "(blank)". */
+export const PIVOT_BLANK_LABEL = "(blank)";
 
 /**
  * Per-cell drill-down map parallel to the pivot table: each entry lists the
@@ -92,7 +96,7 @@ export function createPivotTableWithDetails(rows: string[][], config: PivotConfi
 
   if (!config.columnField) {
     const header = [...config.rowFields, `${config.aggregator} of ${config.valueField}`];
-    const body = sortedGroups.map((group) => [...group.key, formatAggregate(group.total, config.aggregator)]);
+    const body = sortedGroups.map((group) => [...group.key.map(displayLabel), formatAggregate(group.total, config.aggregator)]);
     const table = [
       header,
       ...body,
@@ -106,9 +110,9 @@ export function createPivotTableWithDetails(rows: string[][], config: PivotConfi
     return { table, drillDown };
   }
 
-  const header = [...config.rowFields, ...sortedColumnValues, "Grand Total"];
+  const header = [...config.rowFields, ...sortedColumnValues.map(displayLabel), "Grand Total"];
   const body = sortedGroups.map((group) => [
-    ...group.key,
+    ...group.key.map(displayLabel),
     ...sortedColumnValues.map((columnValue) => formatAggregate(group.columns.get(columnValue), config.aggregator)),
     formatAggregate(group.total, config.aggregator)
   ]);
@@ -216,6 +220,7 @@ function createAggregateState(): AggregateState {
     sum: 0,
     min: null,
     max: null,
+    product: null,
     sourceRows: []
   };
 }
@@ -235,15 +240,20 @@ function addAggregateValue(state: AggregateState, rawValue: string, sourceIndex:
   state.sum += numericValue;
   state.min = state.min === null ? numericValue : Math.min(state.min, numericValue);
   state.max = state.max === null ? numericValue : Math.max(state.max, numericValue);
+  state.product = state.product === null ? numericValue : state.product * numericValue;
 }
 
 function formatAggregate(state: AggregateState | undefined, aggregator: PivotAggregator): string {
   if (!state) {
-    return aggregator === "COUNT" ? "0" : "";
+    return aggregator === "COUNT" || aggregator === "COUNTNUMS" ? "0" : "";
   }
 
   if (aggregator === "COUNT") {
     return String(state.nonEmptyCount);
+  }
+
+  if (aggregator === "COUNTNUMS") {
+    return String(state.numericCount);
   }
 
   if (state.numericCount === 0) {
@@ -260,6 +270,10 @@ function formatAggregate(state: AggregateState | undefined, aggregator: PivotAgg
 
   if (aggregator === "MIN") {
     return formatNumber(state.min ?? 0);
+  }
+
+  if (aggregator === "PRODUCT") {
+    return formatNumber(state.product ?? 0);
   }
 
   return formatNumber(state.max ?? 0);
@@ -283,7 +297,9 @@ function parseNumericValue(rawValue: string): number | null {
   }
 
   value = value.replace(/[,$£€¥₹\s]/g, "");
-  if (!value || /[A-Za-z]/.test(value)) {
+  // Digits with optional decimal point and scientific notation; rejects text
+  // and hex-like strings that Number() would otherwise accept.
+  if (!value || !/^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(value)) {
     return null;
   }
 
@@ -298,6 +314,10 @@ function parseNumericValue(rawValue: string): number | null {
 
 function normalizeDimensionValue(value: string | undefined): string {
   return String(value ?? "").trim();
+}
+
+function displayLabel(value: string): string {
+  return value === "" ? PIVOT_BLANK_LABEL : value;
 }
 
 function serializeKey(key: string[]): string {

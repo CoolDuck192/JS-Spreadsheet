@@ -563,6 +563,23 @@ button {
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
+.pivot-panel .pivot-panel-source {
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pivot-panel .pivot-panel-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-wrap: pretty;
+}
+
 .find-panel {
   position: absolute;
   top: 88px;
@@ -1748,6 +1765,15 @@ button {
   color: #fff;
   font-weight: 800;
   cursor: pointer;
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 120ms ease;
+}
+
+.primary-panel-button:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.primary-panel-button:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .primary-panel-button:disabled {
@@ -1762,17 +1788,22 @@ button {
 }
 
 .spreadsheet-grid {
+  /* Positioning context for the selection/fill overlays. */
+  position: relative;
   display: grid;
   width: max-content;
   min-width: 100%;
   zoom: var(--sheet-zoom, 1);
+  /* Uniform digit widths keep live-updating numbers from shifting cell text. */
+  font-variant-numeric: tabular-nums;
 }
 
 .grid-row-spacer {
   pointer-events: none;
   /* Phantom gridlines: while fast scrolling outpaces the rendered row window,
-     the not-yet-rendered area reads as more grid instead of a white flash. */
-  background-image: linear-gradient(to bottom, #e3e8e3 1px, transparent 1px);
+     the not-yet-rendered area reads as more grid instead of a white flash.
+     Must match the real gridline color and the 28px default row height. */
+  background-image: linear-gradient(to bottom, #dde5ee 1px, transparent 1px);
   background-size: 100% 28px;
 }
 
@@ -1807,10 +1838,22 @@ button {
   align-items: center;
   justify-content: center;
   background: var(--chrome-strong);
-  color: #536276;
+  color: #52617a;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   user-select: none;
+}
+
+/* A slightly stronger edge separates the sticky header chrome from the data
+   area, like Excel's header boundary. Colors only — geometry must not change. */
+.corner-cell,
+.column-header {
+  border-bottom-color: #c3cedd;
+}
+
+.corner-cell,
+.row-header {
+  border-right-color: #c3cedd;
 }
 
 .corner-cell {
@@ -1820,6 +1863,24 @@ button {
   padding: 0;
   cursor: pointer;
   font: inherit;
+}
+
+/* Excel's select-all corner triangle. */
+.corner-cell::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 0;
+  height: 0;
+  border-bottom: 9px solid #aebbcd;
+  border-left: 9px solid transparent;
+  pointer-events: none;
+}
+
+.corner-cell:hover::after,
+.corner-cell[aria-pressed="true"]::after {
+  border-bottom-color: var(--accent);
 }
 
 .column-header {
@@ -1838,13 +1899,27 @@ button {
 .column-header:focus-visible,
 .row-header:hover,
 .row-header:focus-visible {
-  background: #e7f0f8;
+  background: #e8f0eb;
   outline: none;
+}
+
+/* Header intersecting the selection: light fill plus an accent edge facing the
+   data, mirroring Excel's highlighted headers for any selection. */
+.column-header--hit {
+  background: #e4f1ea;
+  color: var(--accent-strong);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.row-header--hit {
+  background: #e4f1ea;
+  color: var(--accent-strong);
+  box-shadow: inset -2px 0 0 var(--accent);
 }
 
 .corner-cell[aria-pressed="true"],
 .selected-header {
-  background: #dff3eb;
+  background: #d8eee2;
   color: var(--accent-strong);
   box-shadow: inset 0 0 0 1px rgba(34, 121, 93, 0.34);
 }
@@ -1903,8 +1978,10 @@ button {
   cursor: cell;
 }
 
-.cell:hover {
-  background: #f8fbfe;
+@media (hover: hover) and (pointer: fine) {
+  .cell:hover {
+    background: #f6faf7;
+  }
 }
 
 .cell-context-menu {
@@ -1961,6 +2038,81 @@ button {
   background: rgba(148, 163, 184, 0.28);
 }
 
+/* Menus and dropdowns ease in from their trigger instead of popping. Uses
+   @starting-style so the enter transition needs no JS; exits stay instant.
+   The context menu animates opacity ONLY: it measures its own box to clamp
+   inside the viewport on open, and a transform would skew that measurement. */
+.cell-context-menu {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.auto-filter-menu,
+.validation-dropdown {
+  transform-origin: top;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .cell-context-menu {
+    opacity: 0;
+  }
+
+  .auto-filter-menu,
+  .validation-dropdown {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+}
+
+.pivot-panel,
+.find-panel,
+.filter-panel,
+.validation-panel,
+.conditional-panel,
+.chart-panel,
+.function-library-panel,
+.named-ranges-panel,
+.go-to-panel,
+.formula-audit-panel {
+  transition: opacity 160ms cubic-bezier(0.23, 1, 0.32, 1), transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .pivot-panel,
+  .find-panel,
+  .filter-panel,
+  .validation-panel,
+  .conditional-panel,
+  .chart-panel,
+  .function-library-panel,
+  .named-ranges-panel,
+  .go-to-panel,
+  .formula-audit-panel {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cell-context-menu,
+  .auto-filter-menu,
+  .validation-dropdown,
+  .pivot-panel,
+  .find-panel,
+  .filter-panel,
+  .validation-panel,
+  .conditional-panel,
+  .chart-panel,
+  .function-library-panel,
+  .named-ranges-panel,
+  .go-to-panel,
+  .formula-audit-panel,
+  .auto-fill-handle,
+  .primary-panel-button {
+    transition: none;
+  }
+}
+
 .wrapped-cell {
   align-items: flex-start;
   padding-top: 4px;
@@ -1970,31 +2122,72 @@ button {
   text-overflow: clip;
 }
 
+/* Excel selection model: the range gets a light tint, one solid border drawn
+   around the whole range perimeter (the .selection-outline overlay), and the
+   active cell stays white inside it. */
 .selected-cell {
-  box-shadow: inset 0 0 0 2px var(--accent);
-  background: #eff9f5;
+  background: #e9f4ee;
+}
+
+.selected-cell.active-cell {
+  background: #fff;
+}
+
+.selection-outline {
+  position: absolute;
   z-index: 2;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+/* Copied range indicator (shown until Escape or the next paste), like Excel's
+   dashed border around the copy source. */
+.copy-marquee {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+}
+
+/* Live preview of the pending fill target while dragging the fill handle. */
+.fill-preview-outline {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 2px dashed rgba(23, 99, 74, 0.62);
+  pointer-events: none;
 }
 
 .auto-fill-handle {
   position: absolute;
-  right: 1px;
-  bottom: 1px;
-  z-index: 4;
-  width: 7px;
-  height: 7px;
-  border: 1px solid #fff;
-  border-radius: 2px;
-  background: var(--accent-strong);
+  /* Above cells and the selection outline, below sticky headers (z3) and
+     frozen cells (z4) so it scrolls under the chrome like the outline does. */
+  z-index: 2;
+  width: 8px;
+  height: 8px;
+  margin: 0;
   padding: 0;
+  border: 1px solid #fff;
+  border-radius: 1px;
+  background: var(--accent-strong);
   cursor: crosshair;
-  box-shadow: 0 0 0 1px rgba(23, 99, 74, 0.55);
+  /* Centered on the selection's bottom-right corner, straddling it like Excel. */
+  transform: translate(-50%, -50%);
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Extends the tiny handle's hit area without growing its visual size. */
+.auto-fill-handle::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
 }
 
 .auto-fill-handle:hover,
 .auto-fill-handle:focus-visible {
-  width: 10px;
-  height: 10px;
+  transform: translate(-50%, -50%) scale(1.4);
   outline: none;
 }
 
@@ -2174,11 +2367,21 @@ button {
 }
 
 .merged-cell {
-  z-index: 3;
+  /* Above plain cells so the anchor paints over covered cells, but below the
+     z2 selection/fill overlays so the range border stays visible on merges. */
+  z-index: 1;
   justify-content: center;
   border-color: #7fae9d;
   background: #f7fbf9;
   box-shadow: inset 0 0 0 1px rgba(23, 99, 74, 0.2);
+}
+
+.selected-cell.merged-cell {
+  background: #e9f4ee;
+}
+
+.selected-cell.active-cell.merged-cell {
+  background: #fff;
 }
 
 .merge-covered-cell {
@@ -2203,7 +2406,7 @@ button {
 }
 
 .invalid-validation-cell.selected-cell {
-  box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px rgba(212, 73, 73, 0.36);
+  box-shadow: inset 0 0 0 2px #d44949;
 }
 
 .conditional-format-cell {
@@ -2268,7 +2471,7 @@ button {
 }
 
 .read-only-cell.selected-cell {
-  box-shadow: inset 0 0 0 2px var(--accent), inset 3px 0 0 rgba(100, 116, 139, 0.38);
+  box-shadow: inset 3px 0 0 rgba(100, 116, 139, 0.38);
 }
 
 .commented-cell::after {
@@ -2304,14 +2507,20 @@ button {
   box-shadow: inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
 }
 
-.selected-cell.frozen-top-row-cell,
+/* Frozen cells are sticky and opaque (z4), so the scrolling selection outline
+   passes underneath them; restore a per-cell accent ring there instead. */
+.selected-cell.frozen-top-row-cell {
+  background: #e9f4ee;
+  box-shadow: inset 0 0 0 2px var(--accent), inset 0 -1px 0 #b7c4d2;
+}
+
 .selected-cell.frozen-first-column-cell {
-  background: #eff9f5;
-  box-shadow: inset 0 0 0 2px var(--accent);
+  background: #e9f4ee;
+  box-shadow: inset 0 0 0 2px var(--accent), inset -1px 0 0 #b7c4d2;
 }
 
 .selected-cell.frozen-top-row-cell.frozen-first-column-cell {
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent), inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
 }
 
 .editing-cell {

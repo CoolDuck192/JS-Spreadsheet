@@ -692,6 +692,100 @@ describe("workbook", () => {
     expect(getCellContent(weekdays, sheetId, "B4")).toBe("Thursday");
   });
 
+  it("auto-fills numeric series and formulas upward from the selected range", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A4", "10");
+    workbook = setCellContent(workbook, sheetId, "A5", "12");
+    workbook = setCellContent(workbook, sheetId, "B4", "=A4");
+
+    const series = autoFillRange(workbook, sheetId, range("A4", "A5"), range("A1", "A5"));
+    expect(getCellContent(series, sheetId, "A3")).toBe(8);
+    expect(getCellContent(series, sheetId, "A2")).toBe(6);
+    expect(getCellContent(series, sheetId, "A1")).toBe(4);
+
+    const formulas = autoFillRange(workbook, sheetId, range("B4"), range("B2", "B4"));
+    expect(getCellContent(formulas, sheetId, "B3")).toBe("=A3");
+    expect(getCellContent(formulas, sheetId, "B2")).toBe("=A2");
+  });
+
+  it("auto-fills numeric series leftward from the selected range", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "D1", 20);
+    workbook = setCellContent(workbook, sheetId, "E1", 25);
+
+    const filled = autoFillRange(workbook, sheetId, range("D1", "E1"), range("A1", "E1"));
+    expect(getCellContent(filled, sheetId, "C1")).toBe(15);
+    expect(getCellContent(filled, sheetId, "B1")).toBe(10);
+    expect(getCellContent(filled, sheetId, "A1")).toBe(5);
+  });
+
+  it("auto-fills month names backwards when dragging up", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A3", "Mar");
+    workbook = setCellContent(workbook, sheetId, "A4", "Apr");
+
+    const months = autoFillRange(workbook, sheetId, range("A3", "A4"), range("A1", "A4"));
+    expect(getCellContent(months, sheetId, "A2")).toBe("Feb");
+    expect(getCellContent(months, sheetId, "A1")).toBe("Jan");
+  });
+
+  it("auto-fills text-with-number series like Excel", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Item 1");
+    workbook = setCellContent(workbook, sheetId, "A2", "Item 2");
+    workbook = setCellContent(workbook, sheetId, "B1", "Q3");
+    workbook = setCellContent(workbook, sheetId, "C1", "Task 05");
+
+    const stepped = autoFillRange(workbook, sheetId, range("A1", "A2"), range("A1", "A4"));
+    expect(getCellContent(stepped, sheetId, "A3")).toBe("Item 3");
+    expect(getCellContent(stepped, sheetId, "A4")).toBe("Item 4");
+
+    const single = autoFillRange(workbook, sheetId, range("B1"), range("B1", "B3"));
+    expect(getCellContent(single, sheetId, "B2")).toBe("Q4");
+    expect(getCellContent(single, sheetId, "B3")).toBe("Q5");
+
+    const padded = autoFillRange(workbook, sheetId, range("C1"), range("C1", "C2"));
+    expect(getCellContent(padded, sheetId, "C2")).toBe("Task 06");
+  });
+
+  it("translates formulas ending in digits instead of treating them as text series", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "=B2*2");
+
+    const filled = autoFillRange(workbook, sheetId, range("A1"), range("A1", "A3"));
+    expect(getCellContent(filled, sheetId, "A2")).toBe("=B3*2");
+    expect(getCellContent(filled, sheetId, "A3")).toBe("=B4*2");
+  });
+
+  it("copies numeric-looking single cells instead of inventing a text series", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "1.5");
+    workbook = setCellContent(workbook, sheetId, "B1", "+3");
+
+    const decimal = autoFillRange(workbook, sheetId, range("A1"), range("A1", "A3"));
+    expect(getCellContent(decimal, sheetId, "A2")).toBe("1.5");
+    expect(getCellContent(decimal, sheetId, "A3")).toBe("1.5");
+
+    const signed = autoFillRange(workbook, sheetId, range("B1"), range("B1", "B2"));
+    expect(getCellContent(signed, sheetId, "B2")).toBe("+3");
+  });
+
+  it("keeps zero-padding stable when a padded text series crosses zero", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A3", "Task 01");
+
+    const filled = autoFillRange(workbook, sheetId, range("A3"), range("A1", "A3"));
+    expect(getCellContent(filled, sheetId, "A2")).toBe("Task 00");
+    expect(getCellContent(filled, sheetId, "A1")).toBe("Task -01");
+  });
+
   it("adds, renames, duplicates, switches, and deletes sheets", () => {
     let workbook = createBlankWorkbook();
     workbook = addSheet(workbook, "Budget");

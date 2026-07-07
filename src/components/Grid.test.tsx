@@ -302,4 +302,200 @@ describe("Grid", () => {
     expect(resizedColumn).toEqual({ column: 0, width: 128 });
     expect(resizedRow).toEqual({ row: 0, height: 42 });
   });
+
+  it("selects a span of columns by dragging across column headers", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const selections: CellRange[] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("columnheader", { name: "Column A" }));
+    fireEvent.mouseEnter(screen.getByRole("columnheader", { name: "Column C" }));
+    fireEvent.mouseUp(screen.getByRole("grid", { name: "Spreadsheet grid" }));
+
+    expect(selections.at(-1)).toEqual({ start: { row: 0, column: 0 }, end: { row: 3, column: 2 } });
+  });
+
+  it("extends a cell selection with shift-click", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const selections: CellRange[] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("gridcell", { name: "B3" }), { shiftKey: true });
+
+    expect(selections.at(-1)).toEqual({ start: { row: 0, column: 0 }, end: { row: 2, column: 1 } });
+  });
+
+  it("reports fill targets from the selection fill handle, including shrink", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const fills: Array<{ source: CellRange; target: CellRange }> = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 1, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onAutoFill={(source, target) => fills.push({ source, target })}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    const handle = screen.getByRole("button", { name: "AutoFill selection" });
+
+    fireEvent.mouseDown(handle);
+    fireEvent.mouseEnter(screen.getByRole("gridcell", { name: "A4" }));
+    fireEvent.mouseUp(grid);
+
+    expect(fills).toEqual([
+      {
+        source: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+        target: { start: { row: 0, column: 0 }, end: { row: 3, column: 0 } }
+      }
+    ]);
+  });
+
+  it("extends fill targets in all four directions from the handle", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const fills: Array<{ source: CellRange; target: CellRange }> = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 1, column: 1 }, end: { row: 2, column: 1 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onAutoFill={(source, target) => fills.push({ source, target })}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+
+    // Fill left: source B2:B3 dragged to A3 extends to A2:B3.
+    fireEvent.mouseDown(screen.getByRole("button", { name: "AutoFill selection" }));
+    fireEvent.mouseEnter(screen.getByRole("gridcell", { name: "A3" }));
+    fireEvent.mouseUp(grid);
+
+    // Fill up: source B2:B3 dragged to B1 extends to B1:B3.
+    fireEvent.mouseDown(screen.getByRole("button", { name: "AutoFill selection" }));
+    fireEvent.mouseEnter(screen.getByRole("gridcell", { name: "B1" }));
+    fireEvent.mouseUp(grid);
+
+    expect(fills).toEqual([
+      {
+        source: { start: { row: 1, column: 1 }, end: { row: 2, column: 1 } },
+        target: { start: { row: 1, column: 0 }, end: { row: 2, column: 1 } }
+      },
+      {
+        source: { start: { row: 1, column: 1 }, end: { row: 2, column: 1 } },
+        target: { start: { row: 0, column: 1 }, end: { row: 2, column: 1 } }
+      }
+    ]);
+  });
+
+  it("auto-fits columns and rows when their resize handles are double-clicked", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const columnAutoFits: number[] = [];
+    const rowAutoFits: number[] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onColumnAutoFit={(column) => columnAutoFits.push(column)}
+        onRowAutoFit={(row) => rowAutoFits.push(row)}
+      />
+    );
+
+    fireEvent.doubleClick(screen.getByLabelText("Resize column A"));
+    fireEvent.doubleClick(screen.getByLabelText("Resize row 1"));
+
+    expect(columnAutoFits).toEqual([0]);
+    expect(rowAutoFits).toEqual([0]);
+  });
 });
+
+function createFixtureSheet(): { sheet: SheetModel; workbook: WorkbookModel } {
+  const sheet: SheetModel = {
+    id: "sheet-1",
+    name: "Data",
+    rowCount: 4,
+    columnCount: 3,
+    cells: {},
+    formats: {},
+    columnWidths: {},
+    rowHeights: {},
+    comments: {},
+    hyperlinks: {},
+    validations: {},
+    conditionalFormats: [],
+    filters: [],
+    charts: [],
+    merges: [],
+    protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
+  };
+  const workbook: WorkbookModel = {
+    version: 1,
+    activeSheetId: sheet.id,
+    sheets: [sheet],
+    namedRanges: []
+  };
+  return { sheet, workbook };
+}
