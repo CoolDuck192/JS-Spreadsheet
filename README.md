@@ -25,8 +25,8 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 Prerequisites:
 
 - Git
-- Node.js 20 or newer
-- pnpm 11 or newer
+- **Node.js 22.13 or newer** (the pinned pnpm 11 requires it — on Node 20 `pnpm` fails with `ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`)
+- pnpm 11 via corepack (no separate install needed)
 
 Clone the repository:
 
@@ -39,8 +39,7 @@ Install dependencies:
 
 ```bash
 corepack enable
-corepack prepare pnpm@11.7.0 --activate
-pnpm install
+pnpm install    # corepack downloads the pinned pnpm 11.7.0 automatically
 ```
 
 Start the local dev server:
@@ -55,11 +54,23 @@ The dev server defaults to:
 http://127.0.0.1:5173
 ```
 
-Build a production bundle:
+To reach it from another machine on your network, bind all interfaces:
+
+```bash
+pnpm exec vite --host 0.0.0.0
+```
+
+Build and preview a production bundle:
 
 ```bash
 pnpm run build
+pnpm exec vite preview --host 0.0.0.0   # serves the build on port 4173
 ```
+
+> **Testing with large datasets?** Use the production preview. The dev server
+> carries React development-build overhead that makes 100k-row sheets feel far
+> slower than they are in production (measured: single edits ~1.2s in the
+> production build vs ~11s under the dev server on a 100k-row sheet).
 
 Run the test suite:
 
@@ -73,6 +84,12 @@ Run browser end-to-end tests:
 pnpm exec playwright install
 pnpm run test:e2e
 ```
+
+## Project Docs
+
+- [GitHub wiki](https://github.com/CoolDuck192/JS-Spreadsheet/wiki) — getting started, features tour, Google Sheets setup, embedding, performance notes.
+- `docs/audit-2026-07-07.md` — full audit backlog (known issues with failure scenarios and fix sketches).
+- `src/lib/formulaEngine.perf.test.ts` — the 100k-row performance regression benchmark (set `SKIP_PERF_ASSERT=1` on slow CI runners).
 
 ## Formula Engine
 
