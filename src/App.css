@@ -1785,6 +1785,16 @@ button {
   min-height: 0;
   overflow: auto;
   background: #fff;
+  /* Cell drags are app selections, not text selections: without this the
+     browser paints its own highlight across cells in DOM order (bleeding onto
+     unrelated data and headers), and a second drag inside that text selection
+     gets hijacked by native drag-and-drop, freezing the app drag. */
+  user-select: none;
+}
+
+/* Editing text must stay selectable inside the otherwise unselectable grid. */
+.grid-scroll .cell-editor {
+  user-select: text;
 }
 
 .spreadsheet-grid {
@@ -2178,11 +2188,14 @@ button {
   transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-/* Extends the tiny handle's hit area without growing its visual size. */
+/* Extends the tiny handle's hit area without growing its visual size. Keep
+   this tight (12px total): the handle sits on a cell corner, and a larger zone
+   swallows mousedowns meant to start a NEW selection from that cell, turning
+   them into destructive fill drags. Excel's activation zone is ~6px. */
 .auto-fill-handle::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -2px;
 }
 
 .auto-fill-handle:hover,

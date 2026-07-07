@@ -1179,6 +1179,38 @@ test("auto-fills upward and clears cells when dragging the handle back inside", 
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Cleared A3:A4");
 });
 
+test("dragging from near a selected cell's corner starts a selection, not a fill", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A5", "precious");
+  await editCell(page, "B5", "data");
+
+  await selectRange(page, "D4", "E6");
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("D4:E6");
+
+  // Cell drags must not create a native browser text selection: in DOM order it
+  // would span unrelated data cells and headers, painting the browser's own
+  // highlight over them and hijacking the next drag via native drag-and-drop.
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+
+  // Press inside E6 a few pixels from its bottom-right corner — close to the
+  // fill handle, but still on the cell — and drag left across the data. This
+  // must start a NEW selection, not grab the fill handle and overwrite A5:B5.
+  const e6 = await page.getByRole("gridcell", { name: "E6", exact: true }).boundingBox();
+  const a6 = await page.getByRole("gridcell", { name: "A6", exact: true }).boundingBox();
+  expect(e6).not.toBeNull();
+  expect(a6).not.toBeNull();
+  await page.mouse.move(e6!.x + e6!.width - 7, e6!.y + e6!.height - 7);
+  await page.mouse.down();
+  await page.mouse.move(a6!.x + a6!.width / 2, a6!.y + a6!.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("A6:E6");
+  await expect(page.getByLabel("Status", { exact: true })).not.toContainText("AutoFilled");
+  await expect(page.getByRole("gridcell", { name: "A5 precious", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "B5 data", exact: true })).toBeVisible();
+});
+
 test("blocks AutoFill when protected target cells are read-only", async ({ page }) => {
   await page.goto("/");
 
