@@ -1548,6 +1548,16 @@ export default function App() {
     if (event.defaultPrevented || isEditableEventTarget(event.target)) {
       return;
     }
+    // Keep the toolbar keyboard-operable: Enter/Space on a focused control must
+    // activate it, not start a cell edit. Everything else (arrows, shortcuts)
+    // stays global so grid navigation works right after clicking a button.
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      event.target instanceof Element &&
+      event.target.closest("button, select, a, [role='tab']")
+    ) {
+      return;
+    }
     handleKeyCommand(event);
   }
 
@@ -2096,6 +2106,7 @@ export default function App() {
       matches.find((match) => match.row > current.row || (match.row === current.row && match.column > current.column)) ??
       matches[0];
     setSelection({ start: { row: nextMatch.row, column: nextMatch.column }, end: { row: nextMatch.row, column: nextMatch.column } });
+    gridApiRef.current?.ensureCellVisible(nextMatch.row, nextMatch.column);
     setStatus(`Found ${nextMatch.address}`);
   }
 
@@ -2531,7 +2542,12 @@ export default function App() {
               }
             }
           }}
-          onCancelEdit={() => setEditingCell(null)}
+          onCancelEdit={() => {
+            setEditingCell(null);
+            // Escape came from the keyboard: hand focus back to the grid so
+            // arrows/typing keep working instead of falling to document.body.
+            gridScrollRef.current?.focus({ preventScroll: true });
+          }}
           onPasteText={pasteText}
           onKeyCommand={handleKeyCommand}
           onAutoFill={handleAutoFill}
