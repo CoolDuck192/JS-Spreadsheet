@@ -1204,7 +1204,10 @@ function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
     return `=${value.formula}`;
   }
   if (isSharedFormulaValue(value)) {
-    return `=${value.sharedFormula}`;
+    // value.sharedFormula is the master cell's ADDRESS — emitting "=<address>"
+    // would misrepresent the computation. Shared formulas are translated in
+    // excelCellToCellContent (which has the Cell); here fall back to the result.
+    return excelValueToCellContent(value.result ?? null);
   }
   if (isHyperlinkValue(value)) {
     return value.text || value.hyperlink;

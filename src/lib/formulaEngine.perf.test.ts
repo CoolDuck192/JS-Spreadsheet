@@ -33,8 +33,12 @@ describe("formula engine at scale", () => {
 
     // eslint-disable-next-line no-console
     console.log(`build(200k cells)=${Math.round(buildMs)}ms update(1 cell)=${Math.round(updateMs)}ms`);
-    expect(buildMs).toBeLessThan(30_000);
-    expect(updateMs).toBeLessThan(2_000);
+    // Wall-clock assertions can flake on contended/instrumented runners; set
+    // SKIP_PERF_ASSERT=1 to keep only the correctness checks.
+    if (!process.env.SKIP_PERF_ASSERT) {
+      expect(buildMs).toBeLessThan(30_000);
+      expect(updateMs).toBeLessThan(2_000);
+    }
     engine.destroy();
   });
 

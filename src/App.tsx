@@ -182,8 +182,11 @@ export default function App() {
   const [isDropTargetActive, setDropTargetActive] = useState(false);
   // Drill-down metadata for pivot sheets created this session, keyed by sheet id.
   // Double-clicking a pivot value cell opens the contributing source rows, like Excel.
+  // Sheet ids are reused after deletion, so entries are pruned on sheet delete,
+  // cleared on workbook replacement, and cross-checked against the stored table
+  // before use (covers undo/redo resurrecting an id for an unrelated sheet).
   const [pivotDrillDowns, setPivotDrillDowns] = useState<
-    Record<string, { sourceRows: string[][]; drillDown: PivotDrillDownGrid }>
+    Record<string, { sourceRows: string[][]; drillDown: PivotDrillDownGrid; table: string[][] }>
   >({});
   const [showGridlines, setShowGridlines] = useState(true);
   const [showHeaders, setShowHeaders] = useState(true);
@@ -204,6 +207,12 @@ export default function App() {
     [activeSheet.id, selection, workbook]
   );
   const formulaEngineRef = useRef<FormulaEngine | null>(null);
+  // Deliberate render-phase sync: update() is an idempotent diff (same workbook →
+  // no-op), so useMemo recomputes/discards and StrictMode double-invokes are safe,
+  // and the grid must read the NEW workbook's values in the same render — an
+  // effect-based update would leave the tree stale with no re-render to fix it
+  // (the engine's identity never changes). Revisit with useSyncExternalStore when
+  // the component is extracted for embedding.
   const formulaEngine = useMemo(() => {
     if (formulaEngineRef.current === null) {
       formulaEngineRef.current = createFormulaEngine(workbook);
@@ -212,6 +221,13 @@ export default function App() {
     }
     return formulaEngineRef.current;
   }, [workbook]);
+
+  useEffect(() => {
+    const engine = formulaEngineRef.current;
+    // Release HyperFormula resources on unmount. The engine self-revives if a
+    // StrictMode simulated remount keeps using this instance.
+    return () => engine?.destroy();
+  }, []);
   const activeFormat = getCellFormat(workbook, activeSheet.id, activeAddress);
   const formulaSuggestions = useMemo(() => getFormulaSuggestions(formulaDraft), [formulaDraft]);
   const activeFormulaContent = getCellContent(workbook, activeSheet.id, activeAddress);
@@ -1147,6 +1163,15 @@ export default function App() {
       return false;
     }
 
+    // Staleness guard: the sheet id may now belong to a different sheet (ids are
+    // reused; undo can also rewind past the pivot's creation). Only drill down if
+    // the cell still holds the value this pivot produced.
+    const expected = meta.table[coord.row]?.[coord.column] ?? "";
+    const actual = getCellContent(workbook, activeSheet.id, address);
+    if (String(actual ?? "") !== expected) {
+      return false;
+    }
+
     const rows = [meta.sourceRows[0], ...indexes.map((index) => meta.sourceRows[index])];
     const detailsName = nextDetailsSheetName(workbook);
     let nextWorkbook = addSheet(workbook, detailsName);
@@ -1173,7 +1198,7 @@ export default function App() {
       const pivotSheetId = nextWorkbook.activeSheetId;
       setPivotDrillDowns((current) => ({
         ...current,
-        [pivotSheetId]: { sourceRows, drillDown }
+        [pivotSheetId]: { sourceRows, drillDown, table: pivotRows }
       }));
 
       nextWorkbook = pasteMatrix(nextWorkbook, pivotSheetId, "A1", pivotRows);
@@ -1511,7 +1536,16 @@ export default function App() {
   }
 
   function handleDeleteSheet() {
-    commitWorkbook(deleteSheet(workbook, activeSheet.id), "Deleted sheet");
+    const deletedSheetId = activeSheet.id;
+    commitWorkbook(deleteSheet(workbook, deletedSheetId), "Deleted sheet");
+    setPivotDrillDowns((current) => {
+      if (!(deletedSheetId in current)) {
+        return current;
+      }
+      const { [deletedSheetId]: removed, ...rest } = current;
+      void removed;
+      return rest;
+    });
     setSelection(INITIAL_SELECTION);
   }
 
@@ -1566,6 +1600,7 @@ export default function App() {
   function handleNewWorkbook() {
     const next = createBlankWorkbook();
     setHistory(createHistory(next));
+    setPivotDrillDowns({});
     setSelection(INITIAL_SELECTION);
     setFormatPainter(null);
     setStatus("New workbook");
@@ -1581,6 +1616,7 @@ export default function App() {
       try {
         const rows = parseCsv(String(reader.result ?? ""));
         setHistory((current) => commitHistory(current, replaceActiveSheetWithRows(current.present, rows)));
+        setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
@@ -1613,6 +1649,7 @@ export default function App() {
       .then(async (buffer) => {
         const nextWorkbook = await importWorkbookFromXlsx(buffer);
         setHistory((current) => commitHistory(current, nextWorkbook));
+        setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
@@ -1638,6 +1675,7 @@ export default function App() {
     importWorkbookFromGoogleSheets(input, getGoogleTokenProvider(clientId))
       .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
         setHistory((current) => commitHistory(current, nextWorkbook));
+        setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Linked ${spreadsheetTitle}`);

@@ -29,17 +29,32 @@ const ENGINE_CONFIG = {
   maxRows: EXCEL_MAX_ROWS,
   maxColumns: EXCEL_MAX_COLUMNS,
   // Excel-compatible date semantics: ISO and US formats parse as date serials.
-  // With HyperFormula's default nullDate (1899-12-30), serials match Excel for
-  // every date from 1900-03-01 onward; leapYear1900 must stay OFF or modern
-  // serials shift by one (Excel's phantom 1900-02-29 is baked into the epoch).
-  dateFormats: ["YYYY-MM-DD", "MM/DD/YYYY", "MM/DD/YY"]
+  // leapYear1900 + a 1899-12-31 nullDate reproduce Excel's serial numbering
+  // exactly, including Jan-Feb 1900 and the phantom 1900-02-29 (verified against
+  // Excel ground truth: 2026-01-15=46037, 1900-01-15=15, 1900-03-01=61).
+  dateFormats: ["YYYY-MM-DD", "MM/DD/YYYY", "MM/DD/YY"],
+  leapYear1900: true,
+  nullDate: { year: 1899, month: 12, day: 31 }
 };
 
 export function createFormulaEngine(workbook: WorkbookModel): FormulaEngine {
   let state = buildEngineState(workbook);
+  let destroyed = false;
+
+  // destroy() releases the HyperFormula instance; any later call revives it from
+  // the retained workbook snapshot. This keeps unmount cleanup leak-free while
+  // surviving React StrictMode's simulated unmount/remount, where the rendered
+  // tree still holds this engine reference.
+  function ensureAlive() {
+    if (destroyed) {
+      state = buildEngineState(state.workbook);
+      destroyed = false;
+    }
+  }
 
   return {
     getDisplayValue(sheetId, address) {
+      ensureAlive();
       const sheet = state.sheetIds.get(sheetId);
       if (sheet === undefined) {
         return "";
@@ -59,16 +74,23 @@ export function createFormulaEngine(workbook: WorkbookModel): FormulaEngine {
     },
 
     update(nextWorkbook) {
+      ensureAlive();
       state = updateEngineState(state, nextWorkbook);
     },
 
     rebuild(nextWorkbook) {
-      state.hyperFormula.destroy();
+      if (!destroyed) {
+        state.hyperFormula.destroy();
+      }
+      destroyed = false;
       state = buildEngineState(nextWorkbook);
     },
 
     destroy() {
-      state.hyperFormula.destroy();
+      if (!destroyed) {
+        state.hyperFormula.destroy();
+        destroyed = true;
+      }
     }
   };
 }

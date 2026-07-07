@@ -28,6 +28,7 @@ type GoogleIdentityServices = {
         client_id: string;
         scope: string;
         callback: (response: { access_token?: string; error?: string }) => void;
+        error_callback?: (error: { type?: string; message?: string }) => void;
       }) => GoogleTokenClient;
     };
   };
@@ -69,6 +70,11 @@ export function createBrowserTokenProvider(clientId: string): TokenProvider {
             } else {
               reject(new Error(response.error ?? "Google sign-in was cancelled"));
             }
+          },
+          // GIS reports non-OAuth failures (popup closed, popup blocked) here, not
+          // in callback — without it a dismissed popup leaves the promise pending.
+          error_callback: (error) => {
+            reject(new Error(error.message ?? error.type ?? "Google sign-in was cancelled"));
           }
         });
         client.requestAccessToken();
@@ -95,6 +101,8 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
       if (window.google?.accounts?.oauth2) {
         resolve(window.google);
       } else {
+        // Clear the cached promise so a later call can retry, matching onerror.
+        gisLoadPromise = null;
         reject(new Error("Google Identity Services failed to initialize"));
       }
     };

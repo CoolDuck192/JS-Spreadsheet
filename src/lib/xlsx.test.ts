@@ -489,3 +489,33 @@ describe("xlsx", () => {
     });
   });
 });
+
+describe("shared formula import", () => {
+  it("translates shared-formula slave cells to their own formulas", async () => {
+    // Build a file with a REAL shared formula (master B1, slaves B2:B3 via si refs)
+    // the way third-party producers write them — not via our own export, which
+    // writes full formulas per cell.
+    const ExcelJS = (await import("exceljs")).default;
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Data");
+    worksheet.getCell("A1").value = 1;
+    worksheet.getCell("A2").value = 2;
+    worksheet.getCell("A3").value = 3;
+    worksheet.fillFormula("B1:B3", "A1*2", [2, 4, 6]);
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Fixture sanity: the file must genuinely contain shared-formula slaves.
+    const reread = new ExcelJS.Workbook();
+    await reread.xlsx.load(buffer);
+    const slaveValue = reread.getWorksheet("Data")?.getCell("B2").value;
+    expect(slaveValue).toHaveProperty("sharedFormula");
+
+    const imported = await importWorkbookFromXlsx(buffer as ArrayBuffer);
+    const cells = imported.sheets[0].cells;
+
+    expect(cells["B1"]).toBe("=A1*2");
+    // Slaves must get the TRANSLATED formula, not "=B1" (the master's address).
+    expect(cells["B2"]).toBe("=A2*2");
+    expect(cells["B3"]).toBe("=A3*2");
+  });
+});
