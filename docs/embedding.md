@@ -1,9 +1,15 @@
 # Embedding JS-Spreadsheet in Your App
 
+There is no npm package yet — add the cloned repo as a source dependency and let your bundler compile it (the package's `main` points at `src/index.ts`, so the bundler must handle TypeScript in dependencies; Vite and modern webpack setups do):
+
+```bash
+pnpm add file:../JS-Spreadsheet     # or: pnpm add github:CoolDuck192/JS-Spreadsheet
+```
+
 `src/index.ts` is the library entry point. The default export is the full spreadsheet UI; named exports are the headless functions.
 
 ```tsx
-import Spreadsheet from "javascript-spreadsheet-clone";        // full UI component
+import Spreadsheet from "js-spreadsheet";        // full UI component
 import {
   createBlankWorkbook,
   setCellContent,
@@ -15,8 +21,10 @@ import {
   importWorkbookFromGoogleSheets,
   type WorkbookModel,
   type TokenProvider
-} from "javascript-spreadsheet-clone";
+} from "js-spreadsheet";
 ```
+
+**Licensing note:** the formula engine is [HyperFormula](https://hyperformula.handsontable.com/), which this app initializes with its GPLv3 license key. If your host application cannot comply with GPLv3, you need a commercial HyperFormula license.
 
 ## Headless usage (no UI)
 
@@ -37,7 +45,11 @@ engine.destroy();            // release HyperFormula resources
 
 ## Embedding the UI
 
-The `<Spreadsheet />` component currently renders the full application (toolbar, formula bar, grid, sheet tabs, status bar) and persists to `localStorage`. Import `src/App.css` alongside it for styles.
+The `<Spreadsheet />` component currently renders the full application (toolbar, formula bar, grid, sheet tabs, status bar) and persists to `localStorage`. Import the stylesheet alongside it:
+
+```ts
+import "js-spreadsheet/src/App.css";
+```
 
 Current constraints to plan around (these are the active workstream — see the roadmap):
 

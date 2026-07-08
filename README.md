@@ -1,4 +1,4 @@
-# JavaScript Spreadsheet Clone
+# JS-Spreadsheet
 
 A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFormula.
 
@@ -99,6 +99,8 @@ pnpm run test:e2e
 ## Formula Engine
 
 Formula support is provided by HyperFormula 3.3.0 using the GPLv3 license key string. HyperFormula supports a broad Excel-compatible function set; exact function coverage follows the installed engine version.
+
+> **Using this in your own project?** The GPLv3 HyperFormula key means your use must be GPLv3-compatible; otherwise you need a [commercial HyperFormula license](https://hyperformula.handsontable.com/guide/license-key.html).
 
 The engine is configured for Excel parity: 1,048,576 × 16,384 grid limits, ISO (`2026-01-15`) and US (`01/15/2026`) date entry parsed as date serials (typing a date auto-applies the date format, and date arithmetic like `=B1-A1` works), the 1900 leap-year compatibility behavior, and `TRUE`/`FALSE` boolean display.
 

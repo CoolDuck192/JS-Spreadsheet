@@ -1,7 +1,7 @@
 /**
  * Library entry point so the spreadsheet can be embedded in a host app:
  *
- *   import Spreadsheet, { createBlankWorkbook, importWorkbookFromXlsx } from "javascript-spreadsheet-clone";
+ *   import Spreadsheet, { createBlankWorkbook, importWorkbookFromXlsx } from "js-spreadsheet";
  *
  * The default export is the full spreadsheet UI; the named exports are the
  * headless workbook/engine/io functions for programmatic use.
