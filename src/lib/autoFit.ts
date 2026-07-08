@@ -6,6 +6,17 @@ const COLUMN_CHARACTER_WIDTH = 7;
 const COLUMN_PADDING = 27;
 const ROW_LINE_HEIGHT = 18;
 const ROW_PADDING = 10;
+// The measurement constants above assume the grid's default 12px text; cells
+// with an explicit fontSize (in points) scale relative to that.
+const DEFAULT_CELL_FONT_PX = 12;
+const PX_PER_POINT = 4 / 3;
+
+function fontScaleFor(fontSize: number | undefined): number {
+  if (!fontSize || fontSize <= 0) {
+    return 1;
+  }
+  return (fontSize * PX_PER_POINT) / DEFAULT_CELL_FONT_PX;
+}
 
 export type AutoFitColumnSize = {
   column: number;
@@ -35,15 +46,17 @@ export function createAutoFitColumnPlan(
   return Array.from({ length: endColumn - startColumn + 1 }, (_, index) => startColumn + index)
     .filter((column) => !(sheet.hiddenColumns ?? {})[String(column)])
     .map((column) => {
-      const candidates = [columnIndexToName(column)];
+      let width = textToAutoFitColumnWidth(columnIndexToName(column));
       for (let row = startRow; row <= endRow; row += 1) {
         if ((sheet.hiddenRows ?? {})[String(row)]) {
           continue;
         }
-        candidates.push(getDisplayValue(formatCellAddress({ row, column })));
+        const address = formatCellAddress({ row, column });
+        const scale = fontScaleFor((sheet.formats ?? {})[address]?.fontSize);
+        width = Math.max(width, textToAutoFitColumnWidth(getDisplayValue(address), scale));
       }
 
-      return { column, width: Math.max(...candidates.map(textToAutoFitColumnWidth)) };
+      return { column, width };
     });
 }
 
@@ -65,26 +78,31 @@ export function createAutoFitRowPlan(
   return Array.from({ length: endRow - startRow + 1 }, (_, index) => startRow + index)
     .filter((row) => !(sheet.hiddenRows ?? {})[String(row)])
     .map((row) => {
-      const candidates = [String(row + 1)];
+      let height = textToAutoFitRowHeight(String(row + 1));
       for (let column = startColumn; column <= endColumn; column += 1) {
         if ((sheet.hiddenColumns ?? {})[String(column)]) {
           continue;
         }
-        candidates.push(getDisplayValue(formatCellAddress({ row, column })));
+        const address = formatCellAddress({ row, column });
+        const scale = fontScaleFor((sheet.formats ?? {})[address]?.fontSize);
+        height = Math.max(height, textToAutoFitRowHeight(getDisplayValue(address), scale));
       }
 
-      return { row, height: Math.max(...candidates.map(textToAutoFitRowHeight)) };
+      return { row, height };
     });
 }
 
-export function textToAutoFitColumnWidth(text: string): number {
+export function textToAutoFitColumnWidth(text: string, fontScale = 1): number {
   const longestLine = Math.max(1, ...splitDisplayLines(text).map((line) => line.length));
-  return clampColumnWidth(longestLine * COLUMN_CHARACTER_WIDTH + COLUMN_PADDING);
+  return clampColumnWidth(Math.ceil(longestLine * COLUMN_CHARACTER_WIDTH * fontScale) + COLUMN_PADDING);
 }
 
-export function textToAutoFitRowHeight(text: string): number {
+export function textToAutoFitRowHeight(text: string, fontScale = 1): number {
   const lineCount = Math.max(1, splitDisplayLines(text).length);
-  return clampRowHeight(lineCount <= 1 ? DEFAULT_ROW_HEIGHT : lineCount * ROW_LINE_HEIGHT + ROW_PADDING);
+  if (lineCount <= 1) {
+    return clampRowHeight(fontScale <= 1 ? DEFAULT_ROW_HEIGHT : Math.ceil(ROW_LINE_HEIGHT * fontScale) + ROW_PADDING);
+  }
+  return clampRowHeight(Math.ceil(lineCount * ROW_LINE_HEIGHT * fontScale) + ROW_PADDING);
 }
 
 function splitDisplayLines(text: string): string[] {

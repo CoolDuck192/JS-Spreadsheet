@@ -25,6 +25,8 @@ import type {
   DataValidationRule,
   FilterOperator,
   HistoryState,
+  MixedFormatValue,
+  SelectionFormatSummary,
   SheetChartType,
   SheetModel,
   NamedRange,
@@ -240,6 +242,9 @@ export default function App() {
     return () => engine?.destroy();
   }, []);
   const activeFormat = getCellFormat(workbook, activeSheet.id, activeAddress);
+  // Ribbon state reflects the WHOLE selection, Excel-style: a control shows a
+  // concrete value when every selected cell agrees and "mixed" otherwise.
+  const selectionFormat = useMemo(() => summarizeSelectionFormats(activeSheet, selection), [activeSheet, selection]);
   const formulaSuggestions = useMemo(() => getFormulaSuggestions(formulaDraft), [formulaDraft]);
   const activeFormulaContent = getCellContent(workbook, activeSheet.id, activeAddress);
   const activeFormula = typeof activeFormulaContent === "string" && activeFormulaContent.startsWith("=") ? activeFormulaContent : "";
@@ -362,7 +367,8 @@ export default function App() {
     let nextWorkbook = setCellContent(workbook, activeSheet.id, address, value);
     // Excel behavior: typing a date into an unformatted cell applies a date format,
     // so the engine's date serial renders as a date instead of a raw number.
-    if (typeof value === "string" && isDateLikeEntry(value) && !getCellFormat(workbook, activeSheet.id, address).numberFormat) {
+    // An explicit "general" counts as unformatted, like everywhere else.
+    if (typeof value === "string" && isDateLikeEntry(value) && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
       const coord = parseCellAddress(address);
       nextWorkbook = setCellFormat(nextWorkbook, activeSheet.id, { start: coord, end: coord }, { numberFormat: "date" });
     }
@@ -1604,13 +1610,15 @@ export default function App() {
 
     if (isCommand && !event.shiftKey && event.key.toLowerCase() === "b") {
       event.preventDefault();
-      applyFormat({ bold: !activeFormat.bold }, "Applied bold");
+      // Same mixed-selection semantics as the toolbar button: bold-all unless
+      // every selected cell is already bold.
+      applyFormat({ bold: selectionFormat.bold !== true }, "Applied bold");
       return;
     }
 
     if (isCommand && !event.shiftKey && event.key.toLowerCase() === "i") {
       event.preventDefault();
-      applyFormat({ italic: !activeFormat.italic }, "Applied italic");
+      applyFormat({ italic: selectionFormat.italic !== true }, "Applied italic");
       return;
     }
 
@@ -2229,6 +2237,7 @@ export default function App() {
           }}
           onClear={handleClearSelection}
           canPasteSpecial={Boolean(richClipboard)}
+          onPaste={handlePasteAll}
           onPasteValues={handlePasteValues}
           onPasteFormats={handlePasteFormats}
           formatPainterActive={Boolean(formatPainter)}
@@ -2354,6 +2363,16 @@ export default function App() {
           onToggleSheetTabs={handleToggleSheetTabs}
           onResetView={handleResetView}
           activeFormat={activeFormat}
+          selectionFormat={selectionFormat}
+          findPanelOpen={isFindPanelOpen}
+          filterPanelOpen={isFilterPanelOpen}
+          validationPanelOpen={isValidationPanelOpen}
+          conditionalPanelOpen={isConditionalPanelOpen}
+          pivotPanelOpen={isPivotPanelOpen}
+          chartPanelOpen={isChartPanelOpen}
+          functionLibraryOpen={isFunctionLibraryOpen}
+          namedRangesOpen={isNamedRangesOpen}
+          goToPanelOpen={isGoToPanelOpen}
           onPivot={() => {
             setPivotPanelOpen(true);
             setFindPanelOpen(false);
@@ -2378,9 +2397,20 @@ export default function App() {
             setGoToPanelOpen(false);
             setFormulaAuditOpen(false);
           }}
-          onBold={() => applyFormat({ bold: !activeFormat.bold }, "Applied bold")}
-          onItalic={() => applyFormat({ italic: !activeFormat.italic }, "Applied italic")}
-          onWrapText={() => applyFormat({ wrapText: !activeFormat.wrapText }, activeFormat.wrapText ? "Unwrapped text" : "Wrapped text")}
+          onBold={() => applyFormat({ bold: selectionFormat.bold !== true }, "Applied bold")}
+          onItalic={() => applyFormat({ italic: selectionFormat.italic !== true }, "Applied italic")}
+          onWrapText={() =>
+            applyFormat(
+              { wrapText: selectionFormat.wrapText !== true },
+              selectionFormat.wrapText === true ? "Unwrapped text" : "Wrapped text"
+            )
+          }
+          onFontFamily={(fontFamily) =>
+            applyFormat({ fontFamily: fontFamily || undefined }, fontFamily ? `Applied ${fontFamily}` : "Reset font")
+          }
+          onFontSize={(fontSize) =>
+            applyFormat({ fontSize: fontSize ?? undefined }, fontSize ? `Applied ${fontSize}pt size` : "Reset font size")
+          }
           onNumberFormat={(numberFormat) => applyFormat({ numberFormat }, `Applied ${numberFormat} format`)}
           onHorizontalAlign={(horizontalAlign) => applyFormat({ horizontalAlign }, `Aligned ${horizontalAlign}`)}
           onVerticalAlign={(verticalAlign) => applyFormat({ verticalAlign }, `Aligned ${verticalAlign}`)}
@@ -2804,6 +2834,112 @@ function getAutoFillWriteRange(sourceRange: CellRange, targetRange: CellRange): 
   }
 
   return null;
+}
+
+// Above this, the sparse-format scan per selection change is no longer cheap;
+// fall back to anchor-only state (no mixed detection) instead of stalling.
+const SELECTION_FORMAT_SCAN_LIMIT = 20_000;
+
+// "general" is the absence of a number format: cells that store it explicitly
+// (after picking General in the ribbon) are identical in effect to cells with
+// no entry at all, and must not read as a mixed selection next to them.
+function effectiveNumberFormat(format: CellFormat): CellFormat["numberFormat"] {
+  return format.numberFormat === "general" ? undefined : format.numberFormat;
+}
+
+// Summarizes formats over the selection by scanning the sheet's SPARSE format
+// map (O(populated formats)), never the selection area itself — whole-column
+// selections cover 100k+ cells and must stay cheap.
+function summarizeSelectionFormats(sheet: SheetModel, selection: CellRange): SelectionFormatSummary {
+  const normalized = normalizeRange(selection);
+  const cellCount =
+    (normalized.end.row - normalized.start.row + 1) * (normalized.end.column - normalized.start.column + 1);
+  const formats = sheet.formats ?? {};
+  const entries = Object.entries(formats);
+
+  // Single cells (the common case while arrow-key navigating) resolve with a
+  // direct lookup instead of a scan.
+  if (cellCount === 1 || entries.length > SELECTION_FORMAT_SCAN_LIMIT) {
+    const anchor = formats[formatCellAddress(normalized.start)] ?? {};
+    return {
+      bold: Boolean(anchor.bold),
+      italic: Boolean(anchor.italic),
+      wrapText: Boolean(anchor.wrapText),
+      fontFamily: anchor.fontFamily,
+      fontSize: anchor.fontSize,
+      numberFormat: effectiveNumberFormat(anchor),
+      horizontalAlign: anchor.horizontalAlign,
+      verticalAlign: anchor.verticalAlign
+    };
+  }
+
+  const createTracker = <T,>() => ({
+    value: undefined as T | undefined,
+    defined: 0,
+    conflicting: false,
+    add(candidate: T | undefined) {
+      if (candidate === undefined) {
+        return;
+      }
+      if (this.defined === 0) {
+        this.value = candidate;
+      } else if (this.value !== candidate) {
+        this.conflicting = true;
+      }
+      this.defined += 1;
+    }
+  });
+
+  let boldCount = 0;
+  let italicCount = 0;
+  let wrapCount = 0;
+  const fontFamily = createTracker<string>();
+  const fontSize = createTracker<number>();
+  const numberFormat = createTracker<NonNullable<CellFormat["numberFormat"]>>();
+  const horizontalAlign = createTracker<NonNullable<CellFormat["horizontalAlign"]>>();
+  const verticalAlign = createTracker<NonNullable<CellFormat["verticalAlign"]>>();
+
+  for (const [address, format] of entries) {
+    const coord = parseCellAddress(address);
+    if (
+      coord.row < normalized.start.row ||
+      coord.row > normalized.end.row ||
+      coord.column < normalized.start.column ||
+      coord.column > normalized.end.column
+    ) {
+      continue;
+    }
+    if (format.bold) {
+      boldCount += 1;
+    }
+    if (format.italic) {
+      italicCount += 1;
+    }
+    if (format.wrapText) {
+      wrapCount += 1;
+    }
+    fontFamily.add(format.fontFamily);
+    fontSize.add(format.fontSize);
+    numberFormat.add(effectiveNumberFormat(format));
+    horizontalAlign.add(format.horizontalAlign);
+    verticalAlign.add(format.verticalAlign);
+  }
+
+  const toggleState = (count: number): boolean | "mixed" =>
+    count === cellCount ? true : count === 0 ? false : "mixed";
+  const resolve = <T,>(tracker: { value: T | undefined; defined: number; conflicting: boolean }): MixedFormatValue<T> =>
+    tracker.defined === 0 ? undefined : tracker.conflicting || tracker.defined < cellCount ? "mixed" : tracker.value;
+
+  return {
+    bold: toggleState(boldCount),
+    italic: toggleState(italicCount),
+    wrapText: toggleState(wrapCount),
+    fontFamily: resolve(fontFamily),
+    fontSize: resolve(fontSize),
+    numberFormat: resolve(numberFormat),
+    horizontalAlign: resolve(horizontalAlign),
+    verticalAlign: resolve(verticalAlign)
+  };
 }
 
 function isBlankCell(workbook: WorkbookModel, sheetId: string, row: number, column: number): boolean {

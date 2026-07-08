@@ -55,8 +55,8 @@ test("prints the workbook with worksheet chrome", async ({ page }) => {
   await page.emulateMedia({ media: "print" });
 
   await expect(page.getByRole("toolbar", { name: "Toolbar", exact: true })).toBeHidden();
-  await expect(page.getByLabel("Formula bar", { exact: true })).toBeHidden();
-  await expect(page.getByLabel("Sheet tabs", { exact: true })).toBeHidden();
+  await expect(page.getByRole("group", { name: "Formula bar", exact: true })).toBeHidden();
+  await expect(page.getByRole("tablist", { name: "Sheet tabs", exact: true })).toBeHidden();
   await expect(page.getByLabel("Status", { exact: true })).toBeHidden();
   await expect(page.getByRole("gridcell", { name: "A1 Printable", exact: true })).toBeVisible();
 });
@@ -71,13 +71,16 @@ test("toggles worksheet gridlines from the toolbar", async ({ page }) => {
   await expect(cell).toHaveCSS("border-bottom-color", "rgb(221, 229, 238)");
 
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Hide gridlines", exact: true }).click();
+  const gridlinesToggle = page.getByRole("button", { name: "Gridlines", exact: true });
+  await expect(gridlinesToggle).toHaveAttribute("aria-pressed", "true");
+  await gridlinesToggle.click();
 
   await expect(grid).toHaveAttribute("data-gridlines", "hidden");
+  await expect(gridlinesToggle).toHaveAttribute("aria-pressed", "false");
   await expect(cell).toHaveCSS("border-bottom-color", "rgba(0, 0, 0, 0)");
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Gridlines hidden");
 
-  await page.getByRole("button", { name: "Show gridlines", exact: true }).click();
+  await gridlinesToggle.click();
 
   await expect(grid).toHaveAttribute("data-gridlines", "visible");
   await expect(cell).toHaveCSS("border-bottom-color", "rgb(221, 229, 238)");
@@ -135,7 +138,7 @@ test("toggles worksheet headers from the toolbar", async ({ page }) => {
   expect(cellBoxWithHeaders!.y).toBeGreaterThanOrEqual(gridBox!.y + 28);
 
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Hide headers", exact: true }).click();
+  await page.getByRole("button", { name: "Headers", exact: true }).click();
 
   await expect(grid).toHaveAttribute("data-headers", "hidden");
   await expect(page.getByRole("columnheader", { name: "Column A", exact: true })).toHaveCount(0);
@@ -147,7 +150,7 @@ test("toggles worksheet headers from the toolbar", async ({ page }) => {
   expect(cellBoxWithoutHeaders!.x).toBeLessThanOrEqual(gridBox!.x + 1);
   expect(cellBoxWithoutHeaders!.y).toBeLessThanOrEqual(gridBox!.y + 1);
 
-  await page.getByRole("button", { name: "Show headers", exact: true }).click();
+  await page.getByRole("button", { name: "Headers", exact: true }).click();
 
   await expect(grid).toHaveAttribute("data-headers", "visible");
   await expect(page.getByRole("columnheader", { name: "Column A", exact: true })).toBeVisible();
@@ -159,7 +162,7 @@ test("toggles the formula bar while preserving direct cell formula editing", asy
   await page.goto("/");
 
   const grid = page.getByRole("grid", { name: "Spreadsheet grid", exact: true });
-  const formulaBar = page.getByLabel("Formula bar", { exact: true });
+  const formulaBar = page.getByRole("group", { name: "Formula bar", exact: true });
 
   await expect(formulaBar).toBeVisible();
   const gridBoxWithFormulaBar = await grid.boundingBox();
@@ -167,7 +170,7 @@ test("toggles the formula bar while preserving direct cell formula editing", asy
 
   await editCell(page, "A1", "10");
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Hide formula bar", exact: true }).click();
+  await page.getByRole("button", { name: "Formula bar", exact: true }).click();
 
   await expect(formulaBar).toHaveCount(0);
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveCount(0);
@@ -181,10 +184,10 @@ test("toggles the formula bar while preserving direct cell formula editing", asy
 
   await expect(page.getByRole("gridcell", { name: "A2 20", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Show formula bar", exact: true }).click();
+  await page.getByRole("button", { name: "Formula bar", exact: true }).click();
   await page.getByRole("gridcell", { name: "A2 20", exact: true }).click();
 
-  await expect(page.getByLabel("Formula bar", { exact: true })).toBeVisible();
+  await expect(formulaBar).toBeVisible();
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=A1*2");
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Formula bar shown");
 });
@@ -201,15 +204,17 @@ test("shows formula text in worksheet cells without changing formula editing", a
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=SUM(A1:A2)");
 
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Show formulas", exact: true }).click();
+  const showFormulasToggle = page.getByRole("button", { name: "Show formulas", exact: true });
+  await showFormulasToggle.click();
 
-  await expect(page.getByRole("button", { name: "Show formula results", exact: true })).toHaveClass(/active-toolbar-button/);
+  await expect(showFormulasToggle).toHaveClass(/active-toolbar-button/);
+  await expect(showFormulasToggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("gridcell", { name: "A3 =SUM(A1:A2)", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "A1 10", exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=SUM(A1:A2)");
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Formulas shown");
 
-  await page.getByRole("button", { name: "Show formula results", exact: true }).click();
+  await showFormulasToggle.click();
 
   await expect(page.getByRole("gridcell", { name: "A3 30", exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=SUM(A1:A2)");
@@ -252,7 +257,7 @@ test("toggles sheet tabs while preserving sheet creation", async ({ page }) => {
   await expect(tabs).toBeVisible();
 
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Hide sheet tabs", exact: true }).click();
+  await page.getByRole("button", { name: "Sheet tabs", exact: true }).click();
 
   await expect(tabs).toHaveCount(0);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Sheet tabs hidden");
@@ -264,7 +269,7 @@ test("toggles sheet tabs while preserving sheet creation", async ({ page }) => {
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Added sheet");
 
   await openRibbonTab(page, "View");
-  await page.getByRole("button", { name: "Show sheet tabs", exact: true }).click();
+  await page.getByRole("button", { name: "Sheet tabs", exact: true }).click();
 
   await expectSheetTabs(page, ["Sheet1", "Sheet2"]);
   await expect(page.getByRole("tab", { name: "Sheet2", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -574,6 +579,7 @@ test("imports XLSX workbook files", async ({ page }) => {
   await expect(conditionalCell).toHaveCSS("font-weight", "700");
   await expect(page.getByRole("gridcell", { name: "G1 Locked", exact: true })).toHaveClass(/read-only-cell/);
   await expect(page.getByRole("gridcell", { name: "H1 Input", exact: true })).not.toHaveClass(/read-only-cell/);
+  await openRibbonTab(page, "View");
   await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
   await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/active-toolbar-button/);
   await expect(page.getByLabel("Status")).toContainText("Imported budget.xlsx");
@@ -701,11 +707,11 @@ test("inserts AutoAverage formulas from the toolbar function picker", async ({ p
   await selectRange(page, "A1 10", "A3 30");
 
   await openRibbonTab(page, "Formulas");
-  await page.getByLabel("Auto function", { exact: true }).selectOption("AVERAGE");
+  await page.getByRole("button", { name: "AutoSum options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Average", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "A4 20", exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input")).toHaveValue("=AVERAGE(A1:A3)");
-  await expect(page.getByLabel("Auto function", { exact: true })).toHaveValue("");
   await expect(page.getByLabel("Status")).toContainText("Inserted Average for A1:A3");
 });
 
@@ -1260,7 +1266,8 @@ test("uses paste special values and transpose from the toolbar", async ({ page }
   await page.keyboard.press("Control+C");
 
   await page.getByRole("gridcell", { name: "C1", exact: true }).click();
-  await page.getByRole("button", { name: "Paste values", exact: true }).click();
+  await page.getByRole("button", { name: "Paste options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Paste values", exact: true }).click();
 
   const valuesCell = page.getByRole("gridcell", { name: "C1 10", exact: true });
   await expect(valuesCell).toHaveCSS("font-weight", "400");
@@ -1273,7 +1280,8 @@ test("uses paste special values and transpose from the toolbar", async ({ page }
   await selectRange(page, "A3 A", "B4 D");
   await page.keyboard.press("Control+C");
   await page.getByRole("gridcell", { name: "D3", exact: true }).click();
-  await page.getByRole("button", { name: "Transpose paste", exact: true }).click();
+  await page.getByRole("button", { name: "Paste options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Transpose paste", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "D3 A", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "E3 C", exact: true })).toBeVisible();
@@ -1363,6 +1371,7 @@ test("inserts, deletes, and freezes spreadsheet structure", async ({ page }) => 
   await page.getByRole("button", { name: "Delete column", exact: true }).click();
   await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
 
+  await openRibbonTab(page, "View");
   await page.getByRole("button", { name: "Freeze top row", exact: true }).click();
   await page.getByRole("button", { name: "Freeze first column", exact: true }).click();
   await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
@@ -1457,8 +1466,8 @@ test("applies number formats and cell alignment", async ({ page }) => {
   await editCell(page, "A1", "1234.5");
   await page.getByRole("gridcell", { name: "A1 1234.5", exact: true }).click();
   await page.getByLabel("Number format").selectOption("currency");
-  await page.getByLabel("Horizontal align").selectOption("right");
-  await page.getByLabel("Vertical align").selectOption("bottom");
+  await page.getByRole("button", { name: "Align right", exact: true }).click();
+  await page.getByRole("button", { name: "Align bottom", exact: true }).click();
 
   const currencyCell = page.getByRole("gridcell", { name: "A1 $1,234.50", exact: true });
   await expect(currencyCell).toBeVisible();
@@ -1470,6 +1479,20 @@ test("applies number formats and cell alignment", async ({ page }) => {
   await page.getByLabel("Number format").selectOption("percent");
 
   await expect(page.getByRole("gridcell", { name: "B1 25%", exact: true })).toBeVisible();
+});
+
+test("applies font family and size from the Home ribbon", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A1", "Styled");
+  await page.getByRole("gridcell", { name: "A1 Styled", exact: true }).click();
+  await page.getByLabel("Font family", { exact: true }).selectOption("Georgia");
+  await page.getByLabel("Font size", { exact: true }).selectOption("18");
+
+  const styledCell = page.getByRole("gridcell", { name: "A1 Styled", exact: true });
+  await expect(styledCell).toHaveCSS("font-family", "Georgia");
+  // 18pt at the browser's standard 96dpi computes to 24px, matching Excel.
+  await expect(styledCell).toHaveCSS("font-size", "24px");
 });
 
 test("wraps and unwraps text from the toolbar", async ({ page }) => {
@@ -1589,14 +1612,15 @@ test("applies and clears cell borders", async ({ page }) => {
 
   await editCell(page, "A1", "Bordered");
   await page.getByRole("gridcell", { name: "A1 Bordered", exact: true }).click();
-  await page.getByLabel("Borders").selectOption("all");
+  await page.getByRole("button", { name: "All borders", exact: true }).click();
 
   const borderedCell = page.getByRole("gridcell", { name: "A1 Bordered", exact: true });
   await expect(borderedCell).toHaveCSS("border-top-style", "solid");
   await expect(borderedCell).toHaveCSS("border-right-style", "solid");
   await expect(page.getByLabel("Status")).toContainText("Applied all borders to A1");
 
-  await page.getByLabel("Borders").selectOption("none");
+  await page.getByRole("button", { name: "All borders options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Clear borders", exact: true }).click();
 
   await expect(borderedCell).toHaveCSS("border-top-style", "none");
   await expect(page.getByLabel("Status")).toContainText("Cleared borders from A1");

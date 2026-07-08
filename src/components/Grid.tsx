@@ -1259,6 +1259,8 @@ function RowFragment({
         const style =
           mergedFormat?.bold ||
           mergedFormat?.italic ||
+          mergedFormat?.fontFamily ||
+          mergedFormat?.fontSize ||
           mergedFormat?.textColor ||
           mergedFormat?.backgroundColor ||
           mergedFormat?.horizontalAlign ||
@@ -1268,6 +1270,10 @@ function RowFragment({
             ? {
                 fontWeight: mergedFormat?.bold ? 700 : undefined,
                 fontStyle: mergedFormat?.italic ? "italic" : undefined,
+                fontFamily: mergedFormat?.fontFamily,
+                // fontSize is in POINTS (Excel's unit, matching xlsx round-trip);
+                // CSS pt renders it at the same visual size Excel does.
+                fontSize: mergedFormat?.fontSize ? `${mergedFormat.fontSize}pt` : undefined,
                 color: mergedFormat?.textColor,
                 backgroundColor: mergedFormat?.backgroundColor,
                 textAlign: mergedFormat?.horizontalAlign,

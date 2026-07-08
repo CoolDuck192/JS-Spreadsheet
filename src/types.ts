@@ -27,6 +27,9 @@ export type BorderPreset = "none" | "all" | "outer" | "top" | "right" | "bottom"
 export type CellFormat = {
   bold?: boolean;
   italic?: boolean;
+  fontFamily?: string;
+  /** In points, as in Excel; the grid renders it with the CSS `pt` unit. */
+  fontSize?: number;
   textColor?: string;
   backgroundColor?: string;
   numberFormat?: "general" | "number" | "currency" | "percent" | "date";
@@ -34,6 +37,21 @@ export type CellFormat = {
   verticalAlign?: "top" | "middle" | "bottom";
   wrapText?: boolean;
   borders?: CellBorders;
+};
+
+/** A format field summarized over a selection: concrete when every cell agrees. */
+export type MixedFormatValue<T> = T | "mixed" | undefined;
+
+/** Excel-style ribbon state for the whole selection, with "mixed" indicators. */
+export type SelectionFormatSummary = {
+  bold: boolean | "mixed";
+  italic: boolean | "mixed";
+  wrapText: boolean | "mixed";
+  fontFamily: MixedFormatValue<string>;
+  fontSize: MixedFormatValue<number>;
+  numberFormat: MixedFormatValue<NonNullable<CellFormat["numberFormat"]>>;
+  horizontalAlign: MixedFormatValue<NonNullable<CellFormat["horizontalAlign"]>>;
+  verticalAlign: MixedFormatValue<NonNullable<CellFormat["verticalAlign"]>>;
 };
 
 export type DataValidationRule =
