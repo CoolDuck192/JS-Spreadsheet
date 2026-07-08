@@ -681,7 +681,8 @@ describe("App", () => {
     await user.keyboard("{Control>}c{/Control}");
 
     await user.click(screen.getByRole("gridcell", { name: "C1" }));
-    await user.click(screen.getByRole("button", { name: "Paste values" }));
+    await user.click(screen.getByRole("button", { name: "Paste options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Paste values" }));
 
     const pastedCell = screen.getByRole("gridcell", { name: "C1 10" });
     expect(pastedCell).not.toHaveStyle({ fontWeight: "700" });
@@ -701,7 +702,8 @@ describe("App", () => {
 
     await editCell(user, "C1", "Keep content");
     await user.click(screen.getByRole("gridcell", { name: "C1 Keep content" }));
-    await user.click(screen.getByRole("button", { name: "Paste formats" }));
+    await user.click(screen.getByRole("button", { name: "Paste options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Paste formats" }));
 
     const formattedCell = screen.getByRole("gridcell", { name: "C1 Keep content" });
     expect(formattedCell).toHaveStyle({ fontWeight: "700" });
@@ -722,7 +724,8 @@ describe("App", () => {
     selectRange("A1 A", "B2 D");
     await user.keyboard("{Control>}c{/Control}");
     await user.click(screen.getByRole("gridcell", { name: "D1" }));
-    await user.click(screen.getByRole("button", { name: "Transpose paste" }));
+    await user.click(screen.getByRole("button", { name: "Paste options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Transpose paste" }));
 
     expect(screen.getByRole("gridcell", { name: "D1 A" })).toHaveTextContent("A");
     expect(screen.getByRole("gridcell", { name: "E1 C" })).toHaveTextContent("C");
@@ -1317,7 +1320,8 @@ describe("App", () => {
 
     selectRange("A1 10", "A3 30");
     await openRibbonTab(user, "Formulas");
-    await user.selectOptions(screen.getByLabelText("Auto function"), "AVERAGE");
+    await user.click(screen.getByRole("button", { name: "AutoSum options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Average" }));
 
     expect(screen.getByRole("gridcell", { name: "A4 20" })).toHaveTextContent("20");
     expect(screen.getByLabelText("Formula input")).toHaveValue("=AVERAGE(A1:A3)");
@@ -2053,16 +2057,82 @@ describe("App", () => {
 
     await editCell(user, "A1", "Bordered");
     await user.click(screen.getByRole("gridcell", { name: "A1 Bordered" }));
-    await user.selectOptions(screen.getByLabelText("Borders"), "all");
+    await user.click(screen.getByRole("button", { name: "All borders" }));
 
     const borderedCell = screen.getByRole("gridcell", { name: "A1 Bordered" });
     expect(borderedCell).toHaveStyle({ borderTopStyle: "solid", borderRightStyle: "solid" });
     expect(screen.getByLabelText("Status")).toHaveTextContent("Applied all borders to A1");
 
-    await user.selectOptions(screen.getByLabelText("Borders"), "none");
+    await user.click(screen.getByRole("button", { name: "All borders options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clear borders" }));
 
     expect(screen.getByRole("gridcell", { name: "A1 Bordered" })).not.toHaveStyle({ borderTopStyle: "solid" });
     expect(screen.getByLabelText("Status")).toHaveTextContent("Cleared borders from A1");
+  });
+
+  it("applies font family and size from the toolbar and renders them in the grid", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "Styled");
+    await user.click(screen.getByRole("gridcell", { name: "A1 Styled" }));
+    await user.selectOptions(screen.getByLabelText("Font family"), "Georgia");
+    await user.selectOptions(screen.getByLabelText("Font size"), "18");
+
+    const styledCell = screen.getByRole("gridcell", { name: "A1 Styled" });
+    expect(styledCell).toHaveStyle({ fontFamily: "Georgia" });
+    expect(styledCell).toHaveStyle({ fontSize: "18pt" });
+    expect(screen.getByLabelText("Font family")).toHaveValue("Georgia");
+    expect(screen.getByLabelText("Font size")).toHaveValue("18");
+  });
+
+  it("shows mixed formatting state for a selection that disagrees", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "bolded");
+    await user.click(screen.getByRole("gridcell", { name: "A1 bolded" }));
+    await user.click(screen.getByRole("button", { name: "Bold" }));
+    await editCell(user, "A2", "plain");
+
+    selectRange("A1 bolded", "A2 plain");
+    const boldButton = screen.getByRole("button", { name: "Bold" });
+    expect(boldButton).toHaveAttribute("aria-pressed", "mixed");
+
+    // Toggling from mixed applies bold to the whole selection, like Excel.
+    await user.click(boldButton);
+    expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("gridcell", { name: "A2 plain" })).toHaveStyle({ fontWeight: "700" });
+  });
+
+  it("marks panel-launching toolbar buttons as expanded while their panel is open", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const filterButton = screen.getByRole("button", { name: "Filter" });
+    expect(filterButton).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(filterButton);
+    expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Filter" })).toHaveClass("active-toolbar-button");
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("applies quick number formats from the toolbar buttons", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "1234.5");
+    await user.click(screen.getByRole("gridcell", { name: "A1 1234.5" }));
+    await user.click(screen.getByRole("button", { name: "Currency format" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 $1,234.50" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Currency format" })).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Percent format" }));
+    expect(screen.getByRole("gridcell", { name: "A1 123,450%" })).toBeInTheDocument();
   });
 
   it("applies number formats and alignment to selected cells", async () => {
@@ -2072,8 +2142,8 @@ describe("App", () => {
     await editCell(user, "A1", "1234.5");
     await user.click(screen.getByRole("gridcell", { name: "A1 1234.5" }));
     await user.selectOptions(screen.getByLabelText("Number format"), "currency");
-    await user.selectOptions(screen.getByLabelText("Horizontal align"), "right");
-    await user.selectOptions(screen.getByLabelText("Vertical align"), "bottom");
+    await user.click(screen.getByRole("button", { name: "Align right" }));
+    await user.click(screen.getByRole("button", { name: "Align bottom" }));
 
     const currencyCell = screen.getByRole("gridcell", { name: "A1 $1,234.50" });
     expect(currencyCell).toHaveTextContent("$1,234.50");

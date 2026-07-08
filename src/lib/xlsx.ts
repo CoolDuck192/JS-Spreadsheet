@@ -564,11 +564,19 @@ function unquoteWorksheetName(name: string): string {
 }
 
 function applyCellFormatToExcelCell(cell: ExcelJS.Cell, format: CellFormat): void {
-  if (format.bold !== undefined || format.italic !== undefined || format.textColor) {
+  if (
+    format.bold !== undefined ||
+    format.italic !== undefined ||
+    format.textColor ||
+    format.fontFamily ||
+    format.fontSize !== undefined
+  ) {
     cell.font = {
       ...(cell.font ?? {}),
       bold: format.bold,
       italic: format.italic,
+      name: format.fontFamily ?? cell.font?.name,
+      size: format.fontSize ?? cell.font?.size,
       color: format.textColor ? { argb: hexToArgb(format.textColor) } : cell.font?.color
     };
   }
@@ -859,6 +867,12 @@ function cellFormatToExcelStyle(format: CellFormat): Partial<ExcelJS.Style> {
   if (format.italic !== undefined) {
     font.italic = format.italic;
   }
+  if (format.fontFamily) {
+    font.name = format.fontFamily;
+  }
+  if (format.fontSize !== undefined) {
+    font.size = format.fontSize;
+  }
   if (format.textColor) {
     font.color = { argb: hexToArgb(format.textColor) };
   }
@@ -1059,6 +1073,9 @@ type ExcelStyleParts = {
   border?: Partial<ExcelJS.Borders>;
 };
 
+const DEFAULT_XLSX_FONT_NAMES = new Set(["Calibri", "Aptos", "Aptos Narrow"]);
+const DEFAULT_XLSX_FONT_SIZE = 11;
+
 function excelStyleToCellFormat(style: ExcelStyleParts | undefined): CellFormat {
   const format: CellFormat = {};
 
@@ -1067,6 +1084,27 @@ function excelStyleToCellFormat(style: ExcelStyleParts | undefined): CellFormat 
   }
   if (style?.font?.italic === true) {
     format.italic = true;
+  }
+  // Excel stamps its default font (Calibri/Aptos 11) on every styled cell; importing
+  // that verbatim would materialize a format entry per cell on large files. Only the
+  // FULL default signature (default name AND default/absent size together) is
+  // treated as the stamp — a lone deviation like "Calibri 14" or "Arial 11" is a
+  // deliberate choice and both fields are kept. Known limitation: a user who
+  // explicitly picks exactly Calibri 11 is indistinguishable from the stamp.
+  const importedFontName =
+    typeof style?.font?.name === "string" && style.font.name.trim() !== "" ? style.font.name : undefined;
+  const importedFontSize =
+    typeof style?.font?.size === "number" && Number.isFinite(style.font.size) && style.font.size > 0
+      ? style.font.size
+      : undefined;
+  const isDefaultFontStamp =
+    (importedFontName === undefined || DEFAULT_XLSX_FONT_NAMES.has(importedFontName)) &&
+    (importedFontSize === undefined || importedFontSize === DEFAULT_XLSX_FONT_SIZE);
+  if (importedFontName !== undefined && !isDefaultFontStamp) {
+    format.fontFamily = importedFontName;
+  }
+  if (importedFontSize !== undefined && !isDefaultFontStamp) {
+    format.fontSize = importedFontSize;
   }
 
   const textColor = excelColorToHex(style?.font?.color);

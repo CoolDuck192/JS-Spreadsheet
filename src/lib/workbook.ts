@@ -2525,6 +2525,8 @@ function cellFormatsEqual(left: CellFormat, right: CellFormat): boolean {
   return (
     left.bold === right.bold &&
     left.italic === right.italic &&
+    left.fontFamily === right.fontFamily &&
+    left.fontSize === right.fontSize &&
     left.textColor === right.textColor &&
     left.backgroundColor === right.backgroundColor &&
     left.numberFormat === right.numberFormat &&
@@ -2590,6 +2592,8 @@ function isEmptyFormat(format: CellFormat): boolean {
   return (
     format.bold === undefined &&
     format.italic === undefined &&
+    format.fontFamily === undefined &&
+    format.fontSize === undefined &&
     format.textColor === undefined &&
     format.backgroundColor === undefined &&
     format.numberFormat === undefined &&

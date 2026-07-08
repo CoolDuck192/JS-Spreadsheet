@@ -109,6 +109,57 @@ describe("xlsx", () => {
     expect(getCellContent(imported, imported.activeSheetId, "A1")).toBe("Selected sheet");
   });
 
+  it("round-trips font family and size, ignoring Excel's defaults", async () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Styled");
+    workbook = setCellContent(workbook, sheetId, "A2", "Plain");
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      { fontFamily: "Georgia", fontSize: 18 }
+    );
+
+    const data = await exportWorkbookToXlsx(workbook);
+    const imported = await importWorkbookFromXlsx(data);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellFormat(imported, importedSheetId, "A1")).toMatchObject({ fontFamily: "Georgia", fontSize: 18 });
+    // Unstyled cells must not pick up Excel's default font as an explicit format.
+    const plainFormat = getCellFormat(imported, importedSheetId, "A2");
+    expect(plainFormat.fontFamily).toBeUndefined();
+    expect(plainFormat.fontSize).toBeUndefined();
+  });
+
+  it("keeps deliberate fonts that partially match Excel's default stamp", async () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "calibri large");
+    workbook = setCellContent(workbook, sheetId, "A2", "arial default size");
+    // Only the FULL default signature (Calibri/Aptos AND 11) is the stamp;
+    // a deviation in either field marks a deliberate choice that must survive.
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      { fontFamily: "Calibri", fontSize: 14 }
+    );
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 1, column: 0 }, end: { row: 1, column: 0 } },
+      { fontFamily: "Arial", fontSize: 11 }
+    );
+
+    const data = await exportWorkbookToXlsx(workbook);
+    const imported = await importWorkbookFromXlsx(data);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellFormat(imported, importedSheetId, "A1")).toMatchObject({ fontFamily: "Calibri", fontSize: 14 });
+    expect(getCellFormat(imported, importedSheetId, "A2")).toMatchObject({ fontFamily: "Arial", fontSize: 11 });
+  });
+
   it("round-trips hidden sheets through XLSX", async () => {
     let workbook = createBlankWorkbook();
     const visibleSheetId = workbook.activeSheetId;

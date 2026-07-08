@@ -574,6 +574,7 @@ test("imports XLSX workbook files", async ({ page }) => {
   await expect(conditionalCell).toHaveCSS("font-weight", "700");
   await expect(page.getByRole("gridcell", { name: "G1 Locked", exact: true })).toHaveClass(/read-only-cell/);
   await expect(page.getByRole("gridcell", { name: "H1 Input", exact: true })).not.toHaveClass(/read-only-cell/);
+  await openRibbonTab(page, "View");
   await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
   await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/active-toolbar-button/);
   await expect(page.getByLabel("Status")).toContainText("Imported budget.xlsx");
@@ -701,11 +702,11 @@ test("inserts AutoAverage formulas from the toolbar function picker", async ({ p
   await selectRange(page, "A1 10", "A3 30");
 
   await openRibbonTab(page, "Formulas");
-  await page.getByLabel("Auto function", { exact: true }).selectOption("AVERAGE");
+  await page.getByRole("button", { name: "AutoSum options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Average", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "A4 20", exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input")).toHaveValue("=AVERAGE(A1:A3)");
-  await expect(page.getByLabel("Auto function", { exact: true })).toHaveValue("");
   await expect(page.getByLabel("Status")).toContainText("Inserted Average for A1:A3");
 });
 
@@ -1260,7 +1261,8 @@ test("uses paste special values and transpose from the toolbar", async ({ page }
   await page.keyboard.press("Control+C");
 
   await page.getByRole("gridcell", { name: "C1", exact: true }).click();
-  await page.getByRole("button", { name: "Paste values", exact: true }).click();
+  await page.getByRole("button", { name: "Paste options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Paste values", exact: true }).click();
 
   const valuesCell = page.getByRole("gridcell", { name: "C1 10", exact: true });
   await expect(valuesCell).toHaveCSS("font-weight", "400");
@@ -1273,7 +1275,8 @@ test("uses paste special values and transpose from the toolbar", async ({ page }
   await selectRange(page, "A3 A", "B4 D");
   await page.keyboard.press("Control+C");
   await page.getByRole("gridcell", { name: "D3", exact: true }).click();
-  await page.getByRole("button", { name: "Transpose paste", exact: true }).click();
+  await page.getByRole("button", { name: "Paste options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Transpose paste", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "D3 A", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "E3 C", exact: true })).toBeVisible();
@@ -1363,6 +1366,7 @@ test("inserts, deletes, and freezes spreadsheet structure", async ({ page }) => 
   await page.getByRole("button", { name: "Delete column", exact: true }).click();
   await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
 
+  await openRibbonTab(page, "View");
   await page.getByRole("button", { name: "Freeze top row", exact: true }).click();
   await page.getByRole("button", { name: "Freeze first column", exact: true }).click();
   await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
@@ -1457,8 +1461,8 @@ test("applies number formats and cell alignment", async ({ page }) => {
   await editCell(page, "A1", "1234.5");
   await page.getByRole("gridcell", { name: "A1 1234.5", exact: true }).click();
   await page.getByLabel("Number format").selectOption("currency");
-  await page.getByLabel("Horizontal align").selectOption("right");
-  await page.getByLabel("Vertical align").selectOption("bottom");
+  await page.getByRole("button", { name: "Align right", exact: true }).click();
+  await page.getByRole("button", { name: "Align bottom", exact: true }).click();
 
   const currencyCell = page.getByRole("gridcell", { name: "A1 $1,234.50", exact: true });
   await expect(currencyCell).toBeVisible();
@@ -1470,6 +1474,20 @@ test("applies number formats and cell alignment", async ({ page }) => {
   await page.getByLabel("Number format").selectOption("percent");
 
   await expect(page.getByRole("gridcell", { name: "B1 25%", exact: true })).toBeVisible();
+});
+
+test("applies font family and size from the Home ribbon", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A1", "Styled");
+  await page.getByRole("gridcell", { name: "A1 Styled", exact: true }).click();
+  await page.getByLabel("Font family", { exact: true }).selectOption("Georgia");
+  await page.getByLabel("Font size", { exact: true }).selectOption("18");
+
+  const styledCell = page.getByRole("gridcell", { name: "A1 Styled", exact: true });
+  await expect(styledCell).toHaveCSS("font-family", "Georgia");
+  // 18pt at the browser's standard 96dpi computes to 24px, matching Excel.
+  await expect(styledCell).toHaveCSS("font-size", "24px");
 });
 
 test("wraps and unwraps text from the toolbar", async ({ page }) => {
@@ -1589,14 +1607,15 @@ test("applies and clears cell borders", async ({ page }) => {
 
   await editCell(page, "A1", "Bordered");
   await page.getByRole("gridcell", { name: "A1 Bordered", exact: true }).click();
-  await page.getByLabel("Borders").selectOption("all");
+  await page.getByRole("button", { name: "All borders", exact: true }).click();
 
   const borderedCell = page.getByRole("gridcell", { name: "A1 Bordered", exact: true });
   await expect(borderedCell).toHaveCSS("border-top-style", "solid");
   await expect(borderedCell).toHaveCSS("border-right-style", "solid");
   await expect(page.getByLabel("Status")).toContainText("Applied all borders to A1");
 
-  await page.getByLabel("Borders").selectOption("none");
+  await page.getByRole("button", { name: "All borders options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Clear borders", exact: true }).click();
 
   await expect(borderedCell).toHaveCSS("border-top-style", "none");
   await expect(page.getByLabel("Status")).toContainText("Cleared borders from A1");
