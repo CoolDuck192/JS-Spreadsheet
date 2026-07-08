@@ -55,7 +55,9 @@ export function FormulaBar({
   }
 
   return (
-    <div className="formula-bar" aria-label="Formula bar">
+    // role="group" exposes the aria-label (ignored on generic divs) and keeps
+    // the region distinguishable from the View tab's "Formula bar" toggle.
+    <div className="formula-bar" role="group" aria-label="Formula bar">
       <input
         className="name-box"
         aria-label="Name box"

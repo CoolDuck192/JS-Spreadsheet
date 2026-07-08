@@ -737,39 +737,42 @@ function EditingGroup(props: ToolbarProps) {
 function ViewGroup(props: ToolbarProps) {
   return (
     <ToolbarGroup label="Workbook Views">
+      {/* Excel-style show/hide toggles: fixed labels with aria-pressed mirroring
+          the feature's on state, like the View tab's checkboxes. A label that
+          changed with state would make aria-pressed contradict it. */}
       <ToolbarButton
-        label={props.showGridlines ? "Hide gridlines" : "Show gridlines"}
+        label="Gridlines"
         onClick={props.onToggleGridlines}
         icon={<Grid2X2 />}
-        pressed={!props.showGridlines}
+        pressed={props.showGridlines}
         compact
       />
       <ToolbarButton
-        label={props.showHeaders ? "Hide headers" : "Show headers"}
+        label="Headers"
         onClick={props.onToggleHeaders}
         icon={<PanelTop />}
-        pressed={!props.showHeaders}
+        pressed={props.showHeaders}
         compact
       />
       <ToolbarButton
-        label={props.showFormulaBar ? "Hide formula bar" : "Show formula bar"}
+        label="Formula bar"
         onClick={props.onToggleFormulaBar}
         icon={<SquareFunction />}
-        pressed={!props.showFormulaBar}
+        pressed={props.showFormulaBar}
         compact
       />
       <ToolbarButton
-        label={props.showFormulas ? "Show formula results" : "Show formulas"}
+        label="Show formulas"
         onClick={props.onToggleShowFormulas}
         icon={<Sigma />}
         pressed={props.showFormulas}
         compact
       />
       <ToolbarButton
-        label={props.showSheetTabs ? "Hide sheet tabs" : "Show sheet tabs"}
+        label="Sheet tabs"
         onClick={props.onToggleSheetTabs}
         icon={<PanelBottom />}
-        pressed={!props.showSheetTabs}
+        pressed={props.showSheetTabs}
         compact
       />
       <ToolbarButton
@@ -848,7 +851,7 @@ function ToolbarButton({
       aria-label={label}
       aria-pressed={pressed === undefined ? undefined : isMixed ? "mixed" : pressed}
       aria-expanded={expanded === undefined ? undefined : expanded}
-      aria-keyshortcuts={shortcut}
+      aria-keyshortcuts={shortcut ? ariaKeyshortcuts(shortcut) : undefined}
       data-shortcut={shortcut ? shortcutHint(shortcut) : undefined}
       // Compact buttons get an instant CSS tooltip from aria-label; keeping the
       // native title too would show a second, delayed tooltip on top of it.
@@ -862,8 +865,16 @@ function ToolbarButton({
   );
 }
 
+const IS_APPLE_PLATFORM = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
 function shortcutHint(shortcut: string): string {
-  return shortcut.replace(/Control/g, "Ctrl").replace(/\+/g, "+");
+  return shortcut.replace(/Control/g, IS_APPLE_PLATFORM ? "⌘" : "Ctrl");
+}
+
+// The app's key handler accepts Ctrl and Cmd interchangeably, so advertise
+// both bindings to assistive tech (space-separated = alternatives in ARIA).
+function ariaKeyshortcuts(shortcut: string): string {
+  return shortcut.includes("Control") ? `${shortcut} ${shortcut.replace(/Control/g, "Meta")}` : shortcut;
 }
 
 function SplitButton({

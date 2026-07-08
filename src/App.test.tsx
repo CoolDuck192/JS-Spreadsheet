@@ -104,15 +104,21 @@ describe("App", () => {
     expect(grid).toHaveAttribute("data-gridlines", "visible");
 
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Hide gridlines" }));
+    const gridlinesToggle = screen.getByRole("button", { name: "Gridlines" });
+    expect(gridlinesToggle).toHaveAttribute("aria-pressed", "true");
+    expect(gridlinesToggle).toHaveClass("active-toolbar-button");
+
+    await user.click(gridlinesToggle);
 
     expect(grid).toHaveAttribute("data-gridlines", "hidden");
-    expect(screen.getByRole("button", { name: "Show gridlines" })).toHaveClass("active-toolbar-button");
+    expect(gridlinesToggle).toHaveAttribute("aria-pressed", "false");
+    expect(gridlinesToggle).not.toHaveClass("active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Gridlines hidden");
 
-    await user.click(screen.getByRole("button", { name: "Show gridlines" }));
+    await user.click(gridlinesToggle);
 
     expect(grid).toHaveAttribute("data-gridlines", "visible");
+    expect(gridlinesToggle).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Gridlines shown");
   });
 
@@ -127,16 +133,20 @@ describe("App", () => {
     expect(screen.getByRole("rowheader", { name: "Row 1" })).toBeInTheDocument();
 
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Hide headers" }));
+    const headersToggle = screen.getByRole("button", { name: "Headers" });
+    expect(headersToggle).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(headersToggle);
 
     expect(grid).toHaveAttribute("data-headers", "hidden");
     expect(screen.queryByRole("columnheader", { name: "Column A" })).not.toBeInTheDocument();
     expect(screen.queryByRole("rowheader", { name: "Row 1" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show headers" })).toHaveClass("active-toolbar-button");
+    expect(headersToggle).toHaveAttribute("aria-pressed", "false");
+    expect(headersToggle).not.toHaveClass("active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Headers hidden");
     expect(screen.getByRole("gridcell", { name: "A1" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Show headers" }));
+    await user.click(headersToggle);
 
     expect(grid).toHaveAttribute("data-headers", "visible");
     expect(screen.getByRole("columnheader", { name: "Column A" })).toBeInTheDocument();
@@ -148,25 +158,29 @@ describe("App", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(screen.getByLabelText("Formula bar")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Formula bar" })).toBeInTheDocument();
 
     await editCell(user, "A1", "10");
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Hide formula bar" }));
+    const formulaBarToggle = screen.getByRole("button", { name: "Formula bar" });
+    expect(formulaBarToggle).toHaveAttribute("aria-pressed", "true");
 
-    expect(screen.queryByLabelText("Formula bar")).not.toBeInTheDocument();
+    await user.click(formulaBarToggle);
+
+    expect(screen.queryByRole("group", { name: "Formula bar" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Formula input")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show formula bar" })).toHaveClass("active-toolbar-button");
+    expect(formulaBarToggle).toHaveAttribute("aria-pressed", "false");
+    expect(formulaBarToggle).not.toHaveClass("active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Formula bar hidden");
 
     await editCell(user, "A2", "=A1*2");
 
     expect(screen.getByRole("gridcell", { name: "A2 20" })).toHaveTextContent("20");
 
-    await user.click(screen.getByRole("button", { name: "Show formula bar" }));
+    await user.click(formulaBarToggle);
     await user.click(screen.getByRole("gridcell", { name: "A2 20" }));
 
-    expect(screen.getByLabelText("Formula bar")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Formula bar" })).toBeInTheDocument();
     expect(screen.getByLabelText("Formula input")).toHaveValue("=A1*2");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Formula bar shown");
   });
@@ -184,15 +198,19 @@ describe("App", () => {
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
 
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Show formulas" }));
+    const showFormulasToggle = screen.getByRole("button", { name: "Show formulas" });
+    expect(showFormulasToggle).toHaveAttribute("aria-pressed", "false");
 
-    expect(screen.getByRole("button", { name: "Show formula results" })).toHaveClass("active-toolbar-button");
+    await user.click(showFormulasToggle);
+
+    expect(showFormulasToggle).toHaveAttribute("aria-pressed", "true");
+    expect(showFormulasToggle).toHaveClass("active-toolbar-button");
     expect(screen.getByRole("gridcell", { name: "A3 =SUM(A1:A2)" })).toHaveTextContent("=SUM(A1:A2)");
     expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveTextContent("10");
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Formulas shown");
 
-    await user.click(screen.getByRole("button", { name: "Show formula results" }));
+    await user.click(showFormulasToggle);
 
     expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveTextContent("30");
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
@@ -235,10 +253,13 @@ describe("App", () => {
     expect(screen.getByRole("tablist", { name: "Sheet tabs" })).toBeInTheDocument();
 
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Hide sheet tabs" }));
+    const sheetTabsToggle = screen.getByRole("button", { name: "Sheet tabs" });
+    expect(sheetTabsToggle).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(sheetTabsToggle);
 
     expect(screen.queryByRole("tablist", { name: "Sheet tabs" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show sheet tabs" })).toHaveClass("active-toolbar-button");
+    expect(sheetTabsToggle).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Sheet tabs hidden");
 
     await openRibbonTab(user, "Home");
@@ -247,8 +268,9 @@ describe("App", () => {
     expect(screen.queryByRole("tablist", { name: "Sheet tabs" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Added sheet");
 
+    // Switching ribbon tabs remounts the View controls, so re-query the toggle.
     await openRibbonTab(user, "View");
-    await user.click(screen.getByRole("button", { name: "Show sheet tabs" }));
+    await user.click(screen.getByRole("button", { name: "Sheet tabs" }));
 
     expect(sheetTabNames()).toEqual(["Sheet1", "Sheet2"]);
     expect(screen.getByRole("tab", { name: "Sheet2" })).toHaveAttribute("aria-selected", "true");
@@ -2103,6 +2125,39 @@ describe("App", () => {
     await user.click(boldButton);
     expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("gridcell", { name: "A2 plain" })).toHaveStyle({ fontWeight: "700" });
+  });
+
+  it("treats an explicit General number format the same as unformatted cells", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "1");
+    await user.click(screen.getByRole("gridcell", { name: "A1 1" }));
+    await user.selectOptions(screen.getByLabelText("Number format"), "currency");
+    await user.selectOptions(screen.getByLabelText("Number format"), "general");
+    await editCell(user, "A2", "2");
+
+    // A1 now stores numberFormat "general" explicitly while A2 has no format
+    // entry at all; the selection is effectively uniform, not mixed.
+    selectRange("A1 1", "A2 2");
+    expect(screen.getByLabelText("Number format")).toHaveValue("general");
+  });
+
+  it("auto-formats a typed date in a cell explicitly reset to General", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "B1", "2026-07-08");
+    const expected = screen.getByRole("gridcell", { name: addressNamePattern("B1") }).textContent;
+    // Sanity: the auto-applied date format rendered a date, not a raw serial.
+    expect(expected).not.toMatch(/^\d+$/);
+
+    await user.click(screen.getByRole("gridcell", { name: addressNamePattern("A1") }));
+    await user.selectOptions(screen.getByLabelText("Number format"), "currency");
+    await user.selectOptions(screen.getByLabelText("Number format"), "general");
+    await editCell(user, "A1", "2026-07-08");
+
+    expect(screen.getByRole("gridcell", { name: addressNamePattern("A1") }).textContent).toBe(expected);
   });
 
   it("marks panel-launching toolbar buttons as expanded while their panel is open", async () => {

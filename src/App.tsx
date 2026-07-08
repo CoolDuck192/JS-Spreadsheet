@@ -367,7 +367,8 @@ export default function App() {
     let nextWorkbook = setCellContent(workbook, activeSheet.id, address, value);
     // Excel behavior: typing a date into an unformatted cell applies a date format,
     // so the engine's date serial renders as a date instead of a raw number.
-    if (typeof value === "string" && isDateLikeEntry(value) && !getCellFormat(workbook, activeSheet.id, address).numberFormat) {
+    // An explicit "general" counts as unformatted, like everywhere else.
+    if (typeof value === "string" && isDateLikeEntry(value) && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
       const coord = parseCellAddress(address);
       nextWorkbook = setCellFormat(nextWorkbook, activeSheet.id, { start: coord, end: coord }, { numberFormat: "date" });
     }
@@ -2839,6 +2840,13 @@ function getAutoFillWriteRange(sourceRange: CellRange, targetRange: CellRange): 
 // fall back to anchor-only state (no mixed detection) instead of stalling.
 const SELECTION_FORMAT_SCAN_LIMIT = 20_000;
 
+// "general" is the absence of a number format: cells that store it explicitly
+// (after picking General in the ribbon) are identical in effect to cells with
+// no entry at all, and must not read as a mixed selection next to them.
+function effectiveNumberFormat(format: CellFormat): CellFormat["numberFormat"] {
+  return format.numberFormat === "general" ? undefined : format.numberFormat;
+}
+
 // Summarizes formats over the selection by scanning the sheet's SPARSE format
 // map (O(populated formats)), never the selection area itself — whole-column
 // selections cover 100k+ cells and must stay cheap.
@@ -2849,7 +2857,9 @@ function summarizeSelectionFormats(sheet: SheetModel, selection: CellRange): Sel
   const formats = sheet.formats ?? {};
   const entries = Object.entries(formats);
 
-  if (entries.length > SELECTION_FORMAT_SCAN_LIMIT) {
+  // Single cells (the common case while arrow-key navigating) resolve with a
+  // direct lookup instead of a scan.
+  if (cellCount === 1 || entries.length > SELECTION_FORMAT_SCAN_LIMIT) {
     const anchor = formats[formatCellAddress(normalized.start)] ?? {};
     return {
       bold: Boolean(anchor.bold),
@@ -2857,7 +2867,7 @@ function summarizeSelectionFormats(sheet: SheetModel, selection: CellRange): Sel
       wrapText: Boolean(anchor.wrapText),
       fontFamily: anchor.fontFamily,
       fontSize: anchor.fontSize,
-      numberFormat: anchor.numberFormat,
+      numberFormat: effectiveNumberFormat(anchor),
       horizontalAlign: anchor.horizontalAlign,
       verticalAlign: anchor.verticalAlign
     };
@@ -2910,7 +2920,7 @@ function summarizeSelectionFormats(sheet: SheetModel, selection: CellRange): Sel
     }
     fontFamily.add(format.fontFamily);
     fontSize.add(format.fontSize);
-    numberFormat.add(format.numberFormat);
+    numberFormat.add(effectiveNumberFormat(format));
     horizontalAlign.add(format.horizontalAlign);
     verticalAlign.add(format.verticalAlign);
   }

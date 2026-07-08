@@ -237,6 +237,8 @@ button {
 /* The selection disagrees on this toggle: a dash under the icon marks the
    Excel-style indeterminate state. */
 .mixed-toolbar-button {
+  /* Anchors the ::before dash; only compact buttons are positioned otherwise. */
+  position: relative;
   background: #eef4f0;
   color: #4a5a52;
 }
