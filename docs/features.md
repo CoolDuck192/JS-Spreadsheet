@@ -4,6 +4,10 @@
 
 Excel-like grid with Excel-sized limits (1,048,576 rows × 16,384 columns), row-window virtualization, frozen panes, merged cells, protected sheets/read-only cells, zoom, print view, and manual/auto-fit row and column sizing. Cell editing commits with Enter; Escape cancels; formula autocomplete follows Excel semantics (Tab accepts the highlighted suggestion, ↑/↓ navigate, ←/→ move the caret, Enter always commits what you typed).
 
+## Ribbon toolbar
+
+Excel-style tabbed ribbon (File, Home, Insert, Formulas, Data, Review, View) with the Home tab in Excel's group order: Clipboard, Font, Alignment, Number, Styles, Cells, Editing. The ribbon is **selection-aware**: toggles and selects reflect the whole selection rather than just the anchor cell, and a range that disagrees shows a mixed indicator (dash under the icon, a disabled *Mixed* select entry); toggling from mixed applies the format to the entire selection, like Excel. Font family and size controls store points (as in Excel) and round-trip through XLSX — fonts from imported files that aren't in the built-in list appear as ad-hoc options. Paste, AutoSum, and Borders are split buttons (primary action + keyboard-operable variant menu). Quick $ / % / , buttons apply number formats and reflect the active one. The View tab's Gridlines / Headers / Formula bar / Show formulas / Sheet tabs controls are true toggle buttons whose pressed state mirrors the feature. Icon buttons show instant tooltips with their keyboard shortcut, platform-aware: ⌘ on Apple platforms, Ctrl elsewhere (both bindings work on every platform).
+
 ## Formulas
 
 HyperFormula 3.3 engine (400+ Excel-compatible functions), configured for Excel parity: ISO (`2026-01-15`) and US (`01/15/2026`) date entry parses to date serials matching Excel's numbering exactly, typing a date auto-applies the date format, date arithmetic works (`=B1-A1`), and booleans display as `TRUE`/`FALSE`. Formula auditing shows precedents/dependents with jump navigation; a searchable function library and AutoSum helpers round it out.
