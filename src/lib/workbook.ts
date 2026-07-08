@@ -1448,12 +1448,12 @@ export function autoFillRange(
   const source = normalizeRange(sourceRange);
   const target = normalizeRange(targetRange);
 
-  if (isDownAutoFill(source, target)) {
-    return autoFillDown(workbook, sheetId, source, target);
+  if (isVerticalAutoFill(source, target)) {
+    return autoFillVertical(workbook, sheetId, source, target);
   }
 
-  if (isRightAutoFill(source, target)) {
-    return autoFillRight(workbook, sheetId, source, target);
+  if (isHorizontalAutoFill(source, target)) {
+    return autoFillHorizontal(workbook, sheetId, source, target);
   }
 
   return workbook;
@@ -2054,7 +2054,46 @@ function translateFillContent(
   return typeof content === "string" && content.startsWith("=") ? translateFormulaReferences(content, offset) : content;
 }
 
-function autoFillDown(
+// Resolves fill content for an offset from the source start. Series detection
+// order: named lists (Jan, Mon, ...), ISO dates, linear numbers, then text with
+// a trailing number ("Item 1" -> "Item 2"). Returns null when the source is not
+// a series, in which case callers tile-copy with formula translation. Offsets
+// may be negative (fill up / fill left extrapolate the series backwards).
+function createAutoFillSeriesResolver(contents: CellContent[]): (offset: number) => CellContent | null {
+  const namedListSeries = autoFillNamedListSeries(contents);
+  if (namedListSeries !== null) {
+    return (offset) =>
+      namedListSeries.values[
+        wrapSeriesIndex(namedListSeries.start + namedListSeries.step * offset, namedListSeries.values.length)
+      ];
+  }
+
+  const dateSeries = isoDateSeries(contents);
+  if (dateSeries !== null) {
+    return (offset) => isoDateFromDayNumber(dateSeries.start + dateSeries.step * offset);
+  }
+
+  const series = numericSeries(contents);
+  if (series !== null) {
+    return (offset) => series.start + series.step * offset;
+  }
+
+  const textSeries = textNumberSeries(contents);
+  if (textSeries !== null) {
+    return (offset) => {
+      const value = textSeries.start + textSeries.step * offset;
+      const digits =
+        value < 0
+          ? `-${String(-value).padStart(textSeries.padWidth, "0")}`
+          : String(value).padStart(textSeries.padWidth, "0");
+      return `${textSeries.prefix}${digits}`;
+    };
+  }
+
+  return () => null;
+}
+
+function autoFillVertical(
   workbook: WorkbookModel,
   sheetId: string,
   source: CellRange,
@@ -2064,33 +2103,32 @@ function autoFillDown(
 
   for (let column = source.start.column; column <= source.end.column; column += 1) {
     const sourceCells = collectAutoFillSource(workbook, sheetId, source.start.row, source.end.row, (row) => ({ row, column }));
-    const namedListSeries = autoFillNamedListSeries(sourceCells.map((cell) => cell.content));
-    const dateSeries = isoDateSeries(sourceCells.map((cell) => cell.content));
-    const series = numericSeries(sourceCells.map((cell) => cell.content));
-    for (let row = source.end.row + 1; row <= target.end.row; row += 1) {
-      const sourceIndex = (row - source.start.row) % sourceCells.length;
-      const sourceCell = sourceCells[sourceIndex];
+    const resolveSeries = createAutoFillSeriesResolver(sourceCells.map((cell) => cell.content));
+    const fillRow = (row: number) => {
+      const offset = row - source.start.row;
+      const sourceCell = sourceCells[wrapSeriesIndex(offset, sourceCells.length)];
       const content =
-        namedListSeries !== null
-          ? namedListSeries.values[wrapSeriesIndex(namedListSeries.start + namedListSeries.step * (row - source.start.row), namedListSeries.values.length)]
-          : dateSeries !== null
-          ? isoDateFromDayNumber(dateSeries.start + dateSeries.step * (row - source.start.row))
-          : series === null
-          ? translateFillContent(sourceCell.content, {
-              rowOffset: row - sourceCell.coord.row,
-              columnOffset: column - sourceCell.coord.column
-            })
-          : series.start + series.step * (row - source.start.row);
+        resolveSeries(offset) ??
+        translateFillContent(sourceCell.content, {
+          rowOffset: row - sourceCell.coord.row,
+          columnOffset: column - sourceCell.coord.column
+        });
       const targetAddress = formatCellAddress({ row, column });
       nextWorkbook = setCellContent(nextWorkbook, sheetId, targetAddress, content);
       nextWorkbook = applyAutoFillMetadata(nextWorkbook, sheetId, targetAddress, sourceCell);
+    };
+    for (let row = source.end.row + 1; row <= target.end.row; row += 1) {
+      fillRow(row);
+    }
+    for (let row = source.start.row - 1; row >= target.start.row; row -= 1) {
+      fillRow(row);
     }
   }
 
   return nextWorkbook;
 }
 
-function autoFillRight(
+function autoFillHorizontal(
   workbook: WorkbookModel,
   sheetId: string,
   source: CellRange,
@@ -2100,28 +2138,25 @@ function autoFillRight(
 
   for (let row = source.start.row; row <= source.end.row; row += 1) {
     const sourceCells = collectAutoFillSource(workbook, sheetId, source.start.column, source.end.column, (column) => ({ row, column }));
-    const namedListSeries = autoFillNamedListSeries(sourceCells.map((cell) => cell.content));
-    const dateSeries = isoDateSeries(sourceCells.map((cell) => cell.content));
-    const series = numericSeries(sourceCells.map((cell) => cell.content));
-    for (let column = source.end.column + 1; column <= target.end.column; column += 1) {
-      const sourceIndex = (column - source.start.column) % sourceCells.length;
-      const sourceCell = sourceCells[sourceIndex];
+    const resolveSeries = createAutoFillSeriesResolver(sourceCells.map((cell) => cell.content));
+    const fillColumn = (column: number) => {
+      const offset = column - source.start.column;
+      const sourceCell = sourceCells[wrapSeriesIndex(offset, sourceCells.length)];
       const content =
-        namedListSeries !== null
-          ? namedListSeries.values[
-              wrapSeriesIndex(namedListSeries.start + namedListSeries.step * (column - source.start.column), namedListSeries.values.length)
-            ]
-          : dateSeries !== null
-          ? isoDateFromDayNumber(dateSeries.start + dateSeries.step * (column - source.start.column))
-          : series === null
-          ? translateFillContent(sourceCell.content, {
-              rowOffset: row - sourceCell.coord.row,
-              columnOffset: column - sourceCell.coord.column
-            })
-          : series.start + series.step * (column - source.start.column);
+        resolveSeries(offset) ??
+        translateFillContent(sourceCell.content, {
+          rowOffset: row - sourceCell.coord.row,
+          columnOffset: column - sourceCell.coord.column
+        });
       const targetAddress = formatCellAddress({ row, column });
       nextWorkbook = setCellContent(nextWorkbook, sheetId, targetAddress, content);
       nextWorkbook = applyAutoFillMetadata(nextWorkbook, sheetId, targetAddress, sourceCell);
+    };
+    for (let column = source.end.column + 1; column <= target.end.column; column += 1) {
+      fillColumn(column);
+    }
+    for (let column = source.start.column - 1; column >= target.start.column; column -= 1) {
+      fillColumn(column);
     }
   }
 
@@ -2164,22 +2199,63 @@ function applyAutoFillMetadata(
   return setCellValidation(nextWorkbook, sheetId, targetRange, sourceCell.validation);
 }
 
-function isDownAutoFill(source: CellRange, target: CellRange): boolean {
+export function isVerticalAutoFill(source: CellRange, target: CellRange): boolean {
+  const sameColumns = target.start.column === source.start.column && target.end.column === source.end.column;
   return (
-    target.start.row === source.start.row &&
-    target.start.column === source.start.column &&
-    target.end.column === source.end.column &&
-    target.end.row > source.end.row
+    sameColumns &&
+    ((target.start.row === source.start.row && target.end.row > source.end.row) ||
+      (target.end.row === source.end.row && target.start.row < source.start.row))
   );
 }
 
-function isRightAutoFill(source: CellRange, target: CellRange): boolean {
+export function isHorizontalAutoFill(source: CellRange, target: CellRange): boolean {
+  const sameRows = target.start.row === source.start.row && target.end.row === source.end.row;
   return (
-    target.start.row === source.start.row &&
-    target.start.column === source.start.column &&
-    target.end.row === source.end.row &&
-    target.end.column > source.end.column
+    sameRows &&
+    ((target.start.column === source.start.column && target.end.column > source.end.column) ||
+      (target.end.column === source.end.column && target.start.column < source.start.column))
   );
+}
+
+// "Item 1", "Item 2" -> continue the trailing number; the text prefix must be
+// identical (and non-empty — pure numbers belong to numericSeries). A single
+// cell steps by 1, matching Excel. Zero-padded numbers keep their padding.
+function textNumberSeries(
+  contents: CellContent[]
+): { prefix: string; start: number; step: number; padWidth: number } | null {
+  if (contents.length === 0) {
+    return null;
+  }
+
+  const parsed = contents.map((content) => {
+    // Formulas must reach translateFillContent for reference translation, and
+    // numeric-looking strings ("1.5", "+3") belong to numericSeries/copy.
+    if (typeof content !== "string" || content.startsWith("=") || cellContentToNumber(content) !== null) {
+      return null;
+    }
+    const match = content.match(/^(.*?)(\d+)$/);
+    return match && match[1] !== "" ? { prefix: match[1], digits: match[2] } : null;
+  });
+  if (parsed.some((entry) => entry === null)) {
+    return null;
+  }
+
+  const entries = parsed as Array<{ prefix: string; digits: string }>;
+  const prefix = entries[0].prefix;
+  if (!entries.every((entry) => entry.prefix === prefix)) {
+    return null;
+  }
+
+  const numbers = entries.map((entry) => Number(entry.digits));
+  const step = entries.length === 1 ? 1 : numbers[1] - numbers[0];
+  if (!numbers.slice(1).every((value, index) => value - numbers[index] === step)) {
+    return null;
+  }
+
+  const padWidth = entries.every((entry) => entry.digits.length === entries[0].digits.length && entry.digits.startsWith("0"))
+    ? entries[0].digits.length
+    : 0;
+  return { prefix, start: numbers[0], step, padWidth };
 }
 
 function numericSeries(contents: CellContent[]): { start: number; step: number } | null {

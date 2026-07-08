@@ -182,6 +182,7 @@ test("toggles the formula bar while preserving direct cell formula editing", asy
   await expect(page.getByRole("gridcell", { name: "A2 20", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Show formula bar", exact: true }).click();
+  await page.getByRole("gridcell", { name: "A2 20", exact: true }).click();
 
   await expect(page.getByLabel("Formula bar", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=A1*2");
@@ -194,6 +195,7 @@ test("shows formula text in worksheet cells without changing formula editing", a
   await editCell(page, "A1", "10");
   await editCell(page, "A2", "20");
   await editCell(page, "A3", "=SUM(A1:A2)");
+  await page.getByRole("gridcell", { name: "A3 30", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "A3 30", exact: true })).toBeVisible();
   await expect(page.getByLabel("Formula input", { exact: true })).toHaveValue("=SUM(A1:A2)");
@@ -413,10 +415,10 @@ test("navigates formula suggestions from the keyboard", async ({ page }) => {
   await formulaInput.fill("=av");
   await expect(page.getByRole("option", { name: "AVERAGE", exact: true })).toHaveAttribute("aria-selected", "true");
 
-  await formulaInput.press("ArrowRight");
+  await formulaInput.press("ArrowDown");
   await expect(page.getByRole("option", { name: "AVEDEV", exact: true })).toHaveAttribute("aria-selected", "true");
 
-  await formulaInput.press("Enter");
+  await formulaInput.press("Tab");
   await expect(formulaInput).toHaveValue("=AVEDEV(");
 
   await page.getByRole("gridcell", { name: "A1", exact: true }).dblclick();
@@ -424,7 +426,7 @@ test("navigates formula suggestions from the keyboard", async ({ page }) => {
   await cellEditor.fill("=av");
   await expect(page.getByRole("option", { name: "AVERAGE", exact: true })).toHaveAttribute("aria-selected", "true");
 
-  await cellEditor.press("ArrowRight");
+  await cellEditor.press("ArrowDown");
   await expect(page.getByRole("option", { name: "AVEDEV", exact: true })).toHaveAttribute("aria-selected", "true");
 
   await cellEditor.press("Tab");
@@ -440,7 +442,7 @@ test("tracks hovered formula suggestions as the active choice", async ({ page })
   await page.getByRole("option", { name: "AVEDEV", exact: true }).hover();
   await expect(page.getByRole("option", { name: "AVEDEV", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(formulaInput).toHaveAttribute("aria-activedescendant", "formula-bar-suggestions-option-avedev");
-  await formulaInput.press("Enter");
+  await formulaInput.press("Tab");
   await expect(formulaInput).toHaveValue("=AVEDEV(");
 
   await page.getByRole("gridcell", { name: "A1", exact: true }).dblclick();
@@ -1102,16 +1104,18 @@ test("auto-fills a numeric series from the selection handle", async ({ page }) =
 test("auto-fills an ISO date series from the selection handle", async ({ page }) => {
   await page.goto("/");
 
+  // Date entries get a date number format on commit, so cells display the
+  // formatted date while the underlying content stays the ISO string.
   await editCell(page, "A1", "2026-06-28");
   await editCell(page, "A2", "2026-06-30");
-  await selectRange(page, "A1 2026-06-28", "A2 2026-06-30");
+  await selectRange(page, "A1 Jun 28, 2026", "A2 Jun 30, 2026");
 
   await page.getByRole("button", { name: "AutoFill selection", exact: true }).dragTo(
     page.getByRole("gridcell", { name: "A4", exact: true })
   );
 
-  await expect(page.getByRole("gridcell", { name: "A3 2026-07-02", exact: true })).toBeVisible();
-  await expect(page.getByRole("gridcell", { name: "A4 2026-07-04", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A3 Jul 2, 2026", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A4 Jul 4, 2026", exact: true })).toBeVisible();
   await expect(page.getByLabel("Status", { exact: true })).toContainText("AutoFilled A1:A4");
 });
 
@@ -1147,6 +1151,66 @@ test("auto-fills month names from the selection handle", async ({ page }) => {
   await expect(page.getByRole("gridcell", { name: "A3 Mar", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "A4 Apr", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "A5 May", exact: true })).toBeVisible();
+});
+
+test("auto-fills upward and clears cells when dragging the handle back inside", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A3", "3");
+  await editCell(page, "A4", "4");
+  await selectRange(page, "A3 3", "A4 4");
+
+  await page.getByRole("button", { name: "AutoFill selection", exact: true }).dragTo(
+    page.getByRole("gridcell", { name: "A1", exact: true })
+  );
+
+  await expect(page.getByRole("gridcell", { name: "A2 2", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A1 1", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("AutoFilled A1:A4");
+
+  // Dragging the handle back inside the selection shrinks it, clearing the rest.
+  await selectRange(page, "A1 1", "A4 4");
+  await page.getByRole("button", { name: "AutoFill selection", exact: true }).dragTo(
+    page.getByRole("gridcell", { name: "A2 2", exact: true })
+  );
+
+  await expect(page.getByRole("gridcell", { name: "A3", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "A4", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Cleared A3:A4");
+});
+
+test("dragging from near a selected cell's corner starts a selection, not a fill", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A5", "precious");
+  await editCell(page, "B5", "data");
+
+  await selectRange(page, "D4", "E6");
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("D4:E6");
+
+  // Cell drags must not create a native browser text selection: in DOM order it
+  // would span unrelated data cells and headers, painting the browser's own
+  // highlight over them and hijacking the next drag via native drag-and-drop.
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+
+  // Press inside E6 a few pixels from its bottom-right corner — close to the
+  // fill handle, but still on the cell — and drag left across the data. This
+  // must start a NEW selection, not grab the fill handle and overwrite A5:B5.
+  const e6 = await page.getByRole("gridcell", { name: "E6", exact: true }).boundingBox();
+  const a6 = await page.getByRole("gridcell", { name: "A6", exact: true }).boundingBox();
+  expect(e6).not.toBeNull();
+  expect(a6).not.toBeNull();
+  await page.mouse.move(e6!.x + e6!.width - 7, e6!.y + e6!.height - 7);
+  await page.mouse.down();
+  await page.mouse.move(a6!.x + a6!.width / 2, a6!.y + a6!.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  // The corner drag itself must also leave no native text selection behind.
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("A6:E6");
+  await expect(page.getByLabel("Status", { exact: true })).not.toContainText("AutoFilled");
+  await expect(page.getByRole("gridcell", { name: "A5 precious", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "B5 data", exact: true })).toBeVisible();
 });
 
 test("blocks AutoFill when protected target cells are read-only", async ({ page }) => {
@@ -1221,6 +1285,7 @@ test("adds and removes cell hyperlinks", async ({ page }) => {
   await page.goto("/");
 
   await editCell(page, "A1", "Report");
+  await page.getByRole("gridcell", { name: "A1 Report", exact: true }).click();
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("Cell link URL");
     await dialog.accept("example.com/report");
@@ -1587,6 +1652,7 @@ test("clears hyperlinks from the context menu without clearing content", async (
   await page.goto("/");
 
   await editCell(page, "A1", "Report");
+  await page.getByRole("gridcell", { name: "A1 Report", exact: true }).click();
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("Cell link URL");
     await dialog.accept("example.com/report");
@@ -1714,6 +1780,7 @@ test("clears comments from the context menu without clearing content", async ({ 
   await page.goto("/");
 
   await editCell(page, "A1", "Forecast");
+  await page.getByRole("gridcell", { name: "A1 Forecast", exact: true }).click();
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("Cell comment");
     await dialog.accept("Review the forecast");

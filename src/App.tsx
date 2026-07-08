@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChartPanel } from "./components/ChartPanel";
 import { CellContextMenu } from "./components/CellContextMenu";
 import { ConditionalFormattingPanel } from "./components/ConditionalFormattingPanel";
@@ -9,7 +9,7 @@ import { FormulaAuditPanel, type FormulaAuditReference } from "./components/Form
 import { FormulaBar } from "./components/FormulaBar";
 import { FunctionLibraryPanel } from "./components/FunctionLibraryPanel";
 import { GoToPanel } from "./components/GoToPanel";
-import { Grid } from "./components/Grid";
+import { Grid, type CommitEditMove, type GridScrollApi } from "./components/Grid";
 import { NamedRangesPanel } from "./components/NamedRangesPanel";
 import { PivotPanel } from "./components/PivotPanel";
 import { SheetCharts } from "./components/SheetCharts";
@@ -19,6 +19,7 @@ import { Toolbar } from "./components/Toolbar";
 import type {
   BorderPreset,
   CellContent,
+  CellCoord,
   CellFormat,
   CellRange,
   DataValidationRule,
@@ -37,7 +38,8 @@ import {
   parseCellAddress,
   parseRangeAddress
 } from "./lib/addressing";
-import { createAutoFitColumnPlan, createAutoFitRowPlan } from "./lib/autoFit";
+import { createAutoFitColumnPlan, createAutoFitRowPlan, textToAutoFitColumnWidth } from "./lib/autoFit";
+import { isRowVisibleForFilter } from "./lib/filters";
 import { createAutoSumPlan, formatRangeAddress, type AutoFunctionName } from "./lib/autoSum";
 import { createChartData } from "./lib/charts";
 import { parseCsv, serializeCsv } from "./lib/csv";
@@ -57,6 +59,8 @@ import {
   addSheetChart,
   addConditionalFormatRule,
   autoFillRange,
+  isHorizontalAutoFill,
+  isVerticalAutoFill,
   clearCellComments,
   clearDirectCellFormats,
   clearCellFormats,
@@ -199,6 +203,10 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
+  const gridApiRef = useRef<GridScrollApi | null>(null);
+  const registerGridScrollApi = useCallback((api: GridScrollApi) => {
+    gridApiRef.current = api;
+  }, []);
 
   const workbook = history.present;
   const activeSheet = getActiveSheet(workbook);
@@ -246,6 +254,10 @@ export default function App() {
     [activeSheet, formulaEngine, isPivotPanelOpen, selection]
   );
   const pivotHeaders = useMemo(() => getPivotHeaders(pivotSourceRows), [pivotSourceRows]);
+  const pivotSourceLabel = useMemo(
+    () => (isPivotPanelOpen ? formatSelectionAddress(inferSourceRange(activeSheet, selection)) : undefined),
+    [activeSheet, isPivotPanelOpen, selection]
+  );
   const dataValidationRules = useMemo(
     () => summarizeDataValidationRules(activeSheet.validations ?? {}),
     [activeSheet.validations]
@@ -393,13 +405,16 @@ export default function App() {
     const normalizedTarget = normalizeRange(targetRange);
     const targetLabel = formatSelectionAddress(normalizedTarget);
     setSelection(normalizedTarget);
+    gridApiRef.current?.ensureCellVisible(normalizedTarget.start.row, normalizedTarget.start.column);
     setStatus(`Selected ${targetLabel}`);
   }
 
   function selectNamedRange(namedRange: NamedRange) {
     const nextWorkbook = setActiveSheet(workbook, namedRange.sheetId);
     setHistory({ ...history, present: nextWorkbook });
-    setSelection(normalizeRange(namedRange.range));
+    const normalizedTarget = normalizeRange(namedRange.range);
+    setSelection(normalizedTarget);
+    gridApiRef.current?.ensureCellVisible(normalizedTarget.start.row, normalizedTarget.start.column);
     setStatus(`Selected ${namedRange.name}`);
   }
 
@@ -922,6 +937,62 @@ export default function App() {
     commitWorkbook(nextWorkbook, `Auto-fit ${pluralize(plan.length, "column")}`);
   }
 
+  function handleAutoFitColumn(column: number) {
+    if (!ensureSheetStructureEditable()) {
+      return;
+    }
+
+    const columnRange = { start: { row: 0, column }, end: { row: activeSheet.rowCount - 1, column } };
+    const plan = createAutoFitColumnPlan(activeSheet, columnRange, (address) => getVisibleCellText(address));
+    let nextWorkbook = workbook;
+    for (const item of plan) {
+      nextWorkbook = setColumnWidth(nextWorkbook, activeSheet.id, item.column, item.width);
+    }
+
+    if (nextWorkbook === workbook) {
+      setStatus(`Column ${columnIndexToName(column)} already fits`);
+      return;
+    }
+
+    commitWorkbook(nextWorkbook, `Auto-fit column ${columnIndexToName(column)}`);
+  }
+
+  function handleAutoFitRow(row: number) {
+    if (!ensureSheetStructureEditable()) {
+      return;
+    }
+
+    const rowRangeTarget = { start: { row, column: 0 }, end: { row, column: activeSheet.columnCount - 1 } };
+    const plan = createAutoFitRowPlan(activeSheet, rowRangeTarget, (address) => getVisibleCellText(address));
+    let nextWorkbook = workbook;
+    for (const item of plan) {
+      nextWorkbook = setRowHeight(nextWorkbook, activeSheet.id, item.row, item.height);
+    }
+
+    if (nextWorkbook === workbook) {
+      setStatus(`Row ${row + 1} already fits`);
+      return;
+    }
+
+    commitWorkbook(nextWorkbook, `Auto-fit row ${row + 1}`);
+  }
+
+  function commitMoveFrom(address: string, move: CommitEditMove) {
+    const origin = parseCellAddress(address);
+    const delta =
+      move === "down"
+        ? { row: 1, column: 0 }
+        : move === "up"
+        ? { row: -1, column: 0 }
+        : move === "right"
+        ? { row: 0, column: 1 }
+        : { row: 0, column: -1 };
+    const target = stepPastHidden(activeSheet, origin, delta, isRowHiddenAt);
+    setSelection({ start: target, end: target });
+    gridApiRef.current?.ensureCellVisible(target.row, target.column);
+    gridScrollRef.current?.focus({ preventScroll: true });
+  }
+
   function handleAutoFitRows() {
     if (!ensureSheetStructureEditable()) {
       return;
@@ -1112,7 +1183,17 @@ export default function App() {
   }
 
   function openCellContextMenu(event: { address: string; row: number; column: number; x: number; y: number }) {
-    setSelection({ start: { row: event.row, column: event.column }, end: { row: event.row, column: event.column } });
+    // Excel keeps a multi-cell selection when right-clicking inside it, so the
+    // menu can act on the whole range; clicking outside collapses to that cell.
+    const normalized = normalizeRange(selection);
+    const isInsideSelection =
+      event.row >= normalized.start.row &&
+      event.row <= normalized.end.row &&
+      event.column >= normalized.start.column &&
+      event.column <= normalized.end.column;
+    if (!isInsideSelection) {
+      setSelection({ start: { row: event.row, column: event.column }, end: { row: event.row, column: event.column } });
+    }
     setEditingCell(null);
     setCellContextMenu({ address: event.address, x: event.x, y: event.y });
   }
@@ -1132,23 +1213,70 @@ export default function App() {
   }
 
   function handleAutoFill(sourceRange: CellRange, targetRange: CellRange) {
-    const writeRange = getAutoFillWriteRange(sourceRange, targetRange);
+    const source = normalizeRange(sourceRange);
+    const target = normalizeRange(targetRange);
+
+    // Dragging the fill handle back inside the source shrinks the range: the
+    // cells left behind are cleared, matching Excel.
+    const isShrink =
+      target.start.row === source.start.row &&
+      target.start.column === source.start.column &&
+      target.end.row <= source.end.row &&
+      target.end.column <= source.end.column &&
+      (target.end.row < source.end.row || target.end.column < source.end.column);
+    if (isShrink) {
+      const clearTarget =
+        target.end.row < source.end.row
+          ? { start: { row: target.end.row + 1, column: source.start.column }, end: source.end }
+          : { start: { row: source.start.row, column: target.end.column + 1 }, end: source.end };
+      if (!ensureEditableRange(clearTarget)) {
+        return;
+      }
+      setSelection(target);
+      commitWorkbook(clearRange(workbook, activeSheet.id, clearTarget), `Cleared ${formatSelectionAddress(clearTarget)}`);
+      return;
+    }
+
+    const writeRange = getAutoFillWriteRange(source, target);
     if (!writeRange) {
-      setStatus("Drag AutoFill down or right");
+      setStatus("Drag the fill handle along one direction");
       return;
     }
     if (!ensureEditableRange(writeRange)) {
       return;
     }
 
-    const normalizedTarget = normalizeRange(targetRange);
-    const targetLabel = formatSelectionAddress(normalizedTarget);
-    const nextWorkbook = autoFillRange(workbook, activeSheet.id, sourceRange, normalizedTarget);
-    setSelection(normalizedTarget);
+    const targetLabel = formatSelectionAddress(target);
+    const nextWorkbook = autoFillRange(workbook, activeSheet.id, source, target);
+    setSelection(target);
     commitWorkbook(nextWorkbook, `AutoFilled ${targetLabel}`);
     if (nextWorkbook === workbook) {
       setStatus(`AutoFilled ${targetLabel}`);
     }
+  }
+
+  function handleAutoFillDoubleClick() {
+    // Excel: double-clicking the fill handle fills down as far as the adjacent
+    // columns' contiguous data extends.
+    const source = normalizeRange(selection);
+    let extent = source.end.row;
+    for (const column of [source.start.column - 1, source.end.column + 1]) {
+      if (column < 0 || column >= activeSheet.columnCount) {
+        continue;
+      }
+      let row = source.end.row + 1;
+      while (row < activeSheet.rowCount && !isBlankCell(workbook, activeSheet.id, row, column)) {
+        row += 1;
+      }
+      extent = Math.max(extent, row - 1);
+    }
+
+    if (extent <= source.end.row) {
+      setStatus("No adjacent data to fill down to");
+      return;
+    }
+
+    handleAutoFill(source, { start: source.start, end: { row: extent, column: source.end.column } });
   }
 
   function handleLockCells() {
@@ -1223,11 +1351,42 @@ export default function App() {
       nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(0, pivotRows[0].length), {
         bold: true,
         textColor: "#17634a",
-        backgroundColor: "#eaf7f2"
+        backgroundColor: "#eaf7f2",
+        borders: { bottom: { style: "thin", color: "#17634a" } }
       });
       nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(pivotRows.length - 1, pivotRows[0].length), {
         bold: true,
-        backgroundColor: "#f1f5f8"
+        backgroundColor: "#f1f5f8",
+        borders: { top: { style: "thin", color: "#94a3b8" } }
+      });
+      // Value columns read as numbers: right-align them like Excel's pivot output.
+      const valueColumnStart = config.rowFields.length;
+      const valueColumnEnd = pivotRows[0].length - 1;
+      if (valueColumnEnd >= valueColumnStart && pivotRows.length > 1) {
+        nextWorkbook = setCellFormat(
+          nextWorkbook,
+          pivotSheetId,
+          {
+            start: { row: 1, column: valueColumnStart },
+            end: { row: pivotRows.length - 1, column: valueColumnEnd }
+          },
+          { horizontalAlign: "right" }
+        );
+      }
+      // Size each pivot column to its widest cell so nothing arrives truncated.
+      // Incremental max: spreading all rows into Math.max overflows the call
+      // stack on very large pivot outputs.
+      for (let column = 0; column < pivotRows[0].length; column += 1) {
+        let width = 0;
+        for (const tableRow of pivotRows) {
+          width = Math.max(width, textToAutoFitColumnWidth(String(tableRow[column] ?? "")));
+        }
+        nextWorkbook = setColumnWidth(nextWorkbook, pivotSheetId, column, width);
+      }
+      // Keep the pivot's header row visible while scrolling long outputs.
+      nextWorkbook = setSheetFreezePanes(nextWorkbook, pivotSheetId, {
+        freezeTopRow: true,
+        freezeFirstColumn: false
       });
 
       commitWorkbook(nextWorkbook, `Created ${pivotName}`);
@@ -1391,19 +1550,39 @@ export default function App() {
     if (event.defaultPrevented || isEditableEventTarget(event.target)) {
       return;
     }
+    // Keep the toolbar keyboard-operable: Enter/Space on a focused control must
+    // activate it, not start a cell edit. Everything else (arrows, shortcuts)
+    // stays global so grid navigation works right after clicking a button.
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      event.target instanceof Element &&
+      event.target.closest("button, select, a, [role='tab']")
+    ) {
+      return;
+    }
     handleKeyCommand(event);
   }
 
   function handleKeyCommand(event: React.KeyboardEvent<HTMLElement>) {
-    if (editingCell) {
+    // Keys already consumed by grid-internal widgets (cell editor, validation
+    // dropdowns, AutoFilter menus) must not double-trigger grid commands.
+    if (editingCell || event.defaultPrevented || isEditableEventTarget(event.target)) {
       return;
     }
 
     const isCommand = event.metaKey || event.ctrlKey;
+    const isGridEvent = Boolean(gridScrollRef.current?.contains(event.target as Node));
     if (event.key === "Escape" && formatPainter) {
       event.preventDefault();
       setFormatPainter(null);
       setStatus("Format painter canceled");
+      return;
+    }
+
+    if (event.key === "Escape" && richClipboard) {
+      event.preventDefault();
+      setRichClipboard(null);
+      setStatus("Copy canceled");
       return;
     }
 
@@ -1487,13 +1666,19 @@ export default function App() {
       return;
     }
 
+    if (isCommand && event.key.toLowerCase() === "a" && isGridEvent) {
+      event.preventDefault();
+      selectCurrentRegionThenSheet();
+      return;
+    }
+
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       handleClearSelection();
       return;
     }
 
-    if (event.key === "Enter") {
+    if (event.key === "Enter" || event.key === "F2") {
       event.preventDefault();
       if (!ensureEditableAddress(activeAddress)) {
         return;
@@ -1502,9 +1687,107 @@ export default function App() {
       return;
     }
 
+    if (event.key === "Tab" && !isCommand && isGridEvent) {
+      event.preventDefault();
+      const target = stepPastHidden(activeSheet, selection.start, { row: 0, column: event.shiftKey ? -1 : 1 });
+      moveActiveCellTo(target);
+      return;
+    }
+
+    if (event.key === "Home" && isGridEvent) {
+      event.preventDefault();
+      const baseRow = isCommand ? 0 : selection.start.row;
+      // Home must not land on hidden rows/columns any more than arrows may.
+      const hiddenColumns = activeSheet.hiddenColumns ?? {};
+      const column = hiddenColumns["0"]
+        ? stepPastHidden(activeSheet, { row: baseRow, column: 0 }, { row: 0, column: 1 }).column
+        : 0;
+      moveActiveCellTo(snapRowVisible({ row: baseRow, column }, 1));
+      return;
+    }
+
+    if (event.key === "End" && isCommand && isGridEvent) {
+      event.preventDefault();
+      moveActiveCellTo(snapRowVisible(getUsedBounds(activeSheet), -1));
+      return;
+    }
+
+    if ((event.key === "PageDown" || event.key === "PageUp") && isGridEvent) {
+      event.preventDefault();
+      const zoomFactor = zoomLevel / 100;
+      const viewportHeight = (gridScrollRef.current?.clientHeight ?? 560) / zoomFactor;
+      const pageRows = Math.max(1, Math.floor((viewportHeight - 28) / 28));
+      const rowDelta = event.key === "PageDown" ? pageRows : -pageRows;
+      if (event.shiftKey) {
+        const focus = snapRowVisible(
+          { row: clamp(selection.end.row + rowDelta, 0, activeSheet.rowCount - 1), column: selection.end.column },
+          rowDelta > 0 ? 1 : -1
+        );
+        setSelection({ start: selection.start, end: focus });
+        gridApiRef.current?.ensureCellVisible(focus.row, focus.column);
+        return;
+      }
+      moveActiveCellTo(
+        snapRowVisible(
+          { row: clamp(selection.start.row + rowDelta, 0, activeSheet.rowCount - 1), column: selection.start.column },
+          rowDelta > 0 ? 1 : -1
+        )
+      );
+      return;
+    }
+
+    if (isCommand && event.key === " " && isGridEvent) {
+      event.preventDefault();
+      const normalized = normalizeRange(selection);
+      setSelection({
+        start: { row: 0, column: normalized.start.column },
+        end: { row: activeSheet.rowCount - 1, column: normalized.end.column }
+      });
+      return;
+    }
+
+    if (!isCommand && event.shiftKey && event.key === " " && isGridEvent) {
+      event.preventDefault();
+      const normalized = normalizeRange(selection);
+      setSelection({
+        start: { row: normalized.start.row, column: 0 },
+        end: { row: normalized.end.row, column: activeSheet.columnCount - 1 }
+      });
+      return;
+    }
+
     if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
-      moveSelection(event.key);
+      const delta = {
+        ArrowDown: { row: 1, column: 0 },
+        ArrowUp: { row: -1, column: 0 },
+        ArrowLeft: { row: 0, column: -1 },
+        ArrowRight: { row: 0, column: 1 }
+      }[event.key]!;
+
+      if (isCommand) {
+        // Ctrl+Arrow jumps to the data-region edge; with Shift the selection
+        // extends from the anchor instead of collapsing.
+        const origin = event.shiftKey ? selection.end : selection.start;
+        const jumped = jumpToDataEdge(workbook, activeSheet, origin, delta);
+        const target = delta.row !== 0 ? snapRowVisible(jumped, delta.row > 0 ? 1 : -1) : jumped;
+        if (event.shiftKey) {
+          setSelection({ start: selection.start, end: target });
+        } else {
+          setSelection({ start: target, end: target });
+        }
+        gridApiRef.current?.ensureCellVisible(target.row, target.column);
+        return;
+      }
+
+      if (event.shiftKey) {
+        const target = stepPastHidden(activeSheet, selection.end, delta, isRowHiddenAt);
+        setSelection({ start: selection.start, end: target });
+        gridApiRef.current?.ensureCellVisible(target.row, target.column);
+        return;
+      }
+
+      moveActiveCellTo(stepPastHidden(activeSheet, selection.start, delta, isRowHiddenAt));
       return;
     }
 
@@ -1517,23 +1800,62 @@ export default function App() {
     }
   }
 
-  function moveSelection(key: string) {
-    const delta = {
-      ArrowDown: { row: 1, column: 0 },
-      ArrowUp: { row: -1, column: 0 },
-      ArrowLeft: { row: 0, column: -1 },
-      ArrowRight: { row: 0, column: 1 }
-    }[key];
+  function moveActiveCellTo(target: CellCoord) {
+    setSelection({ start: target, end: target });
+    gridApiRef.current?.ensureCellVisible(target.row, target.column);
+  }
 
-    if (!delta) {
-      return;
+  // A row is hidden when explicitly hidden on the sheet OR excluded by an
+  // active filter — keyboard navigation must skip both, or the active cell
+  // lands somewhere invisible.
+  function isRowHiddenAt(row: number): boolean {
+    if ((activeSheet.hiddenRows ?? {})[String(row)]) {
+      return true;
     }
+    const filters = activeSheet.filters ?? [];
+    if (filters.length === 0) {
+      return false;
+    }
+    return !filters.every((filter) =>
+      isRowVisibleForFilter(row, filter, (filterRow, filterColumn) =>
+        formulaEngine.getDisplayValue(activeSheet.id, formatCellAddress({ row: filterRow, column: filterColumn }))
+      )
+    );
+  }
 
-    const next = {
-      row: clamp(selection.start.row + delta.row, 0, activeSheet.rowCount - 1),
-      column: clamp(selection.start.column + delta.column, 0, activeSheet.columnCount - 1)
+  // Walks a landing target off hidden rows in the movement direction, falling
+  // back the other way at the sheet edge.
+  function snapRowVisible(target: CellCoord, direction: 1 | -1): CellCoord {
+    let row = target.row;
+    while (row >= 0 && row < activeSheet.rowCount && isRowHiddenAt(row)) {
+      row += direction;
+    }
+    if (row < 0 || row >= activeSheet.rowCount) {
+      row = target.row;
+      while (row >= 0 && row < activeSheet.rowCount && isRowHiddenAt(row)) {
+        row -= direction;
+      }
+      if (row < 0 || row >= activeSheet.rowCount) {
+        return target;
+      }
+    }
+    return { row, column: target.column };
+  }
+
+  function selectCurrentRegionThenSheet() {
+    const wholeSheet = {
+      start: { row: 0, column: 0 },
+      end: { row: activeSheet.rowCount - 1, column: activeSheet.columnCount - 1 }
     };
-    setSelection({ start: next, end: next });
+    const region = normalizeRange(expandDataRegion(workbook, activeSheet, selection.start));
+    const normalized = normalizeRange(selection);
+    const regionIsSingleCell = region.start.row === region.end.row && region.start.column === region.end.column;
+    const alreadyRegionSelected =
+      normalized.start.row === region.start.row &&
+      normalized.start.column === region.start.column &&
+      normalized.end.row === region.end.row &&
+      normalized.end.column === region.end.column;
+    setSelection(regionIsSingleCell || alreadyRegionSelected ? wholeSheet : region);
   }
 
   function handleAddSheet() {
@@ -1791,6 +2113,7 @@ export default function App() {
       matches.find((match) => match.row > current.row || (match.row === current.row && match.column > current.column)) ??
       matches[0];
     setSelection({ start: { row: nextMatch.row, column: nextMatch.column }, end: { row: nextMatch.row, column: nextMatch.column } });
+    gridApiRef.current?.ensureCellVisible(nextMatch.row, nextMatch.column);
     setStatus(`Found ${nextMatch.address}`);
   }
 
@@ -2143,6 +2466,8 @@ export default function App() {
         ) : null}
         <PivotPanel
           headers={pivotHeaders}
+          sourceLabel={pivotSourceLabel}
+          sourceRowCount={Math.max(0, pivotSourceRows.length - 1)}
           isOpen={isPivotPanelOpen}
           onClose={() => setPivotPanelOpen(false)}
           onCreate={handleCreatePivotTable}
@@ -2191,6 +2516,7 @@ export default function App() {
           formulaEngine={formulaEngine}
           selection={selection}
           editingCell={editingCell}
+          copiedRange={richClipboard && richClipboard.sourceSheetId === activeSheet.id ? richClipboard.range.range : null}
           zoomLevel={zoomLevel}
           showGridlines={showGridlines}
           showHeaders={showHeaders}
@@ -2215,21 +2541,33 @@ export default function App() {
             setEditingCell({ address, value: String(getCellContent(workbook, activeSheet.id, address) ?? "") });
           }}
           onEditValueChange={(value) => setEditingCell((current) => (current ? { ...current, value } : current))}
-          onCommitEdit={(address, value) => {
+          onCommitEdit={(address, value, move) => {
             if (commitCell(address, value)) {
               setEditingCell(null);
+              if (move) {
+                commitMoveFrom(address, move);
+              }
             }
           }}
-          onCancelEdit={() => setEditingCell(null)}
+          onCancelEdit={() => {
+            setEditingCell(null);
+            // Escape came from the keyboard: hand focus back to the grid so
+            // arrows/typing keep working instead of falling to document.body.
+            gridScrollRef.current?.focus({ preventScroll: true });
+          }}
           onPasteText={pasteText}
           onKeyCommand={handleKeyCommand}
           onAutoFill={handleAutoFill}
+          onAutoFillDoubleClick={handleAutoFillDoubleClick}
           onCellContextMenu={openCellContextMenu}
           onAutoFilterColumn={applyAutoFilterColumn}
           onClearAutoFilterColumn={clearAutoFilterColumn}
           onSortAutoFilterColumn={sortAutoFilterColumn}
           onColumnResize={handleColumnResize}
           onRowResize={handleRowResize}
+          onColumnAutoFit={handleAutoFitColumn}
+          onRowAutoFit={handleAutoFitRow}
+          onRegisterScrollApi={registerGridScrollApi}
         />
         {cellContextMenu ? (
           <CellContextMenu
@@ -2435,35 +2773,226 @@ function autoFunctionLabel(functionName: AutoFunctionName): string {
   return labels[functionName];
 }
 
+// Direction validity is delegated to the same predicates autoFillRange uses,
+// so "what handleAutoFill validates" and "what the engine fills" cannot diverge.
 function getAutoFillWriteRange(sourceRange: CellRange, targetRange: CellRange): CellRange | null {
   const source = normalizeRange(sourceRange);
   const target = normalizeRange(targetRange);
 
-  if (
-    target.start.row === source.start.row &&
-    target.start.column === source.start.column &&
-    target.end.column === source.end.column &&
-    target.end.row > source.end.row
-  ) {
-    return {
-      start: { row: source.end.row + 1, column: source.start.column },
-      end: { row: target.end.row, column: source.end.column }
-    };
+  if (isVerticalAutoFill(source, target)) {
+    return target.end.row > source.end.row
+      ? {
+          start: { row: source.end.row + 1, column: source.start.column },
+          end: { row: target.end.row, column: source.end.column }
+        }
+      : {
+          start: { row: target.start.row, column: source.start.column },
+          end: { row: source.start.row - 1, column: source.end.column }
+        };
   }
 
-  if (
-    target.start.row === source.start.row &&
-    target.start.column === source.start.column &&
-    target.end.row === source.end.row &&
-    target.end.column > source.end.column
-  ) {
-    return {
-      start: { row: source.start.row, column: source.end.column + 1 },
-      end: { row: source.end.row, column: target.end.column }
-    };
+  if (isHorizontalAutoFill(source, target)) {
+    return target.end.column > source.end.column
+      ? {
+          start: { row: source.start.row, column: source.end.column + 1 },
+          end: { row: source.end.row, column: target.end.column }
+        }
+      : {
+          start: { row: source.start.row, column: target.start.column },
+          end: { row: source.end.row, column: source.start.column - 1 }
+        };
   }
 
   return null;
+}
+
+function isBlankCell(workbook: WorkbookModel, sheetId: string, row: number, column: number): boolean {
+  const content = getCellContent(workbook, sheetId, formatCellAddress({ row, column }));
+  return content === null || String(content).trim() === "";
+}
+
+// Excel Ctrl+Arrow: from inside a data run, jump to the run's edge; from an
+// empty cell (or a run edge), jump to the next populated cell, else the sheet edge.
+function jumpToDataEdge(
+  workbook: WorkbookModel,
+  sheet: SheetModel,
+  coord: CellCoord,
+  delta: { row: number; column: number }
+): CellCoord {
+  const maxRow = sheet.rowCount - 1;
+  const maxColumn = sheet.columnCount - 1;
+  const step = (from: CellCoord): CellCoord => ({
+    row: Math.min(Math.max(from.row + delta.row, 0), maxRow),
+    column: Math.min(Math.max(from.column + delta.column, 0), maxColumn)
+  });
+  const samePosition = (left: CellCoord, right: CellCoord) => left.row === right.row && left.column === right.column;
+  const isFilled = (position: CellCoord) => !isBlankCell(workbook, sheet.id, position.row, position.column);
+
+  let current = coord;
+  const next = step(current);
+  if (samePosition(next, current)) {
+    return current;
+  }
+
+  if (isFilled(current) && isFilled(next)) {
+    current = next;
+    while (true) {
+      const following = step(current);
+      if (samePosition(following, current) || !isFilled(following)) {
+        return current;
+      }
+      current = following;
+    }
+  }
+
+  current = next;
+  while (!isFilled(current)) {
+    const following = step(current);
+    if (samePosition(following, current)) {
+      return current;
+    }
+    current = following;
+  }
+  return current;
+}
+
+// One arrow-key step that skips rows/columns hidden via the sheet model (and,
+// through the optional predicate, filter-hidden rows), so the active cell
+// never lands somewhere invisible. Stays put at the sheet edge.
+function stepPastHidden(
+  sheet: SheetModel,
+  coord: CellCoord,
+  delta: { row: number; column: number },
+  isRowHidden?: (row: number) => boolean
+): CellCoord {
+  if (delta.row !== 0) {
+    const hiddenRows = sheet.hiddenRows ?? {};
+    const rowHidden = isRowHidden ?? ((row: number) => Boolean(hiddenRows[String(row)]));
+    let next = coord.row + delta.row;
+    while (next >= 0 && next < sheet.rowCount && rowHidden(next)) {
+      next += delta.row;
+    }
+    if (next < 0 || next >= sheet.rowCount) {
+      return coord;
+    }
+    return { row: next, column: coord.column };
+  }
+
+  if (delta.column !== 0) {
+    const hiddenColumns = sheet.hiddenColumns ?? {};
+    let next = coord.column + delta.column;
+    while (next >= 0 && next < sheet.columnCount && hiddenColumns[String(next)]) {
+      next += delta.column;
+    }
+    if (next < 0 || next >= sheet.columnCount) {
+      return coord;
+    }
+    return { row: coord.row, column: next };
+  }
+
+  return coord;
+}
+
+// Excel's "current region": the contiguous block of data around the coordinate,
+// grown until every neighboring row/column ring is empty. Builds occupancy
+// indexes over the sparse cell map once so each ring probe is a binary search —
+// per-cell content probes would be O(N²) on large regions.
+function expandDataRegion(workbook: WorkbookModel, sheet: SheetModel, coord: CellCoord): CellRange {
+  void workbook;
+  const maxRow = sheet.rowCount - 1;
+  const maxColumn = sheet.columnCount - 1;
+  const rowToColumns = new Map<number, number[]>();
+  const columnToRows = new Map<number, number[]>();
+  for (const [address, content] of Object.entries(sheet.cells)) {
+    if (content === null || String(content).trim() === "") {
+      continue;
+    }
+    const cellCoord = parseCellAddress(address);
+    const columns = rowToColumns.get(cellCoord.row);
+    if (columns) {
+      columns.push(cellCoord.column);
+    } else {
+      rowToColumns.set(cellCoord.row, [cellCoord.column]);
+    }
+    const rowsForColumn = columnToRows.get(cellCoord.column);
+    if (rowsForColumn) {
+      rowsForColumn.push(cellCoord.row);
+    } else {
+      columnToRows.set(cellCoord.column, [cellCoord.row]);
+    }
+  }
+  for (const columns of rowToColumns.values()) {
+    columns.sort((a, b) => a - b);
+  }
+  for (const rowsForColumn of columnToRows.values()) {
+    rowsForColumn.sort((a, b) => a - b);
+  }
+
+  const hasValueInRange = (sorted: number[] | undefined, min: number, max: number): boolean => {
+    if (!sorted || sorted.length === 0) {
+      return false;
+    }
+    let low = 0;
+    let high = sorted.length - 1;
+    let index = sorted.length;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (sorted[mid] >= min) {
+        index = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return index < sorted.length && sorted[index] <= max;
+  };
+
+  let top = coord.row;
+  let bottom = coord.row;
+  let left = coord.column;
+  let right = coord.column;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const ringLeft = Math.max(0, left - 1);
+    const ringRight = Math.min(maxColumn, right + 1);
+    const ringTop = Math.max(0, top - 1);
+    const ringBottom = Math.min(maxRow, bottom + 1);
+
+    if (top > 0 && hasValueInRange(rowToColumns.get(top - 1), ringLeft, ringRight)) {
+      top -= 1;
+      changed = true;
+    }
+    if (bottom < maxRow && hasValueInRange(rowToColumns.get(bottom + 1), ringLeft, ringRight)) {
+      bottom += 1;
+      changed = true;
+    }
+    if (left > 0 && hasValueInRange(columnToRows.get(left - 1), ringTop, ringBottom)) {
+      left -= 1;
+      changed = true;
+    }
+    if (right < maxColumn && hasValueInRange(columnToRows.get(right + 1), ringTop, ringBottom)) {
+      right += 1;
+      changed = true;
+    }
+  }
+
+  return { start: { row: top, column: left }, end: { row: bottom, column: right } };
+}
+
+function getUsedBounds(sheet: SheetModel): CellCoord {
+  let maxRow = 0;
+  let maxColumn = 0;
+  for (const address of Object.keys(sheet.cells)) {
+    const coord = parseCellAddress(address);
+    if (coord.row > maxRow) {
+      maxRow = coord.row;
+    }
+    if (coord.column > maxColumn) {
+      maxColumn = coord.column;
+    }
+  }
+  return { row: maxRow, column: maxColumn };
 }
 
 function getFormulaDependents(sheet: SheetModel, selection: CellRange): FormulaAuditReference[] {

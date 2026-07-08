@@ -201,4 +201,96 @@ describe("pivot", () => {
     expect(result.at(-1)).toEqual(["Grand Total", "500", "500", "500", "500", "500", "500", "3000"]);
     expect(duration).toBeLessThan(250);
   });
+
+  it("labels empty dimension values as (blank) like Excel", () => {
+    const table = createPivotTable(
+      [
+        ["Region", "Product", "Sales"],
+        ["West", "Hardware", "10"],
+        ["", "Software", "5"]
+      ],
+      { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "SUM" }
+    );
+
+    expect(table[0]).toEqual(["Region", "Hardware", "Software", "Grand Total"]);
+    // Blank labels sort last and render as "(blank)".
+    expect(table[1]).toEqual(["West", "10", "", "10"]);
+    expect(table[2]).toEqual(["(blank)", "", "5", "5"]);
+  });
+
+  it("supports count-numbers and product aggregators", () => {
+    const mixedRows = [
+      ["Region", "Sales"],
+      ["West", "2"],
+      ["West", "pending"],
+      ["West", "3"],
+      ["East", "4"]
+    ];
+
+    expect(
+      createPivotTable(mixedRows, { rowFields: ["Region"], valueField: "Sales", aggregator: "COUNTNUMS" })
+    ).toEqual([
+      ["Region", "COUNTNUMS of Sales"],
+      ["East", "1"],
+      ["West", "2"],
+      ["Grand Total", "3"]
+    ]);
+
+    expect(
+      createPivotTable(mixedRows, { rowFields: ["Region"], valueField: "Sales", aggregator: "PRODUCT" })
+    ).toEqual([
+      ["Region", "PRODUCT of Sales"],
+      ["East", "4"],
+      ["West", "6"],
+      ["Grand Total", "24"]
+    ]);
+  });
+
+  it("renders empty intersections as 0 for count aggregators and blank otherwise", () => {
+    const sparseRows = [
+      ["Region", "Product", "Sales"],
+      ["West", "Hardware", "10"],
+      ["East", "Software", "7"]
+    ];
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "COUNT" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "0", "1", "1"],
+      ["West", "1", "0", "1"],
+      ["Grand Total", "1", "1", "2"]
+    ]);
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "COUNTNUMS" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "0", "1", "1"],
+      ["West", "1", "0", "1"],
+      ["Grand Total", "1", "1", "2"]
+    ]);
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "PRODUCT" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "", "7", "7"],
+      ["West", "10", "", "10"],
+      ["Grand Total", "10", "7", "70"]
+    ]);
+  });
+
+  it("parses scientific-notation values into aggregates", () => {
+    const table = createPivotTable(
+      [
+        ["Region", "Sales"],
+        ["West", "1e2"],
+        ["West", "2.5E+2"]
+      ],
+      { rowFields: ["Region"], valueField: "Sales", aggregator: "SUM" }
+    );
+
+    expect(table[1]).toEqual(["West", "350"]);
+  });
 });

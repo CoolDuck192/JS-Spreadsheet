@@ -4,15 +4,30 @@ import type { PivotAggregator, PivotConfig } from "../lib/pivot";
 
 type PivotPanelProps = {
   headers: string[];
+  sourceLabel?: string;
+  sourceRowCount?: number;
   isOpen: boolean;
   onClose: () => void;
   onCreate: (config: PivotConfig) => void;
 };
 
-const AGGREGATORS: PivotAggregator[] = ["SUM", "COUNT", "AVERAGE", "MIN", "MAX"];
+const AGGREGATORS: Array<{ value: PivotAggregator; label: string }> = [
+  { value: "SUM", label: "Sum" },
+  { value: "COUNT", label: "Count" },
+  { value: "COUNTNUMS", label: "Count numbers" },
+  { value: "AVERAGE", label: "Average" },
+  { value: "MIN", label: "Min" },
+  { value: "MAX", label: "Max" },
+  { value: "PRODUCT", label: "Product" }
+];
 
-export function PivotPanel({ headers, isOpen, onClose, onCreate }: PivotPanelProps) {
-  const defaults = useMemo(() => createDefaultConfig(headers), [headers]);
+export function PivotPanel({ headers, sourceLabel, sourceRowCount, isOpen, onClose, onCreate }: PivotPanelProps) {
+  // Key the defaults on header CONTENT, not array identity: the headers array is
+  // recomputed on every selection change while the panel is open, and resetting
+  // the user's field choices on an unrelated click would wipe their setup.
+  const headersKey = headers.join("␟");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const defaults = useMemo(() => createDefaultConfig(headers), [headersKey]);
   const [rowField, setRowField] = useState(defaults.rowFields[0] ?? "");
   const [secondaryRowField, setSecondaryRowField] = useState("");
   const [columnField, setColumnField] = useState(defaults.columnField ?? "");
@@ -46,6 +61,14 @@ export function PivotPanel({ headers, isOpen, onClose, onCreate }: PivotPanelPro
         <p>Select a source range with a header row first.</p>
       ) : (
         <>
+          {sourceLabel ? (
+            <p className="pivot-panel-source">
+              Source <strong>{sourceLabel}</strong>
+              {typeof sourceRowCount === "number" && sourceRowCount > 0
+                ? ` · ${sourceRowCount} ${sourceRowCount === 1 ? "row" : "rows"}`
+                : ""}
+            </p>
+          ) : null}
           <label>
             Rows
             <select
@@ -118,8 +141,8 @@ export function PivotPanel({ headers, isOpen, onClose, onCreate }: PivotPanelPro
               onChange={(event) => setAggregator(event.currentTarget.value as PivotAggregator)}
             >
               {AGGREGATORS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -139,6 +162,7 @@ export function PivotPanel({ headers, isOpen, onClose, onCreate }: PivotPanelPro
           >
             Create pivot table
           </button>
+          <p className="pivot-panel-hint">Double-click a pivot value later to drill into its source rows.</p>
         </>
       )}
     </aside>

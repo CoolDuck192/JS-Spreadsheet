@@ -18,12 +18,22 @@ import { validateCellValue } from "../lib/validation";
 
 const DEFAULT_VIEWPORT_HEIGHT = 560;
 const ROW_OVERSCAN = 16;
+const ROW_HEADER_WIDTH = 48;
+const COLUMN_HEADER_HEIGHT = 28;
+const AUTO_SCROLL_MAX_STEP = 48;
+
+export type CommitEditMove = "down" | "up" | "right" | "left";
+
+export type GridScrollApi = {
+  ensureCellVisible: (row: number, column: number) => void;
+};
 
 type GridProps = {
   sheet: SheetModel;
   formulaEngine: FormulaEngine;
   selection: CellRange;
   editingCell: { address: string; value: string } | null;
+  copiedRange?: CellRange | null;
   zoomLevel?: number;
   showGridlines?: boolean;
   showHeaders?: boolean;
@@ -40,17 +50,21 @@ type GridProps = {
   onSelectionChange: (range: CellRange) => void;
   onStartEdit: (address: string) => void;
   onEditValueChange: (value: string) => void;
-  onCommitEdit: (address: string, value: string) => void;
+  onCommitEdit: (address: string, value: string, move?: CommitEditMove) => void;
   onCancelEdit: () => void;
   onPasteText: (text: string) => void;
   onKeyCommand: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onAutoFill?: (sourceRange: CellRange, targetRange: CellRange) => void;
+  onAutoFillDoubleClick?: () => void;
   onCellContextMenu?: (event: { address: string; row: number; column: number; x: number; y: number }) => void;
   onAutoFilterColumn?: (column: number, values: string[]) => void;
   onClearAutoFilterColumn?: (column: number) => void;
   onSortAutoFilterColumn?: (column: number, direction: "asc" | "desc") => void;
   onColumnResize?: (column: number, width: number) => void;
   onRowResize?: (row: number, height: number) => void;
+  onColumnAutoFit?: (column: number) => void;
+  onRowAutoFit?: (row: number) => void;
+  onRegisterScrollApi?: (api: GridScrollApi) => void;
 };
 
 type ResizeDraft =
@@ -69,11 +83,19 @@ type ResizeDraft =
       size: number;
     };
 
+type DragMode =
+  | { kind: "cells" }
+  | { kind: "columns"; anchor: number }
+  | { kind: "rows"; anchor: number };
+
+type OverlayRect = { top: number; left: number; width: number; height: number };
+
 export function Grid({
   sheet,
   formulaEngine,
   selection,
   editingCell,
+  copiedRange = null,
   zoomLevel = 100,
   showGridlines = true,
   showHeaders = true,
@@ -95,18 +117,26 @@ export function Grid({
   onPasteText,
   onKeyCommand,
   onAutoFill,
+  onAutoFillDoubleClick,
   onCellContextMenu,
   onAutoFilterColumn,
   onClearAutoFilterColumn,
   onSortAutoFilterColumn,
   onColumnResize,
-  onRowResize
+  onRowResize,
+  onColumnAutoFit,
+  onRowAutoFit,
+  onRegisterScrollApi
 }: GridProps) {
-  const [isDragging, setIsDragging] = useState(false);
+  const [dragMode, setDragMode] = useState<DragMode | null>(null);
   const [autoFillDrag, setAutoFillDrag] = useState<{ source: CellRange; target: CellRange } | null>(null);
   const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: DEFAULT_VIEWPORT_HEIGHT });
   const scrollFrameRef = useRef<number | null>(null);
+  const dragModeRef = useRef<DragMode | null>(null);
+  const autoFillDragRef = useRef<{ source: CellRange; target: CellRange } | null>(null);
+  const pointerClientRef = useRef<{ x: number; y: number } | null>(null);
+  const lastDragTargetRef = useRef<{ row: number; column: number } | null>(null);
   const normalizedSelection = useMemo(() => normalizeRange(selection), [selection]);
   // Everything derived from the sheet alone is memoized on the sheet snapshot's
   // identity: scroll/selection renders must stay O(visible rows), not O(rowCount).
@@ -121,6 +151,17 @@ export function Grid({
     () => Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft)),
     [sheet, resizeDraft]
   );
+  // Layout x-offsets of the visible columns, in unzoomed content pixels past the
+  // row header. Drives pointer->cell math and the selection overlays.
+  const columnLayout = useMemo(() => {
+    let cursor = 0;
+    return columns.map((column) => {
+      const width = columnWidths[column];
+      const entry = { column, left: cursor, width };
+      cursor += width;
+      return entry;
+    });
+  }, [columns, columnWidths]);
   const filteredRows = useMemo(
     () =>
       getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
@@ -155,8 +196,8 @@ export function Grid({
     normalizedSelection.end.column === sheet.columnCount - 1;
   const zoomStyle = {
     "--sheet-zoom": String(zoomLevel / 100),
-    "--row-header-width": showHeaders ? "48px" : "0px",
-    "--column-header-height": showHeaders ? "28px" : "0px"
+    "--row-header-width": showHeaders ? `${ROW_HEADER_WIDTH}px` : "0px",
+    "--column-header-height": showHeaders ? `${COLUMN_HEADER_HEIGHT}px` : "0px"
   } as CSSProperties;
   const gridClassName = ["grid-scroll", showGridlines ? "" : "grid-scroll--no-gridlines"].filter(Boolean).join(" ");
   const gridColumnCount = columns.length + (showHeaders ? 1 : 0);
@@ -178,18 +219,25 @@ export function Grid({
   // implementations/state, and the stable wrappers read through it.
   const latestRef = useRef({
     sheet,
-    isDragging,
     selectionStart: selection.start,
     normalizedSelection,
+    columnLayout,
+    rowMeasurements,
+    showHeaders,
+    zoomLevel,
+    freezeTopRow,
+    freezeFirstColumn,
     onSelectionChange,
     onStartEdit,
     onEditValueChange,
     onCommitEdit,
     onCancelEdit,
+    onAutoFill,
     onCellContextMenu,
     onAutoFilterColumn,
     onClearAutoFilterColumn,
     onSortAutoFilterColumn,
+    onRowAutoFit,
     getCellFormat,
     getCellComment,
     getCellHyperlink,
@@ -200,18 +248,25 @@ export function Grid({
   });
   latestRef.current = {
     sheet,
-    isDragging,
     selectionStart: selection.start,
     normalizedSelection,
+    columnLayout,
+    rowMeasurements,
+    showHeaders,
+    zoomLevel,
+    freezeTopRow,
+    freezeFirstColumn,
     onSelectionChange,
     onStartEdit,
     onEditValueChange,
     onCommitEdit,
     onCancelEdit,
+    onAutoFill,
     onCellContextMenu,
     onAutoFilterColumn,
     onClearAutoFilterColumn,
     onSortAutoFilterColumn,
+    onRowAutoFit,
     getCellFormat,
     getCellComment,
     getCellHyperlink,
@@ -226,7 +281,8 @@ export function Grid({
       onSelectionChange: (range: CellRange) => latestRef.current.onSelectionChange(range),
       onStartEdit: (address: string) => latestRef.current.onStartEdit(address),
       onEditValueChange: (value: string) => latestRef.current.onEditValueChange(value),
-      onCommitEdit: (address: string, value: string) => latestRef.current.onCommitEdit(address, value),
+      onCommitEdit: (address: string, value: string, move?: CommitEditMove) =>
+        latestRef.current.onCommitEdit(address, value, move),
       onCancelEdit: () => latestRef.current.onCancelEdit(),
       onCellContextMenu: (event: { address: string; row: number; column: number; x: number; y: number }) =>
         latestRef.current.onCellContextMenu?.(event),
@@ -234,6 +290,7 @@ export function Grid({
       onClearAutoFilterColumn: (column: number) => latestRef.current.onClearAutoFilterColumn?.(column),
       onSortAutoFilterColumn: (column: number, direction: "asc" | "desc") =>
         latestRef.current.onSortAutoFilterColumn?.(column, direction),
+      onRowAutoFit: (row: number) => latestRef.current.onRowAutoFit?.(row),
       getCellFormat: (address: string) => latestRef.current.getCellFormat(address),
       getCellComment: (address: string) => latestRef.current.getCellComment(address),
       getCellHyperlink: (address: string) => latestRef.current.getCellHyperlink(address),
@@ -245,28 +302,249 @@ export function Grid({
     []
   );
 
-  const handleStartDrag = useCallback(() => setIsDragging(true), []);
-  const handleExtendDrag = useCallback((address: string) => {
+  const setFillDrag = useCallback((next: { source: CellRange; target: CellRange } | null) => {
+    autoFillDragRef.current = next;
+    setAutoFillDrag(next);
+  }, []);
+
+  const beginDrag = useCallback((mode: DragMode) => {
+    dragModeRef.current = mode;
+    setDragMode(mode);
+  }, []);
+
+  // Applies the current drag (selection extend, header extend, or fill preview)
+  // for the cell under the pointer. Shared by cell mouseenter events and the
+  // window-level pointer tracking, so both agree on the target.
+  const applyDragTarget = useCallback((coord: { row: number; column: number }) => {
     const current = latestRef.current;
-    if (current.isDragging) {
-      current.onSelectionChange({ start: current.selectionStart, end: addressToCoord(address) });
+    const fill = autoFillDragRef.current;
+    lastDragTargetRef.current = coord;
+    if (fill) {
+      const target = createAutoFillTarget(fill.source, coord.row, coord.column);
+      if (!rangesEqual(target, fill.target)) {
+        setFillDrag({ source: fill.source, target });
+      }
+      return;
     }
-  }, []);
-  const handleStartAutoFill = useCallback(() => {
-    setIsDragging(false);
-    const source = latestRef.current.normalizedSelection;
-    setAutoFillDrag({ source, target: source });
-  }, []);
-  const handlePreviewAutoFill = useCallback((row: number, column: number) => {
-    setAutoFillDrag((current) => (current ? { ...current, target: createAutoFillTarget(current.source, row, column) } : current));
-  }, []);
-  const handleSelectRow = useCallback((selectedRow: number) => {
-    const current = latestRef.current;
+    const mode = dragModeRef.current;
+    if (!mode) {
+      return;
+    }
+    if (mode.kind === "cells") {
+      current.onSelectionChange({ start: current.selectionStart, end: { row: coord.row, column: coord.column } });
+      return;
+    }
+    if (mode.kind === "columns") {
+      current.onSelectionChange({
+        start: { row: 0, column: mode.anchor },
+        end: { row: current.sheet.rowCount - 1, column: coord.column }
+      });
+      return;
+    }
     current.onSelectionChange({
-      start: { row: selectedRow, column: 0 },
+      start: { row: mode.anchor, column: 0 },
+      end: { row: coord.row, column: current.sheet.columnCount - 1 }
+    });
+  }, [setFillDrag]);
+
+  // Maps a client-space point to the sheet cell underneath it, clamped to the
+  // sheet bounds, accounting for scroll position, sticky headers, and zoom.
+  const cellAtClientPoint = useCallback((clientX: number, clientY: number): { row: number; column: number } | null => {
+    const element = scrollRef?.current;
+    if (!element) {
+      return null;
+    }
+    const current = latestRef.current;
+    const { columnLayout: layout, rowMeasurements: measurements } = current;
+    if (layout.length === 0 || measurements.length === 0) {
+      return null;
+    }
+    const rect = element.getBoundingClientRect();
+    const zoom = (current.zoomLevel || 100) / 100;
+    const headerWidth = current.showHeaders ? ROW_HEADER_WIDTH : 0;
+    const headerHeight = current.showHeaders ? COLUMN_HEADER_HEIGHT : 0;
+    const contentX = (clientX - rect.left + element.scrollLeft) / zoom - headerWidth;
+    const contentY = (clientY - rect.top + element.scrollTop) / zoom - headerHeight;
+    // Frozen panes render sticky over scrolled content: a pointer inside the
+    // frozen band must hit the frozen row/column, not the row underneath it.
+    const viewportY = (clientY - rect.top) / zoom - headerHeight;
+    const viewportX = (clientX - rect.left) / zoom - headerWidth;
+    const frozenRowHit =
+      current.freezeTopRow &&
+      element.scrollTop > 0 &&
+      measurements[0].row === 0 &&
+      viewportY >= 0 &&
+      viewportY < measurements[0].end - measurements[0].start;
+    const frozenColumnHit =
+      current.freezeFirstColumn &&
+      element.scrollLeft > 0 &&
+      layout[0].column === 0 &&
+      viewportX >= 0 &&
+      viewportX < layout[0].width;
+
+    let low = 0;
+    let high = layout.length - 1;
+    let column = layout[high].column;
+    if (contentX < layout[0].left + layout[0].width) {
+      column = layout[0].column;
+    } else if (contentX < layout[high].left) {
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        const entry = layout[mid];
+        if (contentX < entry.left) {
+          high = mid - 1;
+        } else if (contentX >= entry.left + entry.width) {
+          low = mid + 1;
+        } else {
+          column = entry.column;
+          break;
+        }
+      }
+    }
+
+    let rowLow = 0;
+    let rowHigh = measurements.length - 1;
+    let row = measurements[rowHigh].row;
+    if (contentY < measurements[0].end) {
+      row = measurements[0].row;
+    } else if (contentY < measurements[rowHigh].start) {
+      while (rowLow <= rowHigh) {
+        const mid = (rowLow + rowHigh) >> 1;
+        const measurement = measurements[mid];
+        if (contentY < measurement.start) {
+          rowHigh = mid - 1;
+        } else if (contentY >= measurement.end) {
+          rowLow = mid + 1;
+        } else {
+          row = measurement.row;
+          break;
+        }
+      }
+    }
+
+    return { row: frozenRowHit ? 0 : row, column: frozenColumnHit ? 0 : column };
+  }, [scrollRef]);
+
+  const updateDragTargetFromPointer = useCallback(() => {
+    const pointer = pointerClientRef.current;
+    if (!pointer) {
+      return;
+    }
+    const raw = cellAtClientPoint(pointer.x, pointer.y);
+    if (!raw) {
+      return;
+    }
+    // Header drags only consume one axis; collapse the other so crossing cells
+    // perpendicular to the drag doesn't fire redundant selection updates.
+    const mode = dragModeRef.current;
+    const coord =
+      mode?.kind === "columns"
+        ? { row: 0, column: raw.column }
+        : mode?.kind === "rows"
+        ? { row: raw.row, column: 0 }
+        : raw;
+    const last = lastDragTargetRef.current;
+    if (last && last.row === coord.row && last.column === coord.column) {
+      return;
+    }
+    applyDragTarget(coord);
+  }, [applyDragTarget, cellAtClientPoint]);
+
+  const finalizeDrag = useCallback(() => {
+    const fill = autoFillDragRef.current;
+    if (fill) {
+      autoFillDragRef.current = null;
+      setAutoFillDrag(null);
+      if (!rangesEqual(fill.source, fill.target)) {
+        latestRef.current.onAutoFill?.(fill.source, fill.target);
+      }
+    }
+    if (dragModeRef.current) {
+      dragModeRef.current = null;
+      setDragMode(null);
+    }
+    lastDragTargetRef.current = null;
+    pointerClientRef.current = null;
+  }, []);
+
+  const handleCellMouseDown = useCallback((row: number, column: number, shiftKey: boolean) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart : { row, column };
+    beginDrag({ kind: "cells" });
+    current.onSelectionChange({ start: anchor, end: { row, column } });
+  }, [beginDrag]);
+
+  const handleCellClick = useCallback((row: number, column: number, shiftKey: boolean) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart : { row, column };
+    current.onSelectionChange({ start: anchor, end: { row, column } });
+  }, []);
+
+  const handleCellPointerEnter = useCallback((row: number, column: number) => {
+    if (autoFillDragRef.current || dragModeRef.current?.kind === "cells") {
+      applyDragTarget({ row, column });
+    }
+  }, [applyDragTarget]);
+
+  const handleStartAutoFill = useCallback(() => {
+    dragModeRef.current = null;
+    setDragMode(null);
+    const source = latestRef.current.normalizedSelection;
+    setFillDrag({ source, target: source });
+  }, [setFillDrag]);
+
+  const handleColumnHeaderMouseDown = useCallback((column: number, shiftKey: boolean) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart.column : column;
+    beginDrag({ kind: "columns", anchor });
+    current.onSelectionChange({
+      start: { row: 0, column: anchor },
+      end: { row: current.sheet.rowCount - 1, column }
+    });
+  }, [beginDrag]);
+
+  const handleColumnHeaderEnter = useCallback((column: number) => {
+    const mode = dragModeRef.current;
+    if (mode?.kind === "columns") {
+      applyDragTarget({ row: 0, column });
+    }
+  }, [applyDragTarget]);
+
+  const handleSelectColumn = useCallback((column: number, shiftKey: boolean) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart.column : column;
+    current.onSelectionChange({
+      start: { row: 0, column: anchor },
+      end: { row: current.sheet.rowCount - 1, column }
+    });
+  }, []);
+
+  const handleRowHeaderMouseDown = useCallback((row: number, shiftKey: boolean) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart.row : row;
+    beginDrag({ kind: "rows", anchor });
+    current.onSelectionChange({
+      start: { row: anchor, column: 0 },
+      end: { row, column: current.sheet.columnCount - 1 }
+    });
+  }, [beginDrag]);
+
+  const handleRowHeaderEnter = useCallback((row: number) => {
+    const mode = dragModeRef.current;
+    if (mode?.kind === "rows") {
+      applyDragTarget({ row, column: 0 });
+    }
+  }, [applyDragTarget]);
+
+  const handleSelectRow = useCallback((selectedRow: number, shiftKey = false) => {
+    const current = latestRef.current;
+    const anchor = shiftKey ? current.selectionStart.row : selectedRow;
+    current.onSelectionChange({
+      start: { row: anchor, column: 0 },
       end: { row: selectedRow, column: current.sheet.columnCount - 1 }
     });
   }, []);
+
   const handleStartRowResize = useCallback((row: number, event: React.MouseEvent<HTMLButtonElement>) => {
     const currentSheet = latestRef.current.sheet;
     setResizeDraft({
@@ -344,6 +622,152 @@ export function Grid({
     };
   }, [onColumnResize, onRowResize, resizeDraft]);
 
+  // Window-level drag tracking: keeps a selection or fill drag alive when the
+  // pointer leaves the grid (Excel keeps dragging), and auto-scrolls the
+  // viewport toward the pointer at the edges.
+  const isPointerDragActive = Boolean(dragMode) || Boolean(autoFillDrag);
+  useEffect(() => {
+    if (!isPointerDragActive) {
+      return undefined;
+    }
+
+    function handleWindowMouseMove(event: MouseEvent) {
+      pointerClientRef.current = { x: event.clientX, y: event.clientY };
+      updateDragTargetFromPointer();
+    }
+
+    function handleWindowMouseUp() {
+      finalizeDrag();
+    }
+
+    let rafId: number | null = null;
+    const autoScrollLoop = () => {
+      const element = scrollRef?.current;
+      const pointer = pointerClientRef.current;
+      if (element && pointer) {
+        const rect = element.getBoundingClientRect();
+        const zoom = (latestRef.current.zoomLevel || 100) / 100;
+        const innerLeft = rect.left + (latestRef.current.showHeaders ? ROW_HEADER_WIDTH * zoom : 0);
+        const innerTop = rect.top + (latestRef.current.showHeaders ? COLUMN_HEADER_HEIGHT * zoom : 0);
+        // Header drags keep the pointer inside a sticky header band the whole
+        // time; only scroll along the axis that drag actually selects.
+        const dragKind = dragModeRef.current?.kind;
+        let deltaX = 0;
+        let deltaY = 0;
+        if (dragKind !== "columns") {
+          if (pointer.y > rect.bottom) {
+            deltaY = Math.min(AUTO_SCROLL_MAX_STEP, (pointer.y - rect.bottom) * 0.35 + 2);
+          } else if (pointer.y < innerTop) {
+            deltaY = -Math.min(AUTO_SCROLL_MAX_STEP, (innerTop - pointer.y) * 0.35 + 2);
+          }
+        }
+        if (dragKind !== "rows") {
+          if (pointer.x > rect.right) {
+            deltaX = Math.min(AUTO_SCROLL_MAX_STEP, (pointer.x - rect.right) * 0.35 + 2);
+          } else if (pointer.x < innerLeft) {
+            deltaX = -Math.min(AUTO_SCROLL_MAX_STEP, (innerLeft - pointer.x) * 0.35 + 2);
+          }
+        }
+        if (deltaX !== 0 || deltaY !== 0) {
+          element.scrollLeft += deltaX;
+          element.scrollTop += deltaY;
+          updateDragTargetFromPointer();
+        }
+      }
+      rafId = requestAnimationFrame(autoScrollLoop);
+    };
+    rafId = requestAnimationFrame(autoScrollLoop);
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [finalizeDrag, isPointerDragActive, scrollRef, updateDragTargetFromPointer]);
+
+  const ensureCellVisible = useCallback((row: number, column: number) => {
+    const element = scrollRef?.current;
+    if (!element) {
+      return;
+    }
+    const current = latestRef.current;
+    const zoom = (current.zoomLevel || 100) / 100;
+    const headerWidth = current.showHeaders ? ROW_HEADER_WIDTH : 0;
+    const headerHeight = current.showHeaders ? COLUMN_HEADER_HEIGHT : 0;
+    const rowRect = rowRangeRect(current.rowMeasurements, row, row);
+    const columnRect = columnRangeRect(current.columnLayout, column, column);
+    if (rowRect) {
+      const top = (headerHeight + rowRect.top) * zoom;
+      const bottom = (headerHeight + rowRect.top + rowRect.height) * zoom;
+      const viewTop = element.scrollTop + headerHeight * zoom;
+      const viewBottom = element.scrollTop + element.clientHeight;
+      if (top < viewTop) {
+        element.scrollTop = Math.max(0, top - headerHeight * zoom);
+      } else if (bottom > viewBottom) {
+        element.scrollTop = bottom - element.clientHeight;
+      }
+    }
+    if (columnRect) {
+      const left = (headerWidth + columnRect.left) * zoom;
+      const right = (headerWidth + columnRect.left + columnRect.width) * zoom;
+      const viewLeft = element.scrollLeft + headerWidth * zoom;
+      const viewRight = element.scrollLeft + element.clientWidth;
+      if (left < viewLeft) {
+        element.scrollLeft = Math.max(0, left - headerWidth * zoom);
+      } else if (right > viewRight) {
+        element.scrollLeft = right - element.clientWidth;
+      }
+    }
+  }, [scrollRef]);
+
+  useEffect(() => {
+    onRegisterScrollApi?.({ ensureCellVisible });
+  }, [ensureCellVisible, onRegisterScrollApi]);
+
+  const headerWidth = showHeaders ? ROW_HEADER_WIDTH : 0;
+  const headerHeight = showHeaders ? COLUMN_HEADER_HEIGHT : 0;
+  // The outline covers any merge the selection touches, like Excel's border.
+  const selectionRect = useMemo(
+    () =>
+      rangeOverlayRect(
+        expandRangeToMerges(normalizedSelection, sheet.merges),
+        rowMeasurements,
+        columnLayout,
+        headerWidth,
+        headerHeight
+      ),
+    [columnLayout, headerHeight, headerWidth, normalizedSelection, rowMeasurements, sheet.merges]
+  );
+  const fillPreviewRange = autoFillDrag ? normalizeRange(autoFillDrag.target) : null;
+  const fillPreviewRect = useMemo(
+    () =>
+      fillPreviewRange
+        ? rangeOverlayRect(fillPreviewRange, rowMeasurements, columnLayout, headerWidth, headerHeight)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      columnLayout,
+      headerHeight,
+      headerWidth,
+      rowMeasurements,
+      fillPreviewRange?.start.row,
+      fillPreviewRange?.start.column,
+      fillPreviewRange?.end.row,
+      fillPreviewRange?.end.column
+    ]
+  );
+  const copiedRect = useMemo(() => {
+    if (!copiedRange) {
+      return null;
+    }
+    return rangeOverlayRect(normalizeRange(copiedRange), rowMeasurements, columnLayout, headerWidth, headerHeight);
+  }, [columnLayout, copiedRange, headerHeight, headerWidth, rowMeasurements]);
+  const showFillHandle = !editingCell && !autoFillDrag && Boolean(selectionRect) && Boolean(onAutoFill);
+
   return (
     <div
       ref={scrollRef}
@@ -385,22 +809,12 @@ export function Grid({
         event.preventDefault();
         onPasteText(event.clipboardData.getData("text/plain") || event.clipboardData.getData("Text"));
       }}
-      onMouseLeave={() => {
-        setIsDragging(false);
-        setAutoFillDrag(null);
-      }}
-      onMouseUp={() => {
-        setIsDragging(false);
-        if (autoFillDrag && !rangesEqual(autoFillDrag.source, autoFillDrag.target)) {
-          onAutoFill?.(autoFillDrag.source, autoFillDrag.target);
-        }
-        setAutoFillDrag(null);
-      }}
+      onMouseUp={finalizeDrag}
     >
       <div
         className="spreadsheet-grid"
         style={{
-          gridTemplateColumns: [showHeaders ? "48px" : "", ...columns.map((column) => `${columnWidths[column]}px`)]
+          gridTemplateColumns: [showHeaders ? `${ROW_HEADER_WIDTH}px` : "", ...columns.map((column) => `${columnWidths[column]}px`)]
             .filter(Boolean)
             .join(" ")
         }}
@@ -427,29 +841,39 @@ export function Grid({
             normalizedSelection.end.row === sheet.rowCount - 1 &&
             column >= normalizedSelection.start.column &&
             column <= normalizedSelection.end.column;
+          const isColumnHit =
+            !isColumnSelected &&
+            column >= normalizedSelection.start.column &&
+            column <= normalizedSelection.end.column;
 
           return (
           <div
             key={column}
-            className={["column-header", isColumnSelected ? "selected-header" : ""].filter(Boolean).join(" ")}
+            className={[
+              "column-header",
+              isColumnSelected ? "selected-header" : "",
+              isColumnHit ? "column-header--hit" : ""
+            ]
+              .filter(Boolean)
+              .join(" ")}
             role="columnheader"
             aria-label={`Column ${columnName}`}
             aria-selected={isColumnSelected}
             tabIndex={0}
             style={{ width: columnWidths[column] }}
-            onClick={() =>
-              onSelectionChange({
-                start: { row: 0, column },
-                end: { row: sheet.rowCount - 1, column }
-              })
-            }
+            onMouseDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              event.preventDefault();
+              handleColumnHeaderMouseDown(column, event.shiftKey);
+            }}
+            onMouseEnter={() => handleColumnHeaderEnter(column)}
+            onClick={(event) => handleSelectColumn(column, event.shiftKey)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                onSelectionChange({
-                  start: { row: 0, column },
-                  end: { row: sheet.rowCount - 1, column }
-                });
+                handleSelectColumn(column, event.shiftKey);
               }
             }}
           >
@@ -461,6 +885,11 @@ export function Grid({
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onColumnAutoFit?.(column);
               }}
               onMouseDown={(event) => {
                 event.preventDefault();
@@ -494,6 +923,8 @@ export function Grid({
             sheet={sheet}
             formulaEngine={formulaEngine}
             selection={normalizedSelection}
+            activeRow={selection.start.row}
+            activeColumn={selection.start.column}
             editingCell={editingRow === row ? editingCell : null}
             showHeaders={showHeaders}
             showFormulas={showFormulas}
@@ -511,23 +942,84 @@ export function Grid({
             onAutoFilterColumn={stableRowCallbacks.onAutoFilterColumn}
             onClearAutoFilterColumn={stableRowCallbacks.onClearAutoFilterColumn}
             onSortAutoFilterColumn={stableRowCallbacks.onSortAutoFilterColumn}
-            onStartDrag={handleStartDrag}
-            onExtendDrag={handleExtendDrag}
-            isAutoFillDragging={Boolean(autoFillDrag)}
-            onStartAutoFill={handleStartAutoFill}
-            onPreviewAutoFill={handlePreviewAutoFill}
+            onCellMouseDown={handleCellMouseDown}
+            onCellClick={handleCellClick}
+            onCellPointerEnter={handleCellPointerEnter}
+            onRowHeaderMouseDown={handleRowHeaderMouseDown}
+            onRowHeaderEnter={handleRowHeaderEnter}
             onStartEdit={stableRowCallbacks.onStartEdit}
             onEditValueChange={stableRowCallbacks.onEditValueChange}
             onCommitEdit={stableRowCallbacks.onCommitEdit}
             onCancelEdit={stableRowCallbacks.onCancelEdit}
             onSelectRow={handleSelectRow}
             onStartRowResize={handleStartRowResize}
+            onRowAutoFit={stableRowCallbacks.onRowAutoFit}
           />
         ))}
         {bottomSpacerHeight > 0 ? (
           <div
             className="grid-row-spacer"
             style={{ gridColumn: `1 / span ${gridColumnCount}`, height: bottomSpacerHeight }}
+          />
+        ) : null}
+        {selectionRect && !editingCell ? (
+          <div
+            className="selection-outline"
+            aria-hidden="true"
+            style={{
+              top: selectionRect.top,
+              left: selectionRect.left,
+              width: selectionRect.width,
+              height: selectionRect.height
+            }}
+          />
+        ) : null}
+        {copiedRect ? (
+          <div
+            className="copy-marquee"
+            aria-hidden="true"
+            style={{ top: copiedRect.top, left: copiedRect.left, width: copiedRect.width, height: copiedRect.height }}
+          />
+        ) : null}
+        {fillPreviewRect ? (
+          <div
+            className="fill-preview-outline"
+            aria-hidden="true"
+            style={{
+              top: fillPreviewRect.top,
+              left: fillPreviewRect.left,
+              width: fillPreviewRect.width,
+              height: fillPreviewRect.height
+            }}
+          />
+        ) : null}
+        {showFillHandle && selectionRect ? (
+          <button
+            type="button"
+            className="auto-fill-handle"
+            aria-label="AutoFill selection"
+            title="AutoFill selection"
+            style={{
+              top: selectionRect.top + selectionRect.height,
+              left: selectionRect.left + selectionRect.width
+            }}
+            onMouseDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              handleStartAutoFill();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onAutoFillDoubleClick?.();
+            }}
           />
         ) : null}
       </div>
@@ -548,6 +1040,8 @@ function RowFragment({
   sheet,
   formulaEngine,
   selection,
+  activeRow,
+  activeColumn,
   editingCell,
   showHeaders,
   showFormulas,
@@ -565,17 +1059,18 @@ function RowFragment({
   onAutoFilterColumn,
   onClearAutoFilterColumn,
   onSortAutoFilterColumn,
-  onStartDrag,
-  onExtendDrag,
-  isAutoFillDragging,
-  onStartAutoFill,
-  onPreviewAutoFill,
+  onCellMouseDown,
+  onCellClick,
+  onCellPointerEnter,
+  onRowHeaderMouseDown,
+  onRowHeaderEnter,
   onStartEdit,
   onEditValueChange,
   onCommitEdit,
   onCancelEdit,
   onSelectRow,
-  onStartRowResize
+  onStartRowResize,
+  onRowAutoFit
 }: {
   row: number;
   rowHeight: number;
@@ -584,6 +1079,8 @@ function RowFragment({
   sheet: SheetModel;
   formulaEngine: FormulaEngine;
   selection: CellRange;
+  activeRow: number;
+  activeColumn: number;
   editingCell: { address: string; value: string } | null;
   showHeaders: boolean;
   showFormulas: boolean;
@@ -601,17 +1098,18 @@ function RowFragment({
   onAutoFilterColumn?: (column: number, values: string[]) => void;
   onClearAutoFilterColumn?: (column: number) => void;
   onSortAutoFilterColumn?: (column: number, direction: "asc" | "desc") => void;
-  onStartDrag: () => void;
-  onExtendDrag: (address: string) => void;
-  isAutoFillDragging: boolean;
-  onStartAutoFill: () => void;
-  onPreviewAutoFill: (row: number, column: number) => void;
+  onCellMouseDown: (row: number, column: number, shiftKey: boolean) => void;
+  onCellClick: (row: number, column: number, shiftKey: boolean) => void;
+  onCellPointerEnter: (row: number, column: number) => void;
+  onRowHeaderMouseDown: (row: number, shiftKey: boolean) => void;
+  onRowHeaderEnter: (row: number) => void;
   onStartEdit: (address: string) => void;
   onEditValueChange: (value: string) => void;
-  onCommitEdit: (address: string, value: string) => void;
+  onCommitEdit: (address: string, value: string, move?: CommitEditMove) => void;
   onCancelEdit: () => void;
-  onSelectRow: (row: number) => void;
+  onSelectRow: (row: number, shiftKey?: boolean) => void;
   onStartRowResize: (row: number, event: React.MouseEvent<HTMLButtonElement>) => void;
+  onRowAutoFit?: (row: number) => void;
 }) {
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [dismissedEditingSuggestion, setDismissedEditingSuggestion] = useState<{ address: string; value: string } | null>(null);
@@ -629,6 +1127,7 @@ function RowFragment({
   }, [editingCell?.address, editingCell?.value]);
   const isRowSelected =
     selection.start.column === 0 && selection.end.column === sheet.columnCount - 1 && row >= selection.start.row && row <= selection.end.row;
+  const isRowHit = !isRowSelected && row >= selection.start.row && row <= selection.end.row;
 
   useEffect(() => {
     setActiveSuggestionIndex(0);
@@ -648,17 +1147,31 @@ function RowFragment({
     <>
       {showHeaders ? (
         <div
-          className={["row-header", isRowSelected ? "selected-header" : ""].filter(Boolean).join(" ")}
+          className={[
+            "row-header",
+            isRowSelected ? "selected-header" : "",
+            isRowHit ? "row-header--hit" : ""
+          ]
+            .filter(Boolean)
+            .join(" ")}
           role="rowheader"
           aria-label={`Row ${row + 1}`}
           aria-selected={isRowSelected}
           tabIndex={0}
           style={{ height: rowHeight }}
-          onClick={() => onSelectRow(row)}
+          onMouseDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
+            event.preventDefault();
+            onRowHeaderMouseDown(row, event.shiftKey);
+          }}
+          onMouseEnter={() => onRowHeaderEnter(row)}
+          onClick={(event) => onSelectRow(row, event.shiftKey)}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              onSelectRow(row);
+              onSelectRow(row, event.shiftKey);
             }
           }}
         >
@@ -670,6 +1183,11 @@ function RowFragment({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
+            }}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onRowAutoFit?.(row);
             }}
             onMouseDown={(event) => {
               event.preventDefault();
@@ -703,14 +1221,8 @@ function RowFragment({
         const displayValue = formatDisplayValue(rawDisplayValue, mergedFormat);
         const visibleValue = showFormulas && formulaText ? formulaText : hyperlink && displayValue === "" ? hyperlink : displayValue;
         const isSelected = isInSelection(row, column, selection);
+        const isActiveCell = row === activeRow && column === activeColumn;
         const isEditing = editingCell?.address === address && !isMergeCovered;
-        const isAutoFillHandleCell =
-          !isAutoFillDragging &&
-          !isEditing &&
-          !isMergeCovered &&
-          row === selection.end.row &&
-          column === selection.end.column &&
-          isSelected;
         const suggestions = isEditing ? getFormulaSuggestions(editingCell.value) : [];
         const visibleSuggestions =
           dismissedEditingSuggestion?.address === address && dismissedEditingSuggestion.value === editingCell?.value ? [] : suggestions;
@@ -786,6 +1298,7 @@ function RowFragment({
             aria-rowspan={isMergeAnchor ? mergeInfo.rowSpan : undefined}
             className={[
               isSelected ? "cell selected-cell" : "cell",
+              isActiveCell ? "active-cell" : "",
               isEditing ? "editing-cell" : "",
               isMergeAnchor ? "merged-cell" : "",
               isMergeCovered ? "merge-covered-cell" : "",
@@ -815,22 +1328,15 @@ function RowFragment({
               if (event.button !== 0) {
                 return;
               }
-              onSelectionChange({ start: { row, column }, end: { row, column } });
-              onStartDrag();
+              onCellMouseDown(row, column, event.shiftKey);
             }}
-            onMouseEnter={() => {
-              if (isAutoFillDragging) {
-                onPreviewAutoFill(row, column);
-                return;
-              }
-              // Drag gating lives inside the stable handler so rows don't have to
-              // re-render when a selection drag starts or ends.
-              onExtendDrag(address);
-            }}
-            onClick={() => onSelectionChange({ start: { row, column }, end: { row, column } })}
+            onMouseEnter={() => onCellPointerEnter(row, column)}
+            onClick={(event) => onCellClick(row, column, event.shiftKey)}
             onContextMenu={(event) => {
               event.preventDefault();
-              onSelectionChange({ start: { row, column }, end: { row, column } });
+              if (!isInSelection(row, column, selection)) {
+                onSelectionChange({ start: { row, column }, end: { row, column } });
+              }
               onCellContextMenu?.({ address, row, column, x: event.clientX, y: event.clientY });
             }}
             onDoubleClick={() => {
@@ -846,23 +1352,6 @@ function RowFragment({
                 style={{ width: `${conditionalDataBar.percent}%`, backgroundColor: conditionalDataBar.color }}
               />
             ) : null}
-            {isAutoFillHandleCell ? (
-              <button
-                type="button"
-                className="auto-fill-handle"
-                aria-label="AutoFill selection"
-                title="AutoFill selection"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onStartAutoFill();
-                }}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-              />
-            ) : null}
             {isEditing ? (
               <div className="cell-editor-shell" onMouseDown={(event) => event.stopPropagation()}>
                 {validation?.type === "list" ? (
@@ -876,7 +1365,7 @@ function RowFragment({
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();
-                        onCommitEdit(address, editingCell.value);
+                        onCommitEdit(address, editingCell.value, event.shiftKey ? "up" : "down");
                       }
                       if (event.key === "Escape") {
                         event.preventDefault();
@@ -909,7 +1398,8 @@ function RowFragment({
                       onBlur={() => onCommitEdit(address, editingCell.value)}
                       onKeyDown={(event) => {
                         // Excel semantics: Up/Down navigate the autocomplete list, Tab accepts
-                        // the highlighted suggestion, and Enter ALWAYS commits the cell.
+                        // the highlighted suggestion (or commits and moves right when there is
+                        // none), and Enter ALWAYS commits the cell, then moves down.
                         // Left/Right are left alone so the user can move the text caret.
                         if (event.key === "ArrowDown" && visibleSuggestions.length > 0) {
                           event.preventDefault();
@@ -933,9 +1423,15 @@ function RowFragment({
                           return;
                         }
 
+                        if (event.key === "Tab") {
+                          event.preventDefault();
+                          onCommitEdit(address, editingCell.value, event.shiftKey ? "left" : "right");
+                          return;
+                        }
+
                         if (event.key === "Enter") {
                           event.preventDefault();
-                          onCommitEdit(address, editingCell.value);
+                          onCommitEdit(address, editingCell.value, event.shiftKey ? "up" : "down");
                         }
                         if (event.key === "Escape") {
                           event.preventDefault();
@@ -1167,23 +1663,187 @@ function isInSelection(row: number, column: number, selection: CellRange): boole
   return row >= selection.start.row && row <= selection.end.row && column >= selection.start.column && column <= selection.end.column;
 }
 
-function createAutoFillTarget(source: CellRange, row: number, column: number): CellRange {
+// Excel fill-handle semantics: dragging outside the source extends along the
+// dominant axis (down/up/right/left); dragging back inside the source shrinks
+// the range, which clears the cells left behind on release.
+export function createAutoFillTarget(source: CellRange, row: number, column: number): CellRange {
   const normalized = normalizeRange(source);
-  if (row > normalized.end.row && column >= normalized.start.column && column <= normalized.end.column) {
-    return {
-      start: normalized.start,
-      end: { row, column: normalized.end.column }
-    };
+  const rowOvershoot =
+    row > normalized.end.row ? row - normalized.end.row : row < normalized.start.row ? row - normalized.start.row : 0;
+  const columnOvershoot =
+    column > normalized.end.column
+      ? column - normalized.end.column
+      : column < normalized.start.column
+      ? column - normalized.start.column
+      : 0;
+
+  if (rowOvershoot === 0 && columnOvershoot === 0) {
+    // Pointer inside the source: shrink (vertical first, matching Excel's bias).
+    if (row < normalized.end.row) {
+      return { start: normalized.start, end: { row, column: normalized.end.column } };
+    }
+    if (column < normalized.end.column) {
+      return { start: normalized.start, end: { row: normalized.end.row, column } };
+    }
+    return normalized;
   }
 
-  if (column > normalized.end.column && row >= normalized.start.row && row <= normalized.end.row) {
-    return {
-      start: normalized.start,
-      end: { row: normalized.end.row, column }
-    };
+  if (Math.abs(rowOvershoot) >= Math.abs(columnOvershoot)) {
+    if (rowOvershoot > 0) {
+      return { start: normalized.start, end: { row, column: normalized.end.column } };
+    }
+    return { start: { row, column: normalized.start.column }, end: normalized.end };
   }
 
-  return normalized;
+  if (columnOvershoot > 0) {
+    return { start: normalized.start, end: { row: normalized.end.row, column } };
+  }
+  return { start: { row: normalized.start.row, column }, end: normalized.end };
+}
+
+// Grows a range until it fully covers every merged range it intersects,
+// looping because absorbing one merge can bring the range into contact with
+// another (chained merges).
+function expandRangeToMerges(range: CellRange, merges: SheetModel["merges"]): CellRange {
+  if (!merges || merges.length === 0) {
+    return range;
+  }
+
+  let current = normalizeRange(range);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const merge of merges) {
+      const mergeRange = normalizeRange(merge.range);
+      const intersects =
+        mergeRange.start.row <= current.end.row &&
+        mergeRange.end.row >= current.start.row &&
+        mergeRange.start.column <= current.end.column &&
+        mergeRange.end.column >= current.start.column;
+      if (!intersects) {
+        continue;
+      }
+      const next = {
+        start: {
+          row: Math.min(current.start.row, mergeRange.start.row),
+          column: Math.min(current.start.column, mergeRange.start.column)
+        },
+        end: {
+          row: Math.max(current.end.row, mergeRange.end.row),
+          column: Math.max(current.end.column, mergeRange.end.column)
+        }
+      };
+      if (
+        next.start.row !== current.start.row ||
+        next.start.column !== current.start.column ||
+        next.end.row !== current.end.row ||
+        next.end.column !== current.end.column
+      ) {
+        current = next;
+        changed = true;
+      }
+    }
+  }
+  return current;
+}
+
+function rangeOverlayRect(
+  range: CellRange,
+  measurements: ReturnType<typeof measureRows>,
+  columnLayout: Array<{ column: number; left: number; width: number }>,
+  headerWidth: number,
+  headerHeight: number
+): OverlayRect | null {
+  const rowRect = rowRangeRect(measurements, range.start.row, range.end.row);
+  const columnRect = columnRangeRect(columnLayout, range.start.column, range.end.column);
+  if (!rowRect || !columnRect) {
+    return null;
+  }
+  return {
+    top: headerHeight + rowRect.top,
+    left: headerWidth + columnRect.left,
+    width: columnRect.width,
+    height: rowRect.height
+  };
+}
+
+function rowRangeRect(
+  measurements: ReturnType<typeof measureRows>,
+  startRow: number,
+  endRow: number
+): { top: number; height: number } | null {
+  if (measurements.length === 0) {
+    return null;
+  }
+  // measurements are sorted by row; find the visible slice inside [startRow, endRow].
+  let low = 0;
+  let high = measurements.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (measurements[mid].row < startRow) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const firstIndex = low;
+  low = 0;
+  high = measurements.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (measurements[mid].row <= endRow) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const lastIndex = high;
+  if (firstIndex > lastIndex) {
+    return null;
+  }
+  return {
+    top: measurements[firstIndex].start,
+    height: measurements[lastIndex].end - measurements[firstIndex].start
+  };
+}
+
+function columnRangeRect(
+  columnLayout: Array<{ column: number; left: number; width: number }>,
+  startColumn: number,
+  endColumn: number
+): { left: number; width: number } | null {
+  if (columnLayout.length === 0) {
+    return null;
+  }
+  let low = 0;
+  let high = columnLayout.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (columnLayout[mid].column < startColumn) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const firstIndex = low;
+  low = 0;
+  high = columnLayout.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (columnLayout[mid].column <= endColumn) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  const lastIndex = high;
+  if (firstIndex > lastIndex) {
+    return null;
+  }
+  return {
+    left: columnLayout[firstIndex].left,
+    width: columnLayout[lastIndex].left + columnLayout[lastIndex].width - columnLayout[firstIndex].left
+  };
 }
 
 function findAutoFilterForColumn(filters: readonly SheetFilter[], range: CellRange, column: number): SheetFilter | null {

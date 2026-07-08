@@ -164,6 +164,7 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "A2 20" })).toHaveTextContent("20");
 
     await user.click(screen.getByRole("button", { name: "Show formula bar" }));
+    await user.click(screen.getByRole("gridcell", { name: "A2 20" }));
 
     expect(screen.getByLabelText("Formula bar")).toBeInTheDocument();
     expect(screen.getByLabelText("Formula input")).toHaveValue("=A1*2");
@@ -177,6 +178,7 @@ describe("App", () => {
     await editCell(user, "A1", "10");
     await editCell(user, "A2", "20");
     await editCell(user, "A3", "=SUM(A1:A2)");
+    await user.click(screen.getByRole("gridcell", { name: "A3 30" }));
 
     expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveTextContent("30");
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
@@ -297,6 +299,7 @@ describe("App", () => {
     render(<App />);
 
     await editCell(user, "A1", "Report");
+    await user.click(screen.getByRole("gridcell", { name: "A1 Report" }));
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Link" }));
 
@@ -1130,6 +1133,115 @@ describe("App", () => {
     expect(screen.getByLabelText("Name box")).toHaveValue("B1");
   });
 
+  it("extends the selection with Shift+Arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    await user.keyboard("{Shift>}{ArrowDown}{ArrowDown}{ArrowRight}{/Shift}");
+
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1:B3");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("6 selected");
+
+    await user.keyboard("{ArrowDown}");
+
+    expect(screen.getByLabelText("Name box")).toHaveValue("A2");
+  });
+
+  it("jumps to data-region edges with Ctrl+Arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "10");
+    await editCell(user, "A2", "20");
+    await editCell(user, "A3", "30");
+    await user.click(screen.getByRole("gridcell", { name: "A1 10" }));
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    fireEvent.keyDown(grid, { key: "ArrowDown", ctrlKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A3");
+
+    fireEvent.keyDown(grid, { key: "ArrowDown", ctrlKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A100");
+
+    fireEvent.keyDown(grid, { key: "ArrowUp", ctrlKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A3");
+
+    fireEvent.keyDown(grid, { key: "ArrowUp", ctrlKey: true, shiftKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1:A3");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("3 selected");
+  });
+
+  it("moves the active cell with Tab and Shift+Tab", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+
+    fireEvent.keyDown(grid, { key: "Tab" });
+    expect(screen.getByLabelText("Name box")).toHaveValue("B1");
+
+    fireEvent.keyDown(grid, { key: "Tab" });
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1");
+
+    fireEvent.keyDown(grid, { key: "Tab", shiftKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("B1");
+  });
+
+  it("moves down after committing an edit with Enter and right with Tab", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "10");
+    expect(screen.getByLabelText("Name box")).toHaveValue("A2");
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "B2" }));
+    await user.type(screen.getByLabelText("Cell editor B2"), "hello");
+    await user.keyboard("{Tab}");
+
+    expect(screen.getByRole("gridcell", { name: "B2 hello" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Name box")).toHaveValue("C2");
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "C2" }));
+    await user.type(screen.getByLabelText("Cell editor C2"), "up");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(screen.getByRole("gridcell", { name: "C2 up" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1");
+  });
+
+  it("selects the data region, then the whole sheet, with Ctrl+A", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "Name");
+    await editCell(user, "B1", "Amount");
+    await editCell(user, "A2", "West");
+    await editCell(user, "B2", "5");
+    await user.click(screen.getByRole("gridcell", { name: "A1 Name" }));
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    fireEvent.keyDown(grid, { key: "a", ctrlKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1:B2");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("4 selected");
+
+    fireEvent.keyDown(grid, { key: "a", ctrlKey: true });
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1:Z100");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("2600 selected");
+  });
+
+  it("extends the selection with shift-click", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    fireEvent.click(screen.getByRole("gridcell", { name: "C3" }), { shiftKey: true });
+
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1:C3");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("9 selected");
+  });
+
   it("shows numeric summaries for the selected range", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1777,6 +1889,7 @@ describe("App", () => {
     render(<App />);
 
     await editCell(user, "A1", "Report");
+    await user.click(screen.getByRole("gridcell", { name: "A1 Report" }));
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Link" }));
     expect(screen.getByRole("link", { name: "Report" })).toHaveAttribute("href", "https://example.com/report");
@@ -1886,6 +1999,7 @@ describe("App", () => {
     render(<App />);
 
     await editCell(user, "A1", "Forecast");
+    await user.click(screen.getByRole("gridcell", { name: "A1 Forecast" }));
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Comment" }));
     const commentedCell = screen.getByRole("gridcell", { name: "A1 Forecast" });
