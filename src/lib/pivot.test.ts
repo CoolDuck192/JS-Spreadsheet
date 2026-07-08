@@ -246,6 +246,41 @@ describe("pivot", () => {
     ]);
   });
 
+  it("renders empty intersections as 0 for count aggregators and blank otherwise", () => {
+    const sparseRows = [
+      ["Region", "Product", "Sales"],
+      ["West", "Hardware", "10"],
+      ["East", "Software", "7"]
+    ];
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "COUNT" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "0", "1", "1"],
+      ["West", "1", "0", "1"],
+      ["Grand Total", "1", "1", "2"]
+    ]);
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "COUNTNUMS" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "0", "1", "1"],
+      ["West", "1", "0", "1"],
+      ["Grand Total", "1", "1", "2"]
+    ]);
+
+    expect(
+      createPivotTable(sparseRows, { rowFields: ["Region"], columnField: "Product", valueField: "Sales", aggregator: "PRODUCT" })
+    ).toEqual([
+      ["Region", "Hardware", "Software", "Grand Total"],
+      ["East", "", "7", "7"],
+      ["West", "10", "", "10"],
+      ["Grand Total", "10", "7", "70"]
+    ]);
+  });
+
   it("parses scientific-notation values into aggregates", () => {
     const table = createPivotTable(
       [

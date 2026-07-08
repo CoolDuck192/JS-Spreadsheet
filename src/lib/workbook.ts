@@ -2199,7 +2199,7 @@ function applyAutoFillMetadata(
   return setCellValidation(nextWorkbook, sheetId, targetRange, sourceCell.validation);
 }
 
-function isVerticalAutoFill(source: CellRange, target: CellRange): boolean {
+export function isVerticalAutoFill(source: CellRange, target: CellRange): boolean {
   const sameColumns = target.start.column === source.start.column && target.end.column === source.end.column;
   return (
     sameColumns &&
@@ -2208,7 +2208,7 @@ function isVerticalAutoFill(source: CellRange, target: CellRange): boolean {
   );
 }
 
-function isHorizontalAutoFill(source: CellRange, target: CellRange): boolean {
+export function isHorizontalAutoFill(source: CellRange, target: CellRange): boolean {
   const sameRows = target.start.row === source.start.row && target.end.row === source.end.row;
   return (
     sameRows &&

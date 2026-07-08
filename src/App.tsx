@@ -59,6 +59,8 @@ import {
   addSheetChart,
   addConditionalFormatRule,
   autoFillRange,
+  isHorizontalAutoFill,
+  isVerticalAutoFill,
   clearCellComments,
   clearDirectCellFormats,
   clearCellFormats,
@@ -1694,8 +1696,13 @@ export default function App() {
 
     if (event.key === "Home" && isGridEvent) {
       event.preventDefault();
-      const target = isCommand ? { row: 0, column: 0 } : { row: selection.start.row, column: 0 };
-      moveActiveCellTo(target);
+      const baseRow = isCommand ? 0 : selection.start.row;
+      // Home must not land on hidden rows/columns any more than arrows may.
+      const hiddenColumns = activeSheet.hiddenColumns ?? {};
+      const column = hiddenColumns["0"]
+        ? stepPastHidden(activeSheet, { row: baseRow, column: 0 }, { row: 0, column: 1 }).column
+        : 0;
+      moveActiveCellTo(snapRowVisible({ row: baseRow, column }, 1));
       return;
     }
 
@@ -2766,38 +2773,34 @@ function autoFunctionLabel(functionName: AutoFunctionName): string {
   return labels[functionName];
 }
 
+// Direction validity is delegated to the same predicates autoFillRange uses,
+// so "what handleAutoFill validates" and "what the engine fills" cannot diverge.
 function getAutoFillWriteRange(sourceRange: CellRange, targetRange: CellRange): CellRange | null {
   const source = normalizeRange(sourceRange);
   const target = normalizeRange(targetRange);
-  const sameColumns = target.start.column === source.start.column && target.end.column === source.end.column;
-  const sameRows = target.start.row === source.start.row && target.end.row === source.end.row;
 
-  if (sameColumns && target.start.row === source.start.row && target.end.row > source.end.row) {
-    return {
-      start: { row: source.end.row + 1, column: source.start.column },
-      end: { row: target.end.row, column: source.end.column }
-    };
+  if (isVerticalAutoFill(source, target)) {
+    return target.end.row > source.end.row
+      ? {
+          start: { row: source.end.row + 1, column: source.start.column },
+          end: { row: target.end.row, column: source.end.column }
+        }
+      : {
+          start: { row: target.start.row, column: source.start.column },
+          end: { row: source.start.row - 1, column: source.end.column }
+        };
   }
 
-  if (sameColumns && target.end.row === source.end.row && target.start.row < source.start.row) {
-    return {
-      start: { row: target.start.row, column: source.start.column },
-      end: { row: source.start.row - 1, column: source.end.column }
-    };
-  }
-
-  if (sameRows && target.start.column === source.start.column && target.end.column > source.end.column) {
-    return {
-      start: { row: source.start.row, column: source.end.column + 1 },
-      end: { row: source.end.row, column: target.end.column }
-    };
-  }
-
-  if (sameRows && target.end.column === source.end.column && target.start.column < source.start.column) {
-    return {
-      start: { row: source.start.row, column: target.start.column },
-      end: { row: source.end.row, column: source.start.column - 1 }
-    };
+  if (isHorizontalAutoFill(source, target)) {
+    return target.end.column > source.end.column
+      ? {
+          start: { row: source.start.row, column: source.end.column + 1 },
+          end: { row: source.end.row, column: target.end.column }
+        }
+      : {
+          start: { row: source.start.row, column: target.start.column },
+          end: { row: source.end.row, column: source.start.column - 1 }
+        };
   }
 
   return null;

@@ -1205,6 +1205,8 @@ test("dragging from near a selected cell's corner starts a selection, not a fill
   await page.mouse.move(a6!.x + a6!.width / 2, a6!.y + a6!.height / 2, { steps: 8 });
   await page.mouse.up();
 
+  // The corner drag itself must also leave no native text selection behind.
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
   await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("A6:E6");
   await expect(page.getByLabel("Status", { exact: true })).not.toContainText("AutoFilled");
   await expect(page.getByRole("gridcell", { name: "A5 precious", exact: true })).toBeVisible();
