@@ -121,4 +121,8 @@ Embedders can supply their own token source instead by implementing the `TokenPr
 
 ## Embedding
 
-`src/index.ts` exports the app as a library: the default export is the `<Spreadsheet />` component, alongside headless workbook, engine, xlsx, pivot, and Google Sheets functions. A dedicated Vite library build target is on the roadmap.
+`src/index.ts` exports the app as a library: the default export is the `<Spreadsheet />` component, alongside headless workbook, engine, xlsx, pivot, and Google Sheets functions. A dedicated Vite library build target is on the roadmap. See [docs/embedding.md](docs/embedding.md) for how to consume the repo as a source dependency.
+
+## License
+
+[GPL-3.0-or-later](LICENSE). This matches the project's use of HyperFormula under its GPLv3 license key — if you need to use this code in a non-GPL application, you would also need a commercial HyperFormula license.
