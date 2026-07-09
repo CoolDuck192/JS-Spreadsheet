@@ -856,6 +856,30 @@ describe("workbook", () => {
     expect(getCellContent(history.present, history.present.activeSheetId, "A1")).toBe("20");
   });
 
+  it("never retains more than 100 undo snapshots", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    let history = createHistory(initial);
+    let maximumDepth = 0;
+
+    for (let value = 1; value <= 105; value += 1) {
+      history = commitHistory(history, setCellContent(history.present, sheetId, "A1", value));
+      maximumDepth = Math.max(maximumDepth, history.past.length);
+    }
+
+    expect({
+      maximumDepth,
+      retainedDepth: history.past.length,
+      oldestRetainedValue: getCellContent(history.past[0], sheetId, "A1"),
+      newestRetainedValue: getCellContent(history.past.at(-1)!, sheetId, "A1")
+    }).toEqual({
+      maximumDepth: 100,
+      retainedDepth: 100,
+      oldestRetainedValue: 5,
+      newestRetainedValue: 104
+    });
+  });
+
   it("applies text and color formatting to a range", () => {
     const workbook = createBlankWorkbook();
     const formatted = setCellFormat(workbook, workbook.activeSheetId, range("A1", "B2"), {

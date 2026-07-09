@@ -41,12 +41,10 @@ import {
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
 
 describe("xlsx", () => {
-  it("round-trips sheets, values, formulas, comments, hyperlinks, merges, and dimensions", async () => {
+  it("round-trips sheets, text, formulas, comments, hyperlinks, merges, and dimensions", async () => {
     let workbook = createBlankWorkbook();
     const firstSheetId = workbook.activeSheetId;
     workbook = setCellContent(workbook, firstSheetId, "A1", "Project");
-    workbook = setCellContent(workbook, firstSheetId, "B2", 42);
-    workbook = setCellContent(workbook, firstSheetId, "C3", true);
     workbook = setCellContent(workbook, firstSheetId, "D4", "=SUM(B2:B2)");
     workbook = setCellFormat(
       workbook,
@@ -77,8 +75,6 @@ describe("xlsx", () => {
 
     expect(imported.sheets.map((sheet) => sheet.name)).toEqual(["Sheet1", "Forecast"]);
     expect(getCellContent(imported, importedFirstSheetId, "A1")).toBe("Project");
-    expect(getCellContent(imported, importedFirstSheetId, "B2")).toBe(42);
-    expect(getCellContent(imported, importedFirstSheetId, "C3")).toBe(true);
     expect(getCellContent(imported, importedFirstSheetId, "D4")).toBe("=SUM(B2:B2)");
     expect(getCellFormat(imported, importedFirstSheetId, "A1")).toMatchObject({ wrapText: true });
     expect(getCellComment(imported, importedFirstSheetId, "A1")).toBe("Imported note");
@@ -93,6 +89,26 @@ describe("xlsx", () => {
     expect(isColumnHidden(imported, importedFirstSheetId, 3)).toBe(true);
     expect(isRowHidden(imported, importedFirstSheetId, 4)).toBe(true);
     expect(getCellContent(imported, importedSecondSheetId, "A1")).toBe("Second sheet");
+  });
+
+  it("preserves native model number and boolean types through XLSX", async () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 42.5);
+    workbook = setCellContent(workbook, sheetId, "A2", -7);
+    workbook = setCellContent(workbook, sheetId, "B1", true);
+    workbook = setCellContent(workbook, sheetId, "B2", false);
+
+    const data = await exportWorkbookToXlsx(workbook);
+    const imported = await importWorkbookFromXlsx(data);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(["A1", "A2", "B1", "B2"].map((address) => getCellContent(imported, importedSheetId, address))).toEqual([
+      42.5,
+      -7,
+      true,
+      false
+    ]);
   });
 
   it("round-trips the active sheet through XLSX", async () => {

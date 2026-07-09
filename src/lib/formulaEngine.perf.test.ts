@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { HyperFormula } from "hyperformula";
+import { describe, expect, it, vi } from "vitest";
 import { createFormulaEngine } from "./formulaEngine";
 import { createBlankWorkbook, setCellContent } from "./workbook";
 import type { WorkbookModel } from "../types";
@@ -25,21 +26,35 @@ describe("formula engine at scale", () => {
     expect(engine.getDisplayValue(workbook.sheets[0].id, "C1")).toBe("5000050000");
 
     // Single-cell edit must be an incremental diff, not a rebuild.
-    const t1 = performance.now();
-    const next = setCellContent(workbook, workbook.sheets[0].id, "A1", 101);
-    engine.update(next);
-    const updateMs = performance.now() - t1;
-    expect(engine.getDisplayValue(next.sheets[0].id, "C1")).toBe("5000050100");
+    const setCellContents = vi.spyOn(HyperFormula.prototype, "setCellContents");
+    const destroy = vi.spyOn(HyperFormula.prototype, "destroy");
+    try {
+      const t1 = performance.now();
+      const next = setCellContent(workbook, workbook.sheets[0].id, "A1", 101);
+      engine.update(next);
+      const updateMs = performance.now() - t1;
+      expect(engine.getDisplayValue(next.sheets[0].id, "C1")).toBe("5000050100");
+      expect({
+        cellWrites: setCellContents.mock.calls,
+        rebuilds: destroy.mock.calls.length
+      }).toEqual({
+        cellWrites: [[{ sheet: 0, col: 0, row: 0 }, 101]],
+        rebuilds: 0
+      });
 
-    // eslint-disable-next-line no-console
-    console.log(`build(200k cells)=${Math.round(buildMs)}ms update(1 cell)=${Math.round(updateMs)}ms`);
-    // Wall-clock assertions can flake on contended/instrumented runners; set
-    // SKIP_PERF_ASSERT=1 to keep only the correctness checks.
-    if (!process.env.SKIP_PERF_ASSERT) {
-      expect(buildMs).toBeLessThan(30_000);
-      expect(updateMs).toBeLessThan(2_000);
+      // eslint-disable-next-line no-console
+      console.log(`build(200k cells)=${Math.round(buildMs)}ms update(1 cell)=${Math.round(updateMs)}ms`);
+      // Wall-clock assertions can flake on contended/instrumented runners; set
+      // SKIP_PERF_ASSERT=1 to keep only the correctness checks.
+      if (!process.env.SKIP_PERF_ASSERT) {
+        expect(buildMs).toBeLessThan(30_000);
+        expect(updateMs).toBeLessThan(2_000);
+      }
+    } finally {
+      setCellContents.mockRestore();
+      destroy.mockRestore();
+      engine.destroy();
     }
-    engine.destroy();
   });
 
   it("evaluates ISO and US dates as real dates with working arithmetic", () => {
