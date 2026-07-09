@@ -283,6 +283,8 @@ git commit -m "fix: make formula structure edits token aware"
 - Modify: `src/lib/workbook.ts`
 - Modify: `src/lib/workbook.test.ts`
 - Modify: `src/components/Grid.tsx`
+- Modify: `src/App.tsx`
+- Modify: `src/App.test.tsx`
 
 **Interfaces:**
 - Produces: `ComputedCellValue`, `FormulaEngine.getComputedValue`, `ValidationCandidate`, and resolver-backed `sortRange`.
@@ -339,7 +341,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit evaluated operations**
 
 ```bash
-git add src/lib/formulaEngine.ts src/lib/formulaEngine.test.ts src/lib/validation.ts src/lib/validation.test.ts src/lib/filters.ts src/lib/filters.test.ts src/lib/workbook.ts src/lib/workbook.test.ts src/components/Grid.tsx
+git add src/lib/formulaEngine.ts src/lib/formulaEngine.test.ts src/lib/validation.ts src/lib/validation.test.ts src/lib/filters.ts src/lib/filters.test.ts src/lib/workbook.ts src/lib/workbook.test.ts src/components/Grid.tsx src/App.tsx src/App.test.tsx
 git commit -m "fix: use evaluated values for workbook operations"
 ```
 
