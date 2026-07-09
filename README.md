@@ -56,7 +56,7 @@ corepack pnpm install --frozen-lockfile
 Start the local dev server:
 
 ```bash
-pnpm run dev
+corepack pnpm run dev
 ```
 
 The dev server binds all interfaces. Open the `Network` URL that Vite reports,
@@ -72,8 +72,8 @@ only a `127.0.0.1` URL.
 Build and preview a production bundle:
 
 ```bash
-pnpm run build
-pnpm run preview   # serves the build on all interfaces, port 4173
+corepack pnpm run build
+corepack pnpm run preview   # serves the build on all interfaces, port 4173
 ```
 
 > **Testing with large datasets?** Use the production preview. The dev server
@@ -84,14 +84,14 @@ pnpm run preview   # serves the build on all interfaces, port 4173
 Run the test suite:
 
 ```bash
-pnpm test
+corepack pnpm test
 ```
 
 Run browser end-to-end tests:
 
 ```bash
-pnpm exec playwright install
-pnpm run test:e2e
+corepack pnpm exec playwright install
+corepack pnpm run test:e2e
 ```
 
 ## Project Docs
