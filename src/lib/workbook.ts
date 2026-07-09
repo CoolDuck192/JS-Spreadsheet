@@ -17,8 +17,6 @@ import type {
   WorkbookModel
 } from "../types";
 import {
-  columnIndexToName,
-  columnNameToIndex,
   formatCellAddress,
   getRangeAddresses,
   normalizeRange,
@@ -30,7 +28,7 @@ import {
   clampColumnWidth,
   clampRowHeight
 } from "./sheetDimensions";
-import { translateFormulaReferences } from "./formulaReferences";
+import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
@@ -1903,9 +1901,8 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
         continue;
       }
 
-      const nextContent = shiftFormulaReferences(content, normalizedOperation);
-      if (nextContent !== null) {
-        nextCells[formatCellAddress(nextCoord)] = nextContent;
+      if (content !== null) {
+        nextCells[formatCellAddress(nextCoord)] = content;
       }
     }
 
@@ -2025,7 +2022,9 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     };
   });
 
-  const nextNamedRanges = (nextWorkbook.namedRanges ?? []).flatMap((namedRange) => {
+  const rewrittenWorkbook = rewriteWorkbookFormulasForStructure(nextWorkbook, sourceSheet.name, normalizedOperation);
+
+  const nextNamedRanges = (rewrittenWorkbook.namedRanges ?? []).flatMap((namedRange) => {
     if (namedRange.sheetId !== sheetId) {
       return [cloneNamedRange(namedRange)];
     }
@@ -2034,7 +2033,43 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     return shiftedRange ? [{ ...cloneNamedRange(namedRange), range: shiftedRange }] : [];
   });
 
-  return { ...nextWorkbook, namedRanges: nextNamedRanges };
+  return { ...rewrittenWorkbook, namedRanges: nextNamedRanges };
+}
+
+function rewriteWorkbookFormulasForStructure(
+  workbook: WorkbookModel,
+  editedSheetName: string,
+  operation: StructureOperation
+): WorkbookModel {
+  let workbookChanged = false;
+  const sheets = workbook.sheets.map((sheet) => {
+    let sheetChanged = false;
+    const cells = { ...sheet.cells };
+
+    for (const [address, content] of Object.entries(sheet.cells)) {
+      if (typeof content !== "string" || !content.startsWith("=")) {
+        continue;
+      }
+      const nextContent = rewriteFormulaForStructure(content, {
+        formulaSheetName: sheet.name,
+        editedSheetName,
+        ...operation
+      });
+      if (nextContent === content) {
+        continue;
+      }
+      cells[address] = nextContent;
+      sheetChanged = true;
+    }
+
+    if (!sheetChanged) {
+      return sheet;
+    }
+    workbookChanged = true;
+    return { ...sheet, cells };
+  });
+
+  return workbookChanged ? { ...workbook, sheets } : workbook;
 }
 
 function shiftRange(range: CellRange, operation: StructureOperation): CellRange | null {
@@ -2365,44 +2400,6 @@ function wrapSeriesIndex(index: number, count: number): number {
 }
 
 function shiftCoord(coord: { row: number; column: number }, operation: StructureOperation) {
-  const end = operation.index + operation.count;
-  if (operation.axis === "row") {
-    if (operation.mode === "insert") {
-      return { ...coord, row: coord.row >= operation.index ? coord.row + operation.count : coord.row };
-    }
-    if (coord.row >= operation.index && coord.row < end) {
-      return null;
-    }
-    return { ...coord, row: coord.row >= end ? coord.row - operation.count : coord.row };
-  }
-
-  if (operation.mode === "insert") {
-    return { ...coord, column: coord.column >= operation.index ? coord.column + operation.count : coord.column };
-  }
-  if (coord.column >= operation.index && coord.column < end) {
-    return null;
-  }
-  return { ...coord, column: coord.column >= end ? coord.column - operation.count : coord.column };
-}
-
-function shiftFormulaReferences(content: CellContent, operation: StructureOperation): CellContent {
-  if (typeof content !== "string" || !content.startsWith("=")) {
-    return content;
-  }
-
-  return content.replace(/(\$?)([A-Z]+)(\$?)(\d+)/g, (_match, columnLock: string, columnName: string, rowLock: string, rowName: string) => {
-    const nextCoord = shiftReferenceCoord(
-      { row: Number(rowName) - 1, column: columnNameToIndex(columnName) },
-      operation
-    );
-    if (!nextCoord) {
-      return "#REF!";
-    }
-    return `${columnLock}${columnIndexToName(nextCoord.column)}${rowLock}${nextCoord.row + 1}`;
-  });
-}
-
-function shiftReferenceCoord(coord: { row: number; column: number }, operation: StructureOperation) {
   const end = operation.index + operation.count;
   if (operation.axis === "row") {
     if (operation.mode === "insert") {

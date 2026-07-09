@@ -431,6 +431,48 @@ describe("workbook", () => {
     expect(getCellFormat(deleted, sheetId, "B1")).toEqual({ backgroundColor: "#eaf7f2" });
   });
 
+  it("does not rewrite LOG10, scientific notation, or quoted A1-like text during row insertion", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "B1", '=LOG10(A1)+1E5+Q1_TOTAL+"A1 ""B2"""');
+
+    const inserted = insertRows(workbook, sheetId, 0);
+
+    expect(getCellContent(inserted, sheetId, "B2")).toBe('=LOG10(A2)+1E5+Q1_TOTAL+"A1 ""B2"""');
+  });
+
+  it("updates formulas on other sheets that reference the structurally edited sheet", () => {
+    let workbook = createBlankWorkbook();
+    const dataSheetId = workbook.activeSheetId;
+    workbook = renameSheet(workbook, dataSheetId, "Director's Plan");
+    workbook = addSheet(workbook, "Summary");
+    const summarySheetId = workbook.activeSheetId;
+
+    workbook = setCellContent(workbook, dataSheetId, "A2", "10");
+    workbook = setCellContent(workbook, dataSheetId, "C1", "=A2+Summary!A2");
+    workbook = setCellContent(
+      workbook,
+      summarySheetId,
+      "B2",
+      "=SUM('Director''s Plan'!$A$2:$A$4)+A2"
+    );
+    workbook = setCellFormat(workbook, summarySheetId, range("B2"), { bold: true });
+    workbook = setCellComment(workbook, summarySheetId, "B2", "Keep this metadata in place");
+
+    const inserted = insertRows(workbook, dataSheetId, 1);
+
+    expect(getCellContent(inserted, dataSheetId, "A2")).toBeNull();
+    expect(getCellContent(inserted, dataSheetId, "A3")).toBe("10");
+    expect(getCellContent(inserted, dataSheetId, "C1")).toBe("=A3+Summary!A2");
+    expect(getCellContent(inserted, summarySheetId, "B2")).toBe(
+      "=SUM('Director''s Plan'!$A$3:$A$5)+A2"
+    );
+    expect(getCellContent(inserted, summarySheetId, "B3")).toBeNull();
+    expect(getCellFormat(inserted, summarySheetId, "B2")).toEqual({ bold: true });
+    expect(getCellComment(inserted, summarySheetId, "B2")).toBe("Keep this metadata in place");
+    expect(getCellComment(inserted, summarySheetId, "B3")).toBeNull();
+  });
+
   it("stores, clamps, and shifts row heights and column widths", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;
