@@ -135,7 +135,7 @@ git commit -m "test: lock in workbook correctness baseline"
 - Modify: `src/types.ts`
 - Modify: `src/lib/displayFormat.ts`
 - Modify: `src/lib/xlsx.ts`
-- Modify: `src/components/Grid.tsx`
+- Modify: `src/App.tsx`
 
 **Interfaces:**
 - Produces: `ParsedCellInput`, `parseCellInput`, Excel serial conversion, and `dateTime` display format.
@@ -204,7 +204,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit typed input**
 
 ```bash
-git add src/core/values src/types.ts src/lib/displayFormat.ts src/lib/xlsx.ts src/components/Grid.tsx src/lib/xlsx.test.ts src/App.test.tsx
+git add src/core/values src/types.ts src/lib/displayFormat.ts src/lib/xlsx.ts src/lib/xlsx.test.ts src/App.tsx src/App.test.tsx
 git commit -m "fix: preserve typed spreadsheet input values"
 ```
 
