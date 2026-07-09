@@ -2193,21 +2193,20 @@ describe("App", () => {
     expect(screen.getByLabelText("Number format")).toHaveValue("general");
   });
 
-  it("auto-formats a typed date in a cell explicitly reset to General", async () => {
+  it("infers a date format only when number format is absent and preserves explicit General", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await editCell(user, "B1", "2026-07-08");
-    const expected = screen.getByRole("gridcell", { name: addressNamePattern("B1") }).textContent;
-    // Sanity: the auto-applied date format rendered a date, not a raw serial.
-    expect(expected).not.toMatch(/^\d+$/);
+    expect(screen.getByRole("gridcell", { name: "B1 Jul 8, 2026" })).toHaveTextContent("Jul 8, 2026");
 
     await user.click(screen.getByRole("gridcell", { name: addressNamePattern("A1") }));
     await user.selectOptions(screen.getByLabelText("Number format"), "currency");
     await user.selectOptions(screen.getByLabelText("Number format"), "general");
     await editCell(user, "A1", "2026-07-08");
 
-    expect(screen.getByRole("gridcell", { name: addressNamePattern("A1") }).textContent).toBe(expected);
+    expect(screen.getByRole("gridcell", { name: "A1 46211" })).toHaveTextContent("46211");
+    expect(screen.getByLabelText("Number format")).toHaveValue("general");
   });
 
   it("marks panel-launching toolbar buttons as expanded while their panel is open", async () => {

@@ -367,7 +367,7 @@ export default function App() {
     }
     const parsed = parseCellInput(raw);
     let nextWorkbook = setCellContent(workbook, activeSheet.id, address, parsed.stored);
-    if (parsed.inferredNumberFormat && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
+    if (parsed.inferredNumberFormat && getCellFormat(workbook, activeSheet.id, address).numberFormat === undefined) {
       const coord = parseCellAddress(address);
       nextWorkbook = setCellFormat(
         nextWorkbook,

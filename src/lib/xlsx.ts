@@ -1190,15 +1190,96 @@ function excelNumberFormatToCellFormat(numFmt: string | undefined): CellFormat["
       return format as CellFormat["numberFormat"];
     }
   }
-  const normalized = numFmt.toLowerCase().replace(/"[^"]*"/g, "").replace(/\\./g, "");
-  const hasDateParts = /[yd]/.test(normalized);
-  if (hasDateParts && /[hs]/.test(normalized)) {
+  return temporalNumberFormatKind(numFmt);
+}
+
+function temporalNumberFormatKind(numFmt: string): "date" | "dateTime" | undefined {
+  let hasYear = false;
+  let hasMonthOrMinute = false;
+  let hasDay = false;
+  let hasTime = false;
+
+  for (let index = 0; index < numFmt.length;) {
+    const char = numFmt[index].toLowerCase();
+    if (char === '"') {
+      index = skipQuotedNumberFormatLiteral(numFmt, index + 1);
+      continue;
+    }
+    if (char === "\\" || char === "_" || char === "*") {
+      index = Math.min(numFmt.length, index + 2);
+      continue;
+    }
+    if (char === "[") {
+      const closingBracket = numFmt.indexOf("]", index + 1);
+      if (closingBracket < 0) {
+        break;
+      }
+      const bracketToken = numFmt.slice(index + 1, closingBracket).toLowerCase();
+      if (/^[hms]+$/.test(bracketToken)) {
+        hasTime = true;
+      }
+      index = closingBracket + 1;
+      continue;
+    }
+
+    const remaining = numFmt.slice(index).toLowerCase();
+    if (remaining.startsWith("am/pm")) {
+      hasTime = true;
+      index += "am/pm".length;
+      continue;
+    }
+    if (remaining.startsWith("a/p")) {
+      hasTime = true;
+      index += "a/p".length;
+      continue;
+    }
+
+    if (/[ymdhs]/.test(char)) {
+      let tokenEnd = index + 1;
+      while (numFmt[tokenEnd]?.toLowerCase() === char) {
+        tokenEnd += 1;
+      }
+      const touchesNumericPlaceholder = /[0#?]/.test(numFmt[index - 1] ?? "") || /[0#?]/.test(numFmt[tokenEnd] ?? "");
+      if (!touchesNumericPlaceholder) {
+        if (char === "y") {
+          hasYear = true;
+        } else if (char === "m") {
+          hasMonthOrMinute = true;
+        } else if (char === "d") {
+          hasDay = true;
+        } else {
+          hasTime = true;
+        }
+      }
+      index = tokenEnd;
+      continue;
+    }
+    index += 1;
+  }
+
+  if (hasTime) {
     return "dateTime";
   }
-  if (hasDateParts) {
+  if (hasYear || hasMonthOrMinute || hasDay) {
     return "date";
   }
   return undefined;
+}
+
+function skipQuotedNumberFormatLiteral(numFmt: string, start: number): number {
+  let index = start;
+  while (index < numFmt.length) {
+    if (numFmt[index] !== '"') {
+      index += 1;
+      continue;
+    }
+    if (numFmt[index + 1] === '"') {
+      index += 2;
+      continue;
+    }
+    return index + 1;
+  }
+  return index;
 }
 
 function isHorizontalAlign(value: unknown): value is NonNullable<CellFormat["horizontalAlign"]> {

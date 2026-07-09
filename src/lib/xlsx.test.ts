@@ -130,6 +130,19 @@ describe("xlsx", () => {
     expect(getCellFormat(imported, importedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
 
     const exportedData = await exportWorkbookToXlsx(imported);
+    const nativeReadback = new ExcelJS.Workbook();
+    await nativeReadback.xlsx.load(exportedData as Parameters<typeof nativeReadback.xlsx.load>[0]);
+    const nativeReadbackSheet = nativeReadback.getWorksheet("Dates");
+    const nativeDate = nativeReadbackSheet?.getCell("A1");
+    const nativeDateTime = nativeReadbackSheet?.getCell("A2");
+
+    expect(nativeDate?.value).toBeInstanceOf(Date);
+    expect((nativeDate?.value as Date).toISOString()).toBe("2026-01-15T00:00:00.000Z");
+    expect(nativeDate?.numFmt).toBe("mmm d, yyyy");
+    expect(nativeDateTime?.value).toBeInstanceOf(Date);
+    expect((nativeDateTime?.value as Date).toISOString()).toBe("2026-01-15T12:00:00.000Z");
+    expect(nativeDateTime?.numFmt).toBe("mmm d, yyyy h:mm AM/PM");
+
     const reimported = await importWorkbookFromXlsx(exportedData);
     const reimportedSheetId = reimported.sheets[0].id;
 
@@ -137,6 +150,38 @@ describe("xlsx", () => {
     expect(getCellContent(reimported, reimportedSheetId, "A2")).toBe(46037.5);
     expect(getCellFormat(reimported, reimportedSheetId, "A1")).toMatchObject({ numberFormat: "date" });
     expect(getCellFormat(reimported, reimportedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
+  });
+
+  it("classifies temporal number formats from actual tokens instead of literals and colors", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const nativeWorkbook = new ExcelJS.Workbook();
+    const nativeSheet = nativeWorkbook.addWorksheet("Formats");
+    const formats = {
+      A1: "[Red]0.00",
+      A2: "h:mm",
+      A3: '0.00 "days"',
+      A4: "0.00\\d",
+      A5: "[$USD-409]#,##0.00"
+    } as const;
+
+    for (const [address, numFmt] of Object.entries(formats)) {
+      nativeSheet.getCell(address).value = address === "A2" ? 0.5 : 12.5;
+      nativeSheet.getCell(address).numFmt = numFmt;
+    }
+
+    const nativeData = await nativeWorkbook.xlsx.writeBuffer();
+    const imported = await importWorkbookFromXlsx(nativeData as ArrayBuffer);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellContent(imported, importedSheetId, "A1")).toBe(12.5);
+    expect(getCellFormat(imported, importedSheetId, "A1").numberFormat).toBeUndefined();
+    expect(getCellContent(imported, importedSheetId, "A2")).toBe(0.5);
+    expect(getCellFormat(imported, importedSheetId, "A2").numberFormat).toBe("dateTime");
+    expect(["A3", "A4", "A5"].map((address) => getCellFormat(imported, importedSheetId, address).numberFormat)).toEqual([
+      undefined,
+      undefined,
+      undefined
+    ]);
   });
 
   it("round-trips the active sheet through XLSX", async () => {

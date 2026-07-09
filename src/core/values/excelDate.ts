@@ -90,8 +90,17 @@ function parseIsoDateTime(value: string): number | null {
     return null;
   }
 
-  const timeMilliseconds = ((hour * 60 + minute) * 60 + second) * 1000 + millisecond - offsetMilliseconds;
-  return Math.round((dateSerial * MILLISECONDS_PER_DAY + timeMilliseconds)) / MILLISECONDS_PER_DAY;
+  const timeMilliseconds = ((hour * 60 + minute) * 60 + second) * 1000 + millisecond;
+  if (match[8] !== undefined && match[8].toUpperCase() !== "Z") {
+    const civilTimestamp = civilDateToUtcTimestamp(year, month, day);
+    if (civilTimestamp === null) {
+      return null;
+    }
+    const utcTimestamp = civilTimestamp + timeMilliseconds - offsetMilliseconds;
+    return Math.round(dateToExcelSerial(new Date(utcTimestamp)) * MILLISECONDS_PER_DAY) / MILLISECONDS_PER_DAY;
+  }
+
+  return Math.round(dateSerial * MILLISECONDS_PER_DAY + timeMilliseconds) / MILLISECONDS_PER_DAY;
 }
 
 function parseTimezoneOffsetMilliseconds(value: string | undefined): number | null {
@@ -117,6 +126,11 @@ function civilDateToExcelSerial(year: number, month: number, day: number): numbe
   if (year === 1900 && month === 2 && day === 29) {
     return EXCEL_LEAP_DAY_SERIAL;
   }
+  const timestamp = civilDateToUtcTimestamp(year, month, day);
+  return timestamp === null ? null : dateToExcelSerial(new Date(timestamp));
+}
+
+function civilDateToUtcTimestamp(year: number, month: number, day: number): number | null {
   if (year < 1900 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) {
     return null;
   }
@@ -126,5 +140,5 @@ function civilDateToExcelSerial(year: number, month: number, day: number): numbe
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
     return null;
   }
-  return dateToExcelSerial(date);
+  return timestamp;
 }

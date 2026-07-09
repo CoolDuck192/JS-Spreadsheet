@@ -29,6 +29,16 @@ describe("Excel 1900 date conversion", () => {
     expect(parseExcelTemporalInput("2026-01-15T07:00:00-05:00")).toEqual({ kind: "dateTime", serial: 46037.5 });
   });
 
+  it("applies timezone offsets before crossing Excel's leap-day discontinuity", () => {
+    const beforeDiscontinuity = parseExcelTemporalInput("1900-03-01T00:30:00+01:00");
+    const afterDiscontinuity = parseExcelTemporalInput("1900-02-28T23:30:00-01:00");
+
+    expect(beforeDiscontinuity?.kind).toBe("dateTime");
+    expect(beforeDiscontinuity?.serial).toBeCloseTo(59 + 23.5 / 24, 10);
+    expect(afterDiscontinuity?.kind).toBe("dateTime");
+    expect(afterDiscontinuity?.serial).toBeCloseTo(61 + 0.5 / 24, 10);
+  });
+
   it("rejects invalid dates and locale-dependent date text", () => {
     for (const raw of ["2026-02-29", "13/01/2026", "15/01/2026", "January 15, 2026", "2026/01/15"]) {
       expect(parseExcelTemporalInput(raw)).toBeNull();
