@@ -8,19 +8,21 @@ import { formatDisplayValue } from "../lib/displayFormat";
 import { getVisibleRows } from "../lib/filters";
 import type { FormulaEngine } from "../lib/formulaEngine";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../lib/formulaSuggestions";
+import { parseCellInput } from "../core/values/parseCellInput";
 import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
   clampColumnWidth,
   clampRowHeight
 } from "../lib/sheetDimensions";
-import { validateCellValue } from "../lib/validation";
+import { validateCellCandidate, type ValidationCandidate } from "../lib/validation";
 
 const DEFAULT_VIEWPORT_HEIGHT = 560;
 const ROW_OVERSCAN = 16;
 const ROW_HEADER_WIDTH = 48;
 const COLUMN_HEADER_HEIGHT = 28;
 const AUTO_SCROLL_MAX_STEP = 48;
+const AUTO_FILTER_DISPLAY_LIMIT = 200;
 
 export type CommitEditMove = "down" | "up" | "right" | "left";
 
@@ -45,6 +47,7 @@ type GridProps = {
   getCellHyperlink?: (address: string) => string | null | undefined;
   getCellReadOnly?: (address: string) => boolean;
   getCellValidation?: (address: string) => DataValidationRule | null | undefined;
+  getValidationCandidate?: (address: string, value: string) => ValidationCandidate;
   getCellConditionalFormatRules?: (address: string) => ConditionalFormatRule[];
   scrollRef?: RefObject<HTMLDivElement | null>;
   onSelectionChange: (range: CellRange) => void;
@@ -107,6 +110,10 @@ export function Grid({
   getCellHyperlink = () => null,
   getCellReadOnly = () => false,
   getCellValidation = () => null,
+  getValidationCandidate = (_address, value) => {
+    const parsed = parseCellInput(value);
+    return { raw: value, parsed: parsed.stored, evaluated: parsed.stored, formula: parsed.formula };
+  },
   getCellConditionalFormatRules = () => [],
   scrollRef,
   onSelectionChange,
@@ -165,7 +172,7 @@ export function Grid({
   const filteredRows = useMemo(
     () =>
       getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
-        formulaEngine.getDisplayValue(sheet.id, formatCellAddress({ row, column }))
+        formulaEngine.getComputedValue(sheet.id, formatCellAddress({ row, column }))
       ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]),
     [formulaEngine, sheet]
   );
@@ -243,6 +250,7 @@ export function Grid({
     getCellHyperlink,
     getCellReadOnly,
     getCellValidation,
+    getValidationCandidate,
     getCellConditionalFormatRules,
     getConditionalRuleValues
   });
@@ -272,6 +280,7 @@ export function Grid({
     getCellHyperlink,
     getCellReadOnly,
     getCellValidation,
+    getValidationCandidate,
     getCellConditionalFormatRules,
     getConditionalRuleValues
   };
@@ -296,6 +305,7 @@ export function Grid({
       getCellHyperlink: (address: string) => latestRef.current.getCellHyperlink(address),
       getCellReadOnly: (address: string) => latestRef.current.getCellReadOnly(address),
       getCellValidation: (address: string) => latestRef.current.getCellValidation(address),
+      getValidationCandidate: (address: string, value: string) => latestRef.current.getValidationCandidate(address, value),
       getCellConditionalFormatRules: (address: string) => latestRef.current.getCellConditionalFormatRules(address),
       getConditionalRuleValues: (rule: ConditionalFormatRule) => latestRef.current.getConditionalRuleValues(rule)
     }),
@@ -935,6 +945,7 @@ export function Grid({
             getCellHyperlink={stableRowCallbacks.getCellHyperlink}
             getCellReadOnly={stableRowCallbacks.getCellReadOnly}
             getCellValidation={stableRowCallbacks.getCellValidation}
+            getValidationCandidate={stableRowCallbacks.getValidationCandidate}
             getCellConditionalFormatRules={stableRowCallbacks.getCellConditionalFormatRules}
             getConditionalRuleValues={stableRowCallbacks.getConditionalRuleValues}
             onSelectionChange={stableRowCallbacks.onSelectionChange}
@@ -1052,6 +1063,7 @@ function RowFragment({
   getCellHyperlink,
   getCellReadOnly,
   getCellValidation,
+  getValidationCandidate,
   getCellConditionalFormatRules,
   getConditionalRuleValues,
   onSelectionChange,
@@ -1091,6 +1103,7 @@ function RowFragment({
   getCellHyperlink: (address: string) => string | null | undefined;
   getCellReadOnly: (address: string) => boolean;
   getCellValidation: (address: string) => DataValidationRule | null | undefined;
+  getValidationCandidate: (address: string, value: string) => ValidationCandidate;
   getCellConditionalFormatRules: (address: string) => ConditionalFormatRule[];
   getConditionalRuleValues: (rule: ConditionalFormatRule) => readonly string[];
   onSelectionChange: (range: CellRange) => void;
@@ -1116,6 +1129,7 @@ function RowFragment({
   const [openValidationDropdownAddress, setOpenValidationDropdownAddress] = useState<string | null>(null);
   const [openAutoFilterColumn, setOpenAutoFilterColumn] = useState<number | null>(null);
   const [autoFilterDraft, setAutoFilterDraft] = useState<{ column: number; values: string[] } | null>(null);
+  const [autoFilterSearch, setAutoFilterSearch] = useState<{ column: number; value: string } | null>(null);
   const editingSuggestionKey = useMemo(() => {
     if (!editingCell) {
       return "";
@@ -1141,6 +1155,7 @@ function RowFragment({
     setOpenValidationDropdownAddress(null);
     setOpenAutoFilterColumn(null);
     setAutoFilterDraft(null);
+    setAutoFilterSearch(null);
   }, [selection.start.row, selection.start.column, selection.end.row, selection.end.column]);
 
   return (
@@ -1228,10 +1243,20 @@ function RowFragment({
           dismissedEditingSuggestion?.address === address && dismissedEditingSuggestion.value === editingCell?.value ? [] : suggestions;
         const suggestionListId = `cell-editor-${address.toLowerCase()}-formula-suggestions`;
         const activeSuggestion = visibleSuggestions[wrapSuggestionIndex(activeSuggestionIndex, visibleSuggestions.length)];
-        const rawValidationValue = isEditing ? editingCell.value : rawContent;
-        const validationValue = rawValidationValue === null ? "" : String(rawValidationValue);
+        const validationCandidate =
+          validation && !isMergeCovered
+            ? isEditing
+              ? getValidationCandidate(address, editingCell.value)
+              : {
+                raw: rawContent === null ? "" : String(rawContent),
+                parsed: rawContent,
+                evaluated: formulaEngine.getComputedValue(sheet.id, address),
+                formula: formulaText || undefined
+              }
+            : null;
         const isInvalidValidation =
-          !isMergeCovered && validationValue.trim() !== "" && !validateCellValue(validationValue, validation).valid;
+          validationCandidate !== null && !validateCellCandidate(validationCandidate, validation).valid;
+        const validationValue = rawContent === null ? "" : String(rawContent);
         const hasValidationDropdown =
           !isMergeCovered && !isReadOnly && !isEditing && isSelected && validation?.type === "list" && validation.values.length > 0;
         const isValidationDropdownOpen = hasValidationDropdown && openValidationDropdownAddress === address;
@@ -1248,7 +1273,17 @@ function RowFragment({
           autoFilterRange && isAutoFilterHeader ? findAutoFilterForColumn(sheet.filters ?? [], autoFilterRange, column) : null;
         const isAutoFilterMenuOpen = isAutoFilterHeader && openAutoFilterColumn === column;
         const autoFilterChoices =
-          autoFilterRange && isAutoFilterHeader ? getAutoFilterColumnChoices(sheet, formulaEngine, autoFilterRange, column) : [];
+          autoFilterRange && isAutoFilterMenuOpen ? getAutoFilterColumnChoices(sheet, formulaEngine, autoFilterRange, column) : [];
+        const autoFilterSearchValue = autoFilterSearch?.column === column ? autoFilterSearch.value : "";
+        const matchingAutoFilterChoices = autoFilterSearchValue.trim()
+          ? autoFilterChoices.filter((choice) =>
+              choice.label.toLocaleLowerCase().includes(autoFilterSearchValue.trim().toLocaleLowerCase())
+            )
+          : autoFilterChoices;
+        const displayedAutoFilterChoices = matchingAutoFilterChoices.slice(0, AUTO_FILTER_DISPLAY_LIMIT);
+        const autoFilterResultSummary = autoFilterSearchValue.trim()
+          ? `Showing ${displayedAutoFilterChoices.length} of ${matchingAutoFilterChoices.length} matching values (${autoFilterChoices.length} total)`
+          : `Showing ${displayedAutoFilterChoices.length} of ${autoFilterChoices.length} values`;
         const selectedAutoFilterValues =
           autoFilterDraft?.column === column ? autoFilterDraft.values : activeAutoFilterValues(activeAutoFilter);
         const cellWidth =
@@ -1501,6 +1536,7 @@ function RowFragment({
                         setOpenAutoFilterColumn((current) => {
                           const nextColumn = current === column ? null : column;
                           setAutoFilterDraft(nextColumn === null ? null : { column, values: activeAutoFilterValues(activeAutoFilter) });
+                          setAutoFilterSearch(nextColumn === null ? null : { column, value: "" });
                           return nextColumn;
                         });
                       }}
@@ -1509,6 +1545,7 @@ function RowFragment({
                           event.preventDefault();
                           setOpenAutoFilterColumn(null);
                           setAutoFilterDraft(null);
+                          setAutoFilterSearch(null);
                         }
                       }}
                     >
@@ -1526,6 +1563,7 @@ function RowFragment({
                             event.preventDefault();
                             setOpenAutoFilterColumn(null);
                             setAutoFilterDraft(null);
+                            setAutoFilterSearch(null);
                           }
                         }}
                       >
@@ -1536,6 +1574,7 @@ function RowFragment({
                             onSortAutoFilterColumn?.(column, "asc");
                             setOpenAutoFilterColumn(null);
                             setAutoFilterDraft(null);
+                            setAutoFilterSearch(null);
                           }}
                         >
                           Sort A to Z
@@ -1547,6 +1586,7 @@ function RowFragment({
                             onSortAutoFilterColumn?.(column, "desc");
                             setOpenAutoFilterColumn(null);
                             setAutoFilterDraft(null);
+                            setAutoFilterSearch(null);
                           }}
                         >
                           Sort Z to A
@@ -1560,13 +1600,23 @@ function RowFragment({
                             onClearAutoFilterColumn?.(column);
                             setOpenAutoFilterColumn(null);
                             setAutoFilterDraft(null);
+                            setAutoFilterSearch(null);
                           }}
                         >
                           Clear filter from {autoFilterLabel}
                         </button>
                         <div className="auto-filter-menu-divider" />
+                        <input
+                          type="search"
+                          aria-label={`Search ${autoFilterLabel} filter values`}
+                          value={autoFilterSearchValue}
+                          onChange={(event) => setAutoFilterSearch({ column, value: event.currentTarget.value })}
+                        />
+                        <div role="status" aria-live="polite">
+                          {autoFilterResultSummary}
+                        </div>
                         <div className="auto-filter-choice-list">
-                          {autoFilterChoices.map((choice) => (
+                          {displayedAutoFilterChoices.map((choice) => (
                             <button
                               key={choice.key}
                               type="button"
@@ -1590,6 +1640,7 @@ function RowFragment({
                             onAutoFilterColumn?.(column, selectedAutoFilterValues);
                             setOpenAutoFilterColumn(null);
                             setAutoFilterDraft(null);
+                            setAutoFilterSearch(null);
                           }}
                         >
                           Apply selected values

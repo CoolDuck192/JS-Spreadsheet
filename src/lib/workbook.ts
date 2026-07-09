@@ -29,6 +29,7 @@ import {
   clampRowHeight
 } from "./sheetDimensions";
 import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
+import type { ComputedCellValue } from "./formulaEngine";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
@@ -47,6 +48,12 @@ type StructureOperation = {
   mode: "insert" | "delete";
   index: number;
   count: number;
+};
+
+export type SortRangeOptions = {
+  direction: "asc" | "desc";
+  sortColumn?: number;
+  readValue?: (address: string) => ComputedCellValue;
 };
 
 type AutoFillSourceCell = {
@@ -1461,9 +1468,26 @@ export function sortRange(
   workbook: WorkbookModel,
   sheetId: string,
   range: CellRange,
+  options: SortRangeOptions
+): WorkbookModel;
+export function sortRange(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
   direction: "asc" | "desc",
   sortColumn?: number
+): WorkbookModel;
+export function sortRange(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  optionsOrDirection: SortRangeOptions | "asc" | "desc",
+  legacySortColumn?: number
 ): WorkbookModel {
+  const options: SortRangeOptions =
+    typeof optionsOrDirection === "string"
+      ? { direction: optionsOrDirection, sortColumn: legacySortColumn }
+      : optionsOrDirection;
   const normalized = normalizeRange(range);
   if (normalized.start.row === normalized.end.row) {
     return workbook;
@@ -1475,15 +1499,16 @@ export function sortRange(
       return sheet;
     }
     const keyColumn = Math.min(
-      Math.max(sortColumn ?? normalized.start.column, sortableRange.start.column),
+      Math.max(options.sortColumn ?? normalized.start.column, sortableRange.start.column),
       sortableRange.end.column
     );
 
     const rows = Array.from({ length: sortableRange.end.row - sortableRange.start.row + 1 }, (_, rowOffset) => {
       const row = sortableRange.start.row + rowOffset;
+      const keyAddress = formatCellAddress({ row, column: keyColumn });
       return {
         originalIndex: rowOffset,
-        key: sheet.cells[formatCellAddress({ row, column: keyColumn })] ?? null,
+        key: options.readValue ? options.readValue(keyAddress) : sheet.cells[keyAddress] ?? null,
         cells: Array.from({ length: sortableRange.end.column - sortableRange.start.column + 1 }, (_, columnOffset) => {
           const column = sortableRange.start.column + columnOffset;
           return sheet.cells[formatCellAddress({ row, column })] ?? null;
@@ -1508,7 +1533,7 @@ export function sortRange(
       };
     });
 
-    const sortedRows = [...rows].sort((left, right) => compareSortRows(left, right, direction));
+    const sortedRows = [...rows].sort((left, right) => compareSortRows(left, right, options.direction));
     if (sortedRows.every((row, index) => row.originalIndex === index)) {
       return sheet;
     }
@@ -1519,15 +1544,20 @@ export function sortRange(
     const comments = { ...(sheet.comments ?? {}) };
     const hyperlinks = { ...(sheet.hyperlinks ?? {}) };
     sortedRows.forEach((row, rowOffset) => {
+      const destinationRow = sortableRange.start.row + rowOffset;
+      const sourceRow = sortableRange.start.row + row.originalIndex;
       row.cells.forEach((content, columnOffset) => {
         const address = formatCellAddress({
-          row: sortableRange.start.row + rowOffset,
+          row: destinationRow,
           column: sortableRange.start.column + columnOffset
         });
         if (content === null) {
           delete cells[address];
         } else {
-          cells[address] = content;
+          cells[address] =
+            typeof content === "string" && content.startsWith("=")
+              ? translateFormulaReferences(content, { rowOffset: destinationRow - sourceRow, columnOffset: 0 })
+              : content;
         }
 
         const nextFormat = row.formats[columnOffset];
@@ -2877,8 +2907,8 @@ function duplicateRowKey(cells: CellContent[]): string {
 }
 
 function compareSortRows(
-  left: { key: CellContent; originalIndex: number },
-  right: { key: CellContent; originalIndex: number },
+  left: { key: ComputedCellValue; originalIndex: number },
+  right: { key: ComputedCellValue; originalIndex: number },
   direction: "asc" | "desc"
 ): number {
   const leftBlank = left.key === null || left.key === "";
@@ -2893,10 +2923,22 @@ function compareSortRows(
     return -1;
   }
 
-  const leftNumber = Number(left.key);
-  const rightNumber = Number(right.key);
+  const leftError = isSortError(left.key);
+  const rightError = isSortError(right.key);
+  if (leftError && rightError) {
+    return left.originalIndex - right.originalIndex;
+  }
+  if (leftError) {
+    return 1;
+  }
+  if (rightError) {
+    return -1;
+  }
+
+  const leftNumber = sortNumericValue(left.key);
+  const rightNumber = sortNumericValue(right.key);
   const comparison =
-    Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+    leftNumber !== null && rightNumber !== null
       ? leftNumber - rightNumber
       : String(left.key).localeCompare(String(right.key), undefined, { numeric: true, sensitivity: "base" });
 
@@ -2904,6 +2946,21 @@ function compareSortRows(
     return left.originalIndex - right.originalIndex;
   }
   return direction === "asc" ? comparison : comparison * -1;
+}
+
+function sortNumericValue(value: ComputedCellValue): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSortError(value: ComputedCellValue): value is { kind: "error"; code: string } {
+  return typeof value === "object" && value !== null && "kind" in value && value.kind === "error";
 }
 
 function normalizeAddress(address: string): string {

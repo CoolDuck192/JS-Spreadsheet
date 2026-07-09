@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CellRange } from "../types";
+import { createFormulaEngine } from "./formulaEngine";
 import {
   addSheetChart,
   addSheet,
@@ -233,6 +234,30 @@ describe("workbook", () => {
     expect(getCellComment(sorted, sheetId, "A2")).toBe("Delta note");
     expect(getCellHyperlink(sorted, sheetId, "A2")).toBe("https://example.com/delta");
     expect(getCellValidation(sorted, sheetId, "B2")).toEqual({ type: "number", min: 1, max: 10 });
+  });
+
+  it("sorts by a pre-sort evaluated snapshot and translates moved relative formulas", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 20);
+    workbook = setCellContent(workbook, sheetId, "B1", "=A1");
+    workbook = setCellContent(workbook, sheetId, "A2", 10);
+    workbook = setCellContent(workbook, sheetId, "B2", "=A2");
+    const beforeSort = createFormulaEngine(workbook);
+
+    const sorted = sortRange(workbook, sheetId, range("A1", "B2"), {
+      direction: "asc",
+      sortColumn: 1,
+      readValue: (address) => beforeSort.getComputedValue(sheetId, address)
+    });
+    const afterSort = createFormulaEngine(sorted);
+
+    expect(getCellContent(sorted, sheetId, "A1")).toBe(10);
+    expect(getCellContent(sorted, sheetId, "B1")).toBe("=A1");
+    expect(afterSort.getComputedValue(sheetId, "B1")).toBe(10);
+    expect(getCellContent(sorted, sheetId, "A2")).toBe(20);
+    expect(getCellContent(sorted, sheetId, "B2")).toBe("=A2");
+    expect(afterSort.getComputedValue(sheetId, "B2")).toBe(20);
   });
 
   it("removes duplicate rows from a selected range and shifts row metadata", () => {

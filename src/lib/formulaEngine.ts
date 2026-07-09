@@ -3,8 +3,11 @@ import type { CellContent, CellRange, NamedRange, SheetModel, WorkbookModel } fr
 import { parseCellAddress } from "./addressing";
 import { getCellContent } from "./workbook";
 
+export type ComputedCellValue = CellContent | { kind: "error"; code: string };
+
 export type FormulaEngine = {
   getDisplayValue: (sheetId: string, address: string) => string;
+  getComputedValue: (sheetId: string, address: string) => ComputedCellValue;
   getRawContent: (sheetId: string, address: string) => CellContent;
   /** Incrementally sync the engine to a new workbook snapshot. Cheap when only cell contents changed. */
   update: (workbook: WorkbookModel) => void;
@@ -64,6 +67,18 @@ export function createFormulaEngine(workbook: WorkbookModel): FormulaEngine {
       const value = state.hyperFormula.getCellValue({ sheet, col: coord.column, row: coord.row });
 
       return formatCellValue(value);
+    },
+
+    getComputedValue(sheetId, address) {
+      ensureAlive();
+      const sheet = state.sheetIds.get(sheetId);
+      if (sheet === undefined) {
+        return null;
+      }
+
+      const coord = parseCellAddress(address);
+      const value = state.hyperFormula.getCellValue({ sheet, col: coord.column, row: coord.row });
+      return toComputedCellValue(value);
     },
 
     getRawContent(sheetId, address) {
@@ -260,6 +275,22 @@ function formatCellValue(value: unknown): string {
 
   if (typeof value === "boolean") {
     return value ? "TRUE" : "FALSE";
+  }
+
+  return String(value);
+}
+
+function toComputedCellValue(value: unknown): ComputedCellValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (value instanceof DetailedCellError || isDetailedCellErrorLike(value)) {
+    return { kind: "error", code: value.value };
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
   }
 
   return String(value);

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { Grid } from "./Grid";
 import { createFormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
@@ -469,6 +469,112 @@ describe("Grid", () => {
 
     expect(columnAutoFits).toEqual([0]);
     expect(rowAutoFits).toEqual([0]);
+  });
+
+  it("uses validation candidates consistently for formula badges", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 1,
+      cells: {
+        A1: "=5+5",
+        A2: "=5+6",
+        A3: '="Open"'
+      },
+      validations: {
+        A1: { type: "number", min: 1, max: 10 },
+        A2: { type: "number", min: 1, max: 10 },
+        A3: { type: "list", values: ["Open", "Closed"] }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 1,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        getCellValidation={(address) => sheet.validations[address]}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 11" })).toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 Open" })).toHaveClass("invalid-validation-cell");
+  });
+
+  it("collects AutoFilter choices only while open and searches the full capped distinct set", () => {
+    const cells: SheetModel["cells"] = { A1: "Region" };
+    for (let index = 1; index <= 201; index += 1) {
+      cells[`A${index + 1}`] = `Value ${String(index).padStart(3, "0")}`;
+    }
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 202,
+      columnCount: 1,
+      cells,
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 201, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 1,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: []
+    };
+    const formulaEngine = createFormulaEngine(workbook);
+    const displayValueSpy = vi.spyOn(formulaEngine, "getDisplayValue");
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={formulaEngine}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(displayValueSpy).not.toHaveBeenCalledWith(sheet.id, "A202");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    const menu = screen.getByRole("menu", { name: "AutoFilter menu for Region" });
+
+    expect(displayValueSpy).toHaveBeenCalledWith(sheet.id, "A202");
+    expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(200);
+    expect(within(menu).getByRole("status")).toHaveTextContent("Showing 200 of 201 values");
+    expect(within(menu).queryByRole("menuitemcheckbox", { name: "Value 201" })).not.toBeInTheDocument();
+
+    fireEvent.change(within(menu).getByRole("searchbox", { name: "Search Region filter values" }), {
+      target: { value: "Value 201" }
+    });
+
+    expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(1);
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Value 201" })).toBeInTheDocument();
+    expect(within(menu).getByRole("status")).toHaveTextContent("Showing 1 of 1 matching values (201 total)");
   });
 });
 

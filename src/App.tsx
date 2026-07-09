@@ -55,7 +55,7 @@ import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { loadWorkbook, saveWorkbook } from "./lib/persistence";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
-import { validateCellValue } from "./lib/validation";
+import { validateCellCandidate, type ValidationCandidate } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import {
   addSheet,
@@ -456,7 +456,10 @@ export default function App() {
 
   function validateCellCommit(address: string, value: CellContent): boolean {
     const rule = getCellValidation(workbook, activeSheet.id, address);
-    const result = validateCellValue(value === null ? "" : String(value), rule);
+    if (!rule) {
+      return true;
+    }
+    const result = validateCellCandidate(createValidationCandidate(address, value), rule);
     if (result.valid) {
       return true;
     }
@@ -465,6 +468,35 @@ export default function App() {
     setSelection({ start: coord, end: coord });
     setStatus(result.message);
     return false;
+  }
+
+  function createValidationCandidate(address: string, value: CellContent): ValidationCandidate {
+    const raw = value === null ? "" : String(value);
+    let parsed: CellContent = value;
+    let formula: string | undefined;
+
+    if (typeof value === "string") {
+      const input = parseCellInput(value);
+      parsed = input.stored;
+      formula = input.formula;
+    }
+
+    if (!formula) {
+      return { raw, parsed, evaluated: parsed };
+    }
+
+    const candidateWorkbook = setCellContent(workbook, activeSheet.id, address, parsed);
+    const candidateEngine = createFormulaEngine(candidateWorkbook);
+    try {
+      return {
+        raw,
+        parsed,
+        evaluated: candidateEngine.getComputedValue(activeSheet.id, address),
+        formula
+      };
+    } finally {
+      candidateEngine.destroy();
+    }
   }
 
   function isAddressReadOnly(address: string): boolean {
@@ -710,7 +742,11 @@ export default function App() {
     }
 
     commitWorkbook(
-      sortRange(workbook, activeSheet.id, range, direction, column),
+      sortRange(workbook, activeSheet.id, range, {
+        direction,
+        sortColumn: column,
+        readValue: (address) => formulaEngine.getComputedValue(activeSheet.id, address)
+      }),
       direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`
     );
   }
@@ -1032,7 +1068,10 @@ export default function App() {
       return;
     }
     commitWorkbook(
-      sortRange(workbook, activeSheet.id, selection, direction),
+      sortRange(workbook, activeSheet.id, selection, {
+        direction,
+        readValue: (address) => formulaEngine.getComputedValue(activeSheet.id, address)
+      }),
       direction === "asc" ? "Sorted A to Z" : "Sorted Z to A"
     );
   }
@@ -1422,7 +1461,7 @@ export default function App() {
         continue;
       }
       const rule = mode === "values" ? getCellValidation(workbook, activeSheet.id, item.address) : item.validation;
-      const result = validateCellValue(item.content === null ? "" : String(item.content), rule);
+      const result = validateCellCandidate(createValidationCandidate(item.address, item.content), rule);
       if (!result.valid) {
         const coord = parseCellAddress(item.address);
         setSelection({ start: coord, end: coord });
@@ -1830,7 +1869,7 @@ export default function App() {
     }
     return !filters.every((filter) =>
       isRowVisibleForFilter(row, filter, (filterRow, filterColumn) =>
-        formulaEngine.getDisplayValue(activeSheet.id, formatCellAddress({ row: filterRow, column: filterColumn }))
+        formulaEngine.getComputedValue(activeSheet.id, formatCellAddress({ row: filterRow, column: filterColumn }))
       )
     );
   }
@@ -2562,6 +2601,7 @@ export default function App() {
           getCellHyperlink={(address) => activeSheet.hyperlinks?.[address] ?? null}
           getCellReadOnly={(address) => getCellReadOnly(workbook, activeSheet.id, address)}
           getCellValidation={(address) => activeSheet.validations[address]}
+          getValidationCandidate={createValidationCandidate}
           getCellConditionalFormatRules={(address) => getCellConditionalFormatRules(workbook, activeSheet.id, address)}
           scrollRef={gridScrollRef}
           onSelectionChange={handleSelectionChange}

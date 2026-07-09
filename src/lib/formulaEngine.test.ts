@@ -20,6 +20,25 @@ describe("formulaEngine", () => {
     expect(engine.getRawContent(workbook.activeSheetId, "A3")).toBe("=SUM(A1:A2)");
   });
 
+  it("returns evaluated values without flattening their spreadsheet types", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 10);
+    workbook = setCellContent(workbook, sheetId, "A2", "=A1=10");
+    workbook = setCellContent(workbook, sheetId, "A3", '=IF(A2,"ready","")');
+    workbook = setCellContent(workbook, sheetId, "A4", '=IF(A2,"",1)');
+    workbook = setCellContent(workbook, sheetId, "A5", "=1/0");
+
+    const engine = createFormulaEngine(workbook);
+
+    expect(engine.getComputedValue(sheetId, "A1")).toBe(10);
+    expect(engine.getComputedValue(sheetId, "A2")).toBe(true);
+    expect(engine.getComputedValue(sheetId, "A3")).toBe("ready");
+    expect(engine.getComputedValue(sheetId, "A4")).toBe("");
+    expect(engine.getComputedValue(sheetId, "A5")).toEqual({ kind: "error", code: "#DIV/0!" });
+    expect(engine.getComputedValue(sheetId, "A6")).toBeNull();
+  });
+
   it("supports common Excel-like functions", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "2");

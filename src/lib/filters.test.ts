@@ -10,6 +10,23 @@ describe("filters", () => {
     expect(matchesFilterValue("8", { operator: "lessThan", value: "10" })).toBe(true);
   });
 
+  it("does not coerce blank or formula-empty values to zero", () => {
+    expect(matchesFilterValue("", { operator: "equals", value: "0" })).toBe(false);
+    expect(matchesFilterValue(null, { operator: "equals", value: "0" })).toBe(false);
+    expect(matchesFilterValue(0, { operator: "equals", value: "0" })).toBe(true);
+    expect(matchesFilterValue("", { operator: "equals", value: "" })).toBe(true);
+    expect(matchesFilterValue(null, { operator: "equals", value: "" })).toBe(true);
+  });
+
+  it("matches typed dates, booleans, and errors without zero coercion", () => {
+    expect(matchesFilterValue(46037, { operator: "equals", value: "2026-01-15" })).toBe(true);
+    expect(matchesFilterValue(46037, { operator: "greaterThan", value: "2026-01-14" })).toBe(true);
+    expect(matchesFilterValue(true, { operator: "equals", value: "TRUE" })).toBe(true);
+    expect(matchesFilterValue(false, { operator: "equals", value: "0" })).toBe(false);
+    expect(matchesFilterValue({ kind: "error", code: "#DIV/0!" }, { operator: "equals", value: "#div/0!" })).toBe(true);
+    expect(matchesFilterValue({ kind: "error", code: "#DIV/0!" }, { operator: "equals", value: "" })).toBe(false);
+  });
+
   it("keeps headers visible and hides non-matching rows inside filtered ranges", () => {
     const filter: SheetFilter = {
       id: "filter-1",

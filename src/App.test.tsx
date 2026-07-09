@@ -1440,6 +1440,28 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B1 4" })).toHaveTextContent("4");
   });
 
+  it("sorts formula rows by evaluated values and keeps moved formulas relative", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: {
+        getData: () => "=B1\t20\n=B2\t10"
+      }
+    });
+    selectRange("A1 20", "B2 10");
+
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "B1 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "A2 20" })).toHaveTextContent("20");
+    expect(screen.getByRole("gridcell", { name: "B2 20" })).toHaveTextContent("20");
+    await user.click(screen.getByRole("gridcell", { name: "A1 10" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("=B1");
+  });
+
   it("filters table data from an AutoFilter header menu", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1473,6 +1495,26 @@ describe("App", () => {
     expect(screen.queryByRole("gridcell", { name: "A4 North" })).not.toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "A5 West" })).toHaveTextContent("West");
     expect(screen.queryByRole("menu", { name: "AutoFilter menu for Region" })).not.toBeInTheDocument();
+  });
+
+  it("filters zero without treating blanks or formula-empty results as zero", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "Value");
+    await editCell(user, "A2", "0");
+    await editCell(user, "A4", '=""');
+    selectRange("A1 Value", "A4");
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await user.selectOptions(screen.getByLabelText("Filter operator"), "equals");
+    await user.type(screen.getByLabelText("Filter value"), "0");
+    await user.click(screen.getByRole("button", { name: "Apply filter" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 Value" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "A2 0" })).toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A3" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A4" })).not.toBeInTheDocument();
   });
 
   it("inserts and deletes selected rows and columns from the toolbar", async () => {
@@ -2291,6 +2333,39 @@ describe("App", () => {
 
     expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("invalid-validation-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number between 1 and 10");
+  });
+
+  it("validates the proposed formula result without publishing a rejected candidate", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    await user.click(screen.getByRole("button", { name: "Data validation" }));
+    await user.selectOptions(screen.getByLabelText("Validation type"), "number");
+    await user.clear(screen.getByLabelText("Minimum"));
+    await user.type(screen.getByLabelText("Minimum"), "1");
+    await user.clear(screen.getByLabelText("Maximum"));
+    await user.type(screen.getByLabelText("Maximum"), "10");
+    await user.click(screen.getByRole("button", { name: "Apply validation" }));
+
+    await editCell(user, "A1", "=5+5");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
+    await editCell(user, "B1", "=A1*2");
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1 10" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    await user.clear(editor);
+    await user.type(editor, "=5+6{Enter}");
+
+    expect(editor).toHaveValue("=5+6");
+    expect(screen.getByRole("gridcell", { name: /^A1(?:\s|$)/ })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number between 1 and 10");
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
   });
 
   it("applies text-length data validation to selected cells", async () => {
