@@ -49,6 +49,8 @@ type ParsedFormulaReferenceToken = FormulaReferenceToken & {
 
 const CELL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?)([A-Z]+)(\$?)([1-9]\d*)/gi;
 const LOCAL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?[A-Z]+\$?[1-9]\d*)(?::(\$?[A-Z]+\$?[1-9]\d*))?/gi;
+const FORMULA_IDENTIFIER_START_PATTERN = /^[\p{ID_Start}_]$/u;
+const FORMULA_IDENTIFIER_CONTINUE_PATTERN = /^[\p{ID_Continue}_.]$/u;
 const MAX_FORMULA_COLUMN_INDEX = columnNameToIndex("XFD");
 
 export function rewriteFormulaForStructure(formula: string, context: FormulaStructureContext): string {
@@ -189,8 +191,12 @@ function tokenizeFormulaReferences(formula: string): FormulaToken[] {
 }
 
 function parseFormulaReferenceToken(formula: string, index: number): ParsedFormulaReferenceToken | null {
-  const previousCharacter = formula[index - 1] ?? "";
-  if (isFormulaIdentifierCharacter(previousCharacter) || previousCharacter === "!" || previousCharacter === ":") {
+  const previousCharacter = formulaCodePointBefore(formula, index);
+  if (
+    isFormulaIdentifierContinue(previousCharacter) ||
+    previousCharacter === "!" ||
+    previousCharacter === ":"
+  ) {
     return null;
   }
 
@@ -226,9 +232,9 @@ function parseFormulaReferenceToken(formula: string, index: number): ParsedFormu
     }
   }
 
-  const nextCharacter = formula[cursor] ?? "";
+  const nextCharacter = formulaCodePointAt(formula, cursor);
   if (
-    isFormulaIdentifierCharacter(nextCharacter) ||
+    isFormulaIdentifierContinue(nextCharacter) ||
     nextCharacter === "(" ||
     nextCharacter === "[" ||
     nextCharacter === "!"
@@ -285,13 +291,13 @@ function parseUnquotedSheetQualifier(
   formula: string,
   index: number
 ): { cellStart: number; sheetName: string; sheetPrefix: string } | null {
-  if (!isFormulaIdentifierCharacter(formula[index] ?? "")) {
+  if (!isFormulaIdentifierStart(formulaCodePointAt(formula, index))) {
     return null;
   }
 
-  let cursor = index;
-  while (isFormulaIdentifierCharacter(formula[cursor] ?? "")) {
-    cursor += 1;
+  let cursor = index + formulaCodePointLengthAt(formula, index);
+  while (isFormulaIdentifierContinue(formulaCodePointAt(formula, cursor))) {
+    cursor += formulaCodePointLengthAt(formula, cursor);
   }
   if (formula[cursor] !== "!") {
     return null;
@@ -364,8 +370,38 @@ function skipQuotedFormulaSegment(formula: string, index: number, quote: '"' | "
   return formula.length;
 }
 
-function isFormulaIdentifierCharacter(character: string): boolean {
-  return isAsciiLetter(character) || isAsciiDigit(character) || character === "_" || character === ".";
+function isFormulaIdentifierStart(character: string): boolean {
+  return FORMULA_IDENTIFIER_START_PATTERN.test(character);
+}
+
+function isFormulaIdentifierContinue(character: string): boolean {
+  return FORMULA_IDENTIFIER_CONTINUE_PATTERN.test(character);
+}
+
+function formulaCodePointAt(formula: string, index: number): string {
+  const codePoint = formula.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function formulaCodePointBefore(formula: string, index: number): string {
+  if (index <= 0) {
+    return "";
+  }
+
+  const lastCodeUnit = formula.charCodeAt(index - 1);
+  if (lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff && index >= 2) {
+    const precedingCodeUnit = formula.charCodeAt(index - 2);
+    if (precedingCodeUnit >= 0xd800 && precedingCodeUnit <= 0xdbff) {
+      return formula.slice(index - 2, index);
+    }
+  }
+
+  return formula[index - 1];
+}
+
+function formulaCodePointLengthAt(formula: string, index: number): number {
+  const codePoint = formula.codePointAt(index);
+  return codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
 }
 
 function isAsciiLetter(character: string): boolean {

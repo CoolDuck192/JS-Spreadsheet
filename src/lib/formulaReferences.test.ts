@@ -85,6 +85,45 @@ describe("formulaReferences", () => {
     ).toBe('=LOG10(A2)+1E5+Q1_TOTAL+"A1 ""B2"" C3"+A3');
   });
 
+  it("preserves Unicode identifier boundaries while rewriting a standalone reference", () => {
+    expect(
+      rewriteFormulaForStructure("=ΔA1+A1Δ+e\u0301A1+A1\u0301+A1١+A1", {
+        formulaSheetName: "Data",
+        editedSheetName: "Data",
+        axis: "row",
+        mode: "insert",
+        index: 0,
+        count: 1
+      })
+    ).toBe("=ΔA1+A1Δ+e\u0301A1+A1\u0301+A1١+A2");
+  });
+
+  it("rewrites an unquoted Unicode sheet qualifier that targets the edited sheet", () => {
+    expect(
+      rewriteFormulaForStructure("=Δ!A1+A1", {
+        formulaSheetName: "Summary",
+        editedSheetName: "Δ",
+        axis: "row",
+        mode: "insert",
+        index: 0,
+        count: 1
+      })
+    ).toBe("=Δ!A2+A1");
+  });
+
+  it("preserves an unquoted Unicode qualifier that targets a different sheet", () => {
+    expect(
+      rewriteFormulaForStructure("=Ω!A1+A1", {
+        formulaSheetName: "Summary",
+        editedSheetName: "Δ",
+        axis: "row",
+        mode: "insert",
+        index: 0,
+        count: 1
+      })
+    ).toBe("=Ω!A1+A1");
+  });
+
   it("resolves quoted sheet names and doubled apostrophes from formulas on other sheets", () => {
     expect(
       rewriteFormulaForStructure("='Director''s Plan'!$A2+'Ops Q1'!B2+Sheet2!C2+A2", {
