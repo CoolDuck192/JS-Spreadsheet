@@ -36,11 +36,21 @@ git clone https://github.com/CoolDuck192/JS-Spreadsheet.git
 cd JS-Spreadsheet
 ```
 
-Install dependencies:
+Activate the pinned Node.js version and install dependencies. If `nvm` is not
+available, the fallback downloads a portable Node binary and puts it first on
+`PATH` for pnpm, Vite, and Playwright:
 
 ```bash
-corepack enable
-pnpm install    # corepack downloads the pinned pnpm 11.7.0 automatically
+if command -v nvm >/dev/null 2>&1; then
+  nvm install
+  nvm use
+else
+  NODE22_BIN="$(npm exec --yes --package=node@22.13.1 -- node -p 'process.execPath')"
+  export PATH="$(dirname "$NODE22_BIN"):$PATH"
+  hash -r
+fi
+corepack --version
+corepack pnpm install --frozen-lockfile
 ```
 
 Start the local dev server:
@@ -49,23 +59,21 @@ Start the local dev server:
 pnpm run dev
 ```
 
-The dev server defaults to:
+The dev server binds all interfaces. Open the `Network` URL that Vite reports,
+or use the machine IP and port directly:
 
 ```text
-http://127.0.0.1:5173
+http://<machine-ip>:5173
 ```
 
-To reach it from another machine on your network, bind all interfaces:
-
-```bash
-pnpm exec vite --host 0.0.0.0
-```
+When handing off a manually started server, report the machine IP and port, not
+only a `127.0.0.1` URL.
 
 Build and preview a production bundle:
 
 ```bash
 pnpm run build
-pnpm exec vite preview --host 0.0.0.0   # serves the build on port 4173
+pnpm run preview   # serves the build on all interfaces, port 4173
 ```
 
 > **Testing with large datasets?** Use the production preview. The dev server
