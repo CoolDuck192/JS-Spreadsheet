@@ -2,7 +2,7 @@
 
 Date: 2026-07-09
 
-Status: Ready for implementation planning after user review
+Status: Approved for implementation
 
 ## Decision Summary
 
@@ -23,6 +23,13 @@ The first public release includes:
   muted-green design tokens.
 - A publishable React library with typed ESM exports and consumer-build tests.
 - A mandatory pressure-testing gate before release.
+
+The record-table interaction surface explicitly includes the Frappe-inspired
+behaviors approved for this release: checkbox row selection, expandable tree
+rows, inline filter controls, dynamic row height, custom header actions,
+serial row headers, visible-column reorder/hide/resize, fixed/fluid/ratio
+layouts, clipboard operations, and custom editors and formatters. These
+features still obey the source capability and execution-scope rules below.
 
 Laravel integration, Web Components, vanilla-JavaScript mounting, and non-React
 framework bindings are excluded from this release. The headless layer remains
@@ -344,6 +351,11 @@ interface DataTableHandle {
   export(options: ExportOptions): Promise<Blob>;
 }
 ```
+
+The React handle returns a browser `Blob` for ergonomic downloads. The
+DOM-free session/source contract instead returns an `ExportArtifact` containing
+`Uint8Array` bytes, media type, and file name; the React layer performs the
+conversion. This keeps `js-spreadsheet/core` type-checkable without DOM libs.
 
 `Spreadsheet` supports controlled and uncontrolled use:
 

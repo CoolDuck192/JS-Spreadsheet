@@ -5,6 +5,7 @@ playwright-report/
 coverage/
 outputs/
 work/
+.worktrees/
 
 *.tsbuildinfo
 .DS_Store
