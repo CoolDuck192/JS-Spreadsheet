@@ -111,6 +111,34 @@ describe("xlsx", () => {
     ]);
   });
 
+  it("imports and re-exports native XLSX dates as typed serials with matching formats", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const nativeWorkbook = new ExcelJS.Workbook();
+    const nativeSheet = nativeWorkbook.addWorksheet("Dates");
+    nativeSheet.getCell("A1").value = new Date(Date.UTC(2026, 0, 15));
+    nativeSheet.getCell("A1").numFmt = "mm-dd-yy";
+    nativeSheet.getCell("A2").value = new Date(Date.UTC(2026, 0, 15, 12));
+    nativeSheet.getCell("A2").numFmt = "m/d/yy h:mm";
+
+    const nativeData = await nativeWorkbook.xlsx.writeBuffer();
+    const imported = await importWorkbookFromXlsx(nativeData as ArrayBuffer);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellContent(imported, importedSheetId, "A1")).toBe(46037);
+    expect(getCellContent(imported, importedSheetId, "A2")).toBe(46037.5);
+    expect(getCellFormat(imported, importedSheetId, "A1")).toMatchObject({ numberFormat: "date" });
+    expect(getCellFormat(imported, importedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
+
+    const exportedData = await exportWorkbookToXlsx(imported);
+    const reimported = await importWorkbookFromXlsx(exportedData);
+    const reimportedSheetId = reimported.sheets[0].id;
+
+    expect(getCellContent(reimported, reimportedSheetId, "A1")).toBe(46037);
+    expect(getCellContent(reimported, reimportedSheetId, "A2")).toBe(46037.5);
+    expect(getCellFormat(reimported, reimportedSheetId, "A1")).toMatchObject({ numberFormat: "date" });
+    expect(getCellFormat(reimported, reimportedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
+  });
+
   it("round-trips the active sheet through XLSX", async () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "First sheet");

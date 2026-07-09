@@ -30,6 +30,56 @@ describe("App", () => {
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
   });
 
+  it("stores typed grid input as number, boolean, date, and date-time values", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "1.25e3");
+    await editCell(user, "A2", "FALSE");
+    await editCell(user, "A3", "2026-01-15");
+    await editCell(user, "A4", "2026-01-15T12:00:00Z");
+
+    expect(screen.getByRole("gridcell", { name: "A1 1250" })).toHaveTextContent("1250");
+    expect(screen.getByRole("gridcell", { name: "A2 FALSE" })).toHaveTextContent("FALSE");
+    expect(screen.getByRole("gridcell", { name: "A3 Jan 15, 2026" })).toHaveTextContent("Jan 15, 2026");
+    expect(screen.getByRole("gridcell", { name: "A4 Jan 15, 2026, 12:00 PM" })).toHaveTextContent(
+      "Jan 15, 2026, 12:00 PM"
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A1 1250" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("1250");
+
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("javascript-spreadsheet-workbook") ?? "null") as ReturnType<
+        typeof createBlankWorkbook
+      > | null;
+      expect(saved).not.toBeNull();
+      const sheetId = saved?.activeSheetId ?? "";
+      expect(["A1", "A2", "A3", "A4"].map((address) => getCellContent(saved!, sheetId, address))).toEqual([
+        1250,
+        false,
+        46037,
+        46037.5
+      ]);
+      expect(saved?.sheets[0].formats).toMatchObject({
+        A3: { numberFormat: "date" },
+        A4: { numberFormat: "dateTime" }
+      });
+    });
+  });
+
+  it("parses typed formula-bar input through the same commit path", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const formulaInput = screen.getByLabelText("Formula input");
+    await user.click(formulaInput);
+    await user.type(formulaInput, "1.25e3{Enter}");
+
+    expect(screen.getByRole("gridcell", { name: "A1 1250" })).toHaveTextContent("1250");
+    expect(formulaInput).toHaveValue("1250");
+  });
+
   it("adds and renames sheets", async () => {
     const user = userEvent.setup();
     vi.spyOn(window, "prompt").mockReturnValue("Budget");

@@ -24,7 +24,8 @@ const XLSX_NUMBER_FORMATS: Record<NonNullable<CellFormat["numberFormat"]>, strin
   number: "#,##0.########",
   currency: "$#,##0.00",
   percent: "0.########%",
-  date: "mmm d, yyyy"
+  date: "mmm d, yyyy",
+  dateTime: "mmm d, yyyy h:mm AM/PM"
 };
 let excelJsPromise: Promise<typeof ExcelJS> | null = null;
 
@@ -1189,6 +1190,14 @@ function excelNumberFormatToCellFormat(numFmt: string | undefined): CellFormat["
       return format as CellFormat["numberFormat"];
     }
   }
+  const normalized = numFmt.toLowerCase().replace(/"[^"]*"/g, "").replace(/\\./g, "");
+  const hasDateParts = /[yd]/.test(normalized);
+  if (hasDateParts && /[hs]/.test(normalized)) {
+    return "dateTime";
+  }
+  if (hasDateParts) {
+    return "date";
+  }
   return undefined;
 }
 
@@ -1236,7 +1245,7 @@ function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
     return value;
   }
   if (value instanceof Date) {
-    return dateToCellContent(value);
+    return excelJsDateToCellContent(value);
   }
   if (isFormulaValue(value)) {
     return `=${value.formula}`;
@@ -1259,11 +1268,11 @@ function excelValueToCellContent(value: ExcelJS.CellValue): CellContent {
   return String(value);
 }
 
-// Midnight-UTC dates (the common case for Excel date cells) become plain ISO dates the
-// formula engine parses as date serials; anything with a time keeps the full timestamp.
-function dateToCellContent(value: Date): string {
-  const iso = value.toISOString();
-  return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso;
+// ExcelJS materializes date-formatted XLSX serials as Dates using a 1899-12-30
+// epoch. Reverse that conversion directly so early-1900 serials and serial 60
+// survive import even though JavaScript cannot represent Excel's phantom day.
+function excelJsDateToCellContent(value: Date): number {
+  return (value.getTime() - Date.UTC(1899, 11, 30)) / (24 * 60 * 60 * 1000);
 }
 
 function excelValueToHyperlink(value: ExcelJS.CellValue): string {

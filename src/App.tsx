@@ -46,6 +46,7 @@ import { createAutoSumPlan, formatRangeAddress, type AutoFunctionName } from "./
 import { createChartData } from "./lib/charts";
 import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
+import { parseCellInput } from "./core/values/parseCellInput";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
 import { createFormulaEngine } from "./lib/formulaEngine";
 import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth";
@@ -357,20 +358,23 @@ export default function App() {
     setFormulaAuditOpen(false);
   }
 
-  function commitCell(address: string, value: CellContent): boolean {
+  function commitCell(address: string, raw: string): boolean {
     if (!ensureEditableAddress(address)) {
       return false;
     }
-    if (!validateCellCommit(address, value)) {
+    if (!validateCellCommit(address, raw)) {
       return false;
     }
-    let nextWorkbook = setCellContent(workbook, activeSheet.id, address, value);
-    // Excel behavior: typing a date into an unformatted cell applies a date format,
-    // so the engine's date serial renders as a date instead of a raw number.
-    // An explicit "general" counts as unformatted, like everywhere else.
-    if (typeof value === "string" && isDateLikeEntry(value) && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
+    const parsed = parseCellInput(raw);
+    let nextWorkbook = setCellContent(workbook, activeSheet.id, address, parsed.stored);
+    if (parsed.inferredNumberFormat && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
       const coord = parseCellAddress(address);
-      nextWorkbook = setCellFormat(nextWorkbook, activeSheet.id, { start: coord, end: coord }, { numberFormat: "date" });
+      nextWorkbook = setCellFormat(
+        nextWorkbook,
+        activeSheet.id,
+        { start: coord, end: coord },
+        { numberFormat: parsed.inferredNumberFormat }
+      );
     }
     commitWorkbook(nextWorkbook);
     return true;
@@ -3231,14 +3235,6 @@ function inferSourceRange(sheet: SheetModel, selection: CellRange): CellRange {
     start: { row: minRow, column: minColumn },
     end: { row: maxRow, column: maxColumn }
   };
-}
-
-// Matches the entry formats the formula engine is configured to parse as dates
-// (see ENGINE_CONFIG.dateFormats): ISO YYYY-MM-DD, MM/DD/YYYY, and MM/DD/YY.
-const DATE_ENTRY_PATTERN = /^\s*(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}\/(\d{4}|\d{2}))\s*$/;
-
-function isDateLikeEntry(value: string): boolean {
-  return DATE_ENTRY_PATTERN.test(value);
 }
 
 function trimEmptyEdges(rows: string[][]): string[][] {
