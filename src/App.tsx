@@ -207,6 +207,7 @@ export default function App() {
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const gridApiRef = useRef<GridScrollApi | null>(null);
+  const gridEditCommitInProgressRef = useRef(false);
   const registerGridScrollApi = useCallback((api: GridScrollApi) => {
     gridApiRef.current = api;
   }, []);
@@ -362,11 +363,11 @@ export default function App() {
     if (!ensureEditableAddress(address)) {
       return false;
     }
-    if (!validateCellCommit(address, raw)) {
-      return false;
-    }
     const parsed = parseCellInput(raw);
     let nextWorkbook = setCellContent(workbook, activeSheet.id, address, parsed.stored);
+    if (!validateCandidateWorkbook(nextWorkbook, [address])) {
+      return false;
+    }
     if (parsed.inferredNumberFormat && getCellFormat(workbook, activeSheet.id, address).numberFormat === undefined) {
       const coord = parseCellAddress(address);
       nextWorkbook = setCellFormat(
@@ -454,48 +455,45 @@ export default function App() {
     setStatus(`No cell, range, or named range named ${nextReference}`);
   }
 
-  function validateCellCommit(address: string, value: CellContent): boolean {
-    const rule = getCellValidation(workbook, activeSheet.id, address);
-    if (!rule) {
+  function validateCandidateWorkbook(candidateWorkbook: WorkbookModel, addresses: readonly string[]): boolean {
+    const validatedAddresses = [...new Set(addresses)].filter((address) =>
+      Boolean(getCellValidation(candidateWorkbook, activeSheet.id, address))
+    );
+    if (validatedAddresses.length === 0) {
       return true;
     }
-    const result = validateCellCandidate(createValidationCandidate(address, value), rule);
-    if (result.valid) {
-      return true;
-    }
-
-    const coord = parseCellAddress(address);
-    setSelection({ start: coord, end: coord });
-    setStatus(result.message);
-    return false;
-  }
-
-  function createValidationCandidate(address: string, value: CellContent): ValidationCandidate {
-    const raw = value === null ? "" : String(value);
-    let parsed: CellContent = value;
-    let formula: string | undefined;
-
-    if (typeof value === "string") {
-      const input = parseCellInput(value);
-      parsed = input.stored;
-      formula = input.formula;
-    }
-
-    if (!formula) {
-      return { raw, parsed, evaluated: parsed };
-    }
-
-    const candidateWorkbook = setCellContent(workbook, activeSheet.id, address, parsed);
-    const candidateEngine = createFormulaEngine(candidateWorkbook);
+    const requiresFormulaEngine = validatedAddresses.some((address) => {
+      const content = getCellContent(candidateWorkbook, activeSheet.id, address);
+      return typeof content === "string" && content.startsWith("=");
+    });
+    const candidateEngine = requiresFormulaEngine ? createFormulaEngine(candidateWorkbook) : null;
     try {
-      return {
-        raw,
-        parsed,
-        evaluated: candidateEngine.getComputedValue(activeSheet.id, address),
-        formula
-      };
+      for (const address of validatedAddresses) {
+        const rule = getCellValidation(candidateWorkbook, activeSheet.id, address);
+        if (!rule) {
+          continue;
+        }
+        const content = getCellContent(candidateWorkbook, activeSheet.id, address);
+        const formula = typeof content === "string" && content.startsWith("=") ? content : undefined;
+        const candidate: ValidationCandidate = {
+          raw: content === null ? "" : String(content),
+          parsed: content,
+          evaluated: formula ? candidateEngine!.getComputedValue(activeSheet.id, address) : content,
+          formula
+        };
+        const result = validateCellCandidate(candidate, rule);
+        if (result.valid) {
+          continue;
+        }
+
+        const coord = parseCellAddress(address);
+        setSelection({ start: coord, end: coord });
+        setStatus(result.message);
+        return false;
+      }
+      return true;
     } finally {
-      candidateEngine.destroy();
+      candidateEngine?.destroy();
     }
   }
 
@@ -767,12 +765,13 @@ export default function App() {
     if (!ensureEditableAddress(targetAddress)) {
       return;
     }
-    if (!validateCellCommit(targetAddress, plan.formula)) {
+    const nextWorkbook = setCellContent(workbook, activeSheet.id, targetAddress, plan.formula);
+    if (!validateCandidateWorkbook(nextWorkbook, [targetAddress])) {
       return;
     }
 
     commitWorkbook(
-      setCellContent(workbook, activeSheet.id, targetAddress, plan.formula),
+      nextWorkbook,
       functionName === "SUM"
         ? `Inserted AutoSum for ${formatRangeAddress(plan.source)}`
         : `Inserted ${autoFunctionLabel(functionName)} for ${formatRangeAddress(plan.source)}`
@@ -1251,14 +1250,38 @@ export default function App() {
     if (!ensureEditableRange(selection)) {
       return;
     }
-    commitWorkbook(fillDown(workbook, activeSheet.id, selection), "Filled down");
+    const normalized = normalizeRange(selection);
+    const writeRange = {
+      start: { row: normalized.start.row + 1, column: normalized.start.column },
+      end: normalized.end
+    };
+    const nextWorkbook = fillDown(workbook, activeSheet.id, normalized);
+    if (
+      writeRange.start.row <= writeRange.end.row &&
+      !validateCandidateWorkbook(nextWorkbook, getRangeAddresses(writeRange))
+    ) {
+      return;
+    }
+    commitWorkbook(nextWorkbook, "Filled down");
   }
 
   function handleFillRight() {
     if (!ensureEditableRange(selection)) {
       return;
     }
-    commitWorkbook(fillRight(workbook, activeSheet.id, selection), "Filled right");
+    const normalized = normalizeRange(selection);
+    const writeRange = {
+      start: { row: normalized.start.row, column: normalized.start.column + 1 },
+      end: normalized.end
+    };
+    const nextWorkbook = fillRight(workbook, activeSheet.id, normalized);
+    if (
+      writeRange.start.column <= writeRange.end.column &&
+      !validateCandidateWorkbook(nextWorkbook, getRangeAddresses(writeRange))
+    ) {
+      return;
+    }
+    commitWorkbook(nextWorkbook, "Filled right");
   }
 
   function handleAutoFill(sourceRange: CellRange, targetRange: CellRange) {
@@ -1297,6 +1320,9 @@ export default function App() {
 
     const targetLabel = formatSelectionAddress(target);
     const nextWorkbook = autoFillRange(workbook, activeSheet.id, source, target);
+    if (!validateCandidateWorkbook(nextWorkbook, getRangeAddresses(writeRange))) {
+      return;
+    }
     setSelection(target);
     commitWorkbook(nextWorkbook, `AutoFilled ${targetLabel}`);
     if (nextWorkbook === workbook) {
@@ -1446,33 +1472,6 @@ export default function App() {
     }
   }
 
-  function validateRichPaste(mode: RichPasteMode, options: PasteRichRangeOptions = {}): boolean {
-    if (!richClipboard) {
-      setStatus("Copy cells before using paste special");
-      return false;
-    }
-
-    const preview = previewRichPaste(richClipboard.range, activeAddress, { ...options, mode });
-    for (const item of preview) {
-      if (!ensureEditableAddress(item.address)) {
-        return false;
-      }
-      if (mode === "formats") {
-        continue;
-      }
-      const rule = mode === "values" ? getCellValidation(workbook, activeSheet.id, item.address) : item.validation;
-      const result = validateCellCandidate(createValidationCandidate(item.address, item.content), rule);
-      if (!result.valid) {
-        const coord = parseCellAddress(item.address);
-        setSelection({ start: coord, end: coord });
-        setStatus(result.message);
-        return false;
-      }
-    }
-
-    return true;
-  }
-
   function ensureMoveSourceEditable(clipboard: RichClipboardState, targetAddress: string): boolean {
     const preservedSourceAddresses =
       clipboard.sourceSheetId === activeSheet.id
@@ -1486,26 +1485,37 @@ export default function App() {
   }
 
   function pasteRichClipboardMode(mode: RichPasteMode, nextStatus: string): boolean {
-    const isMovePaste = mode === "all" && richClipboard?.operation === "cut";
-    const options: PasteRichRangeOptions = isMovePaste ? { mode, translateFormulas: false } : { mode };
-
-    if (!validateRichPaste(mode, options)) {
+    if (!richClipboard) {
+      setStatus("Copy cells before using paste special");
       return false;
     }
-    if (isMovePaste && !ensureMoveSourceEditable(richClipboard!, activeAddress)) {
+    const isMovePaste = mode === "all" && richClipboard?.operation === "cut";
+    const options: PasteRichRangeOptions = isMovePaste ? { mode, translateFormulas: false } : { mode };
+    const preview = previewRichPaste(richClipboard.range, activeAddress, options);
+
+    for (const item of preview) {
+      if (!ensureEditableAddress(item.address)) {
+        return false;
+      }
+    }
+    if (isMovePaste && !ensureMoveSourceEditable(richClipboard, activeAddress)) {
+      return false;
+    }
+
+    const candidateWorkbook = isMovePaste
+      ? moveRichRange(workbook, richClipboard.sourceSheetId, activeSheet.id, activeAddress, richClipboard.range)
+      : pasteRichRange(workbook, activeSheet.id, activeAddress, richClipboard.range, { mode });
+    if (mode !== "formats" && !validateCandidateWorkbook(candidateWorkbook, preview.map((item) => item.address))) {
       return false;
     }
 
     if (isMovePaste) {
-      commitWorkbook(
-        moveRichRange(workbook, richClipboard!.sourceSheetId, activeSheet.id, activeAddress, richClipboard!.range),
-        "Moved selection"
-      );
+      commitWorkbook(candidateWorkbook, "Moved selection");
       setRichClipboard(null);
       return true;
     }
 
-    commitWorkbook(pasteRichRange(workbook, activeSheet.id, activeAddress, richClipboard!.range, { mode }), nextStatus);
+    commitWorkbook(candidateWorkbook, nextStatus);
     return true;
   }
 
@@ -1551,19 +1561,22 @@ export default function App() {
     }
 
     const start = parseCellAddress(activeAddress);
+    const targetAddresses: string[] = [];
     for (let rowOffset = 0; rowOffset < matrix.length; rowOffset += 1) {
       for (let columnOffset = 0; columnOffset < matrix[rowOffset].length; columnOffset += 1) {
         const address = formatCellAddress({ row: start.row + rowOffset, column: start.column + columnOffset });
         if (!ensureEditableAddress(address)) {
           return;
         }
-        if (!validateCellCommit(address, matrix[rowOffset][columnOffset])) {
-          return;
-        }
+        targetAddresses.push(address);
       }
     }
 
-    commitWorkbook(pasteMatrix(workbook, activeSheet.id, activeAddress, matrix), "Pasted cells");
+    const candidateWorkbook = pasteMatrix(workbook, activeSheet.id, activeAddress, matrix);
+    if (!validateCandidateWorkbook(candidateWorkbook, targetAddresses)) {
+      return;
+    }
+    commitWorkbook(candidateWorkbook, "Pasted cells");
   }
 
   function createRichClipboardPayload(operation: RichClipboardState["operation"]): RichClipboardState {
@@ -2601,7 +2614,6 @@ export default function App() {
           getCellHyperlink={(address) => activeSheet.hyperlinks?.[address] ?? null}
           getCellReadOnly={(address) => getCellReadOnly(workbook, activeSheet.id, address)}
           getCellValidation={(address) => activeSheet.validations[address]}
-          getValidationCandidate={createValidationCandidate}
           getCellConditionalFormatRules={(address) => getCellConditionalFormatRules(workbook, activeSheet.id, address)}
           scrollRef={gridScrollRef}
           onSelectionChange={handleSelectionChange}
@@ -2616,11 +2628,19 @@ export default function App() {
           }}
           onEditValueChange={(value) => setEditingCell((current) => (current ? { ...current, value } : current))}
           onCommitEdit={(address, value, move) => {
-            if (commitCell(address, value)) {
-              setEditingCell(null);
-              if (move) {
-                commitMoveFrom(address, move);
+            if (gridEditCommitInProgressRef.current) {
+              return;
+            }
+            gridEditCommitInProgressRef.current = true;
+            try {
+              if (commitCell(address, value)) {
+                setEditingCell(null);
+                if (move) {
+                  commitMoveFrom(address, move);
+                }
               }
+            } finally {
+              gridEditCommitInProgressRef.current = false;
             }
           }}
           onCancelEdit={() => {

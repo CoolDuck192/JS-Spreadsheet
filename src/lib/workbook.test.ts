@@ -260,6 +260,18 @@ describe("workbook", () => {
     expect(afterSort.getComputedValue(sheetId, "B2")).toBe(20);
   });
 
+  it("orders text deterministically without the runtime's default locale", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "ä");
+    workbook = setCellContent(workbook, sheetId, "A2", "z");
+
+    const sorted = sortRange(workbook, sheetId, range("A1", "A2"), "asc");
+
+    expect(getCellContent(sorted, sheetId, "A1")).toBe("z");
+    expect(getCellContent(sorted, sheetId, "A2")).toBe("ä");
+  });
+
   it("removes duplicate rows from a selected range and shifts row metadata", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;

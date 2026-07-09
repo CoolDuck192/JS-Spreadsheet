@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { SheetFilter } from "../types";
 import { getVisibleRows, matchesFilterValue } from "./filters";
 
+const BLANK_FILTER_VALUE = "\u0000js-spreadsheet:blank";
+const EMPTY_RESULT_FILTER_VALUE = "\u0000js-spreadsheet:empty-result";
+
 describe("filters", () => {
   it("matches text and numeric filter values", () => {
     expect(matchesFilterValue("West", { operator: "contains", value: "we" })).toBe(true);
@@ -16,6 +19,29 @@ describe("filters", () => {
     expect(matchesFilterValue(0, { operator: "equals", value: "0" })).toBe(true);
     expect(matchesFilterValue("", { operator: "equals", value: "" })).toBe(true);
     expect(matchesFilterValue(null, { operator: "equals", value: "" })).toBe(true);
+  });
+
+  it("matches blank and formula-empty sentinels without collapsing either into zero", () => {
+    expect(matchesFilterValue(null, { operator: "equals", value: BLANK_FILTER_VALUE })).toBe(true);
+    expect(matchesFilterValue("", { operator: "equals", value: BLANK_FILTER_VALUE })).toBe(false);
+    expect(matchesFilterValue("", { operator: "equals", value: EMPTY_RESULT_FILTER_VALUE })).toBe(true);
+    expect(matchesFilterValue(null, { operator: "equals", value: EMPTY_RESULT_FILTER_VALUE })).toBe(false);
+    expect(matchesFilterValue(0, { operator: "equals", value: BLANK_FILTER_VALUE })).toBe(false);
+    expect(matchesFilterValue(0, { operator: "equals", value: EMPTY_RESULT_FILTER_VALUE })).toBe(false);
+  });
+
+  it("keeps typed AutoFilter sentinels stable through SheetFilter serialization", () => {
+    const filter: SheetFilter = {
+      id: "filter-typed-values",
+      range: { start: { row: 0, column: 0 }, end: { row: 3, column: 0 } },
+      column: 0,
+      operator: "equals",
+      value: BLANK_FILTER_VALUE,
+      values: [BLANK_FILTER_VALUE, EMPTY_RESULT_FILTER_VALUE, "0"],
+      hasHeader: true
+    };
+
+    expect(JSON.parse(JSON.stringify(filter))).toEqual(filter);
   });
 
   it("matches typed dates, booleans, and errors without zero coercion", () => {

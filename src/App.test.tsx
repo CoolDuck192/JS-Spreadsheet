@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
@@ -667,6 +668,57 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B2 bottom-right" })).toHaveTextContent("bottom-right");
   });
 
+  it("rejects a plain multi-cell paste whose formula is invalid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "5");
+    await applyNumberValidation(user, "B1", { max: 10 });
+    await user.click(screen.getByRole("gridcell", { name: "A1 5" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "20\t=A1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
+  it("accepts a plain multi-cell paste whose formula becomes valid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "20");
+    await applyNumberValidation(user, "B1", { max: 10 });
+    await user.click(screen.getByRole("gridcell", { name: "A1 20" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "5\t=A1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+  });
+
+  it("evaluates every validated formula in one engine for a plain paste transaction", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "B1", { max: 100 });
+    await applyNumberValidation(user, "C1", { max: 100 });
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "5\t=A1\t=A1+1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "C1 6" })).toBeInTheDocument();
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("pastes an internally copied range with formatting and adjusted formulas", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -689,6 +741,61 @@ describe("App", () => {
     await user.click(pastedCell);
     expect(screen.getByLabelText("Formula input")).toHaveValue("=B1");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Pasted cells with formatting");
+  });
+
+  it("rejects a rich paste whose translated formula is invalid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "5");
+    await editCell(user, "C1", "20");
+    await editCell(user, "D1", "=C1");
+    await applyNumberValidation(user, "D1", { max: 10 });
+    selectRange("C1 20", "D1 20");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1 5" }));
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
+  it("accepts a rich paste whose translated formula becomes valid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "20");
+    await editCell(user, "C1", "5");
+    await editCell(user, "D1", "=C1");
+    await applyNumberValidation(user, "D1", { max: 10 });
+    selectRange("C1 5", "D1 5");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1 20" }));
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+    await user.click(screen.getByRole("gridcell", { name: "B1 5" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("=A1");
+  });
+
+  it("does not build a candidate engine for a rich formula paste without validation rules", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "C1", "=1+1");
+    await user.click(screen.getByRole("gridcell", { name: "C1 2" }));
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 2" })).toBeInTheDocument();
+    expect(buildSpy).not.toHaveBeenCalled();
   });
 
   it("cuts and pastes a rich selection as a move", async () => {
@@ -1059,6 +1166,24 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
+  it("rejects an invalid proposed formula from the formula bar without publishing it", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "A1", { max: 10 });
+    const formulaInput = screen.getByLabelText("Formula input");
+    await user.click(formulaInput);
+    await user.type(formulaInput, "=5+5{Enter}");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+
+    await user.clear(formulaInput);
+    await user.type(formulaInput, "=5+6{Enter}");
+
+    expect(formulaInput).toHaveValue("=5+6");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
   it("commits cell editor edits as a single undoable action", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1090,6 +1215,40 @@ describe("App", () => {
     await user.click(screen.getByRole("gridcell", { name: "B2 20" }));
     expect(screen.getByLabelText("Formula input")).toHaveValue("=A2");
   });
+
+  it.each(["Fill Down", "Fill Right", "AutoFill"] as const)(
+    "rejects a translated formula from %s when the final destination violates validation",
+    async (operation) => {
+      const user = userEvent.setup();
+      render(<App />);
+      const destination = await setupFormulaFill(user, operation, 20);
+      const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+      await runFormulaFill(user, operation);
+
+      expect(screen.getByRole("gridcell", { name: destination.address })).toHaveTextContent("");
+      expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(["Fill Down", "Fill Right", "AutoFill"] as const)(
+    "commits a translated formula from %s when the complete candidate is valid",
+    async (operation) => {
+      const user = userEvent.setup();
+      render(<App />);
+      const destination = await setupFormulaFill(user, operation, 8);
+      const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+      await runFormulaFill(user, operation);
+
+      const filledCell = screen.getByRole("gridcell", { name: `${destination.address} 8` });
+      expect(filledCell).toBeInTheDocument();
+      await user.click(filledCell);
+      expect(screen.getByLabelText("Formula input")).toHaveValue(destination.formula);
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("resets the scroll position of the grid view", async () => {
     const user = userEvent.setup();
@@ -2331,8 +2490,41 @@ describe("App", () => {
     await user.dblClick(screen.getByRole("gridcell", { name: "B1" }));
     await user.type(screen.getByLabelText("Cell editor B1"), "20{Enter}");
 
-    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("invalid-validation-cell");
+    expect(screen.getByLabelText("Cell editor B1")).toHaveValue("20");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number between 1 and 10");
+  });
+
+  it("does not build candidate engines while a validated formula draft is being typed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "A1", { max: 10 });
+    await editCell(user, "A1", "=5+5");
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1 10" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+    const destroySpy = vi.spyOn(HyperFormula.prototype, "destroy");
+
+    await user.clear(editor);
+    await user.type(editor, "=4+6");
+
+    expect(buildSpy).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+  });
+
+  it("does not build a candidate engine for a formula without a validation rule", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+    await editCell(user, "A1", "=1+1");
+
+    expect(screen.getByRole("gridcell", { name: "A1 2" })).toBeInTheDocument();
+    expect(buildSpy).not.toHaveBeenCalled();
   });
 
   it("validates the proposed formula result without publishing a rejected candidate", async () => {
@@ -2799,6 +2991,65 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "C3 7" })).toHaveTextContent("7");
   });
 });
+
+type FormulaFillOperation = "Fill Down" | "Fill Right" | "AutoFill";
+
+async function applyNumberValidation(
+  user: ReturnType<typeof userEvent.setup>,
+  address: string,
+  bounds: { min?: number; max?: number }
+) {
+  await user.click(screen.getByRole("gridcell", { name: addressNamePattern(address) }));
+  await user.click(screen.getByRole("button", { name: "Data validation" }));
+  await user.selectOptions(screen.getByLabelText("Validation type"), "number");
+  await user.clear(screen.getByLabelText("Minimum"));
+  await user.clear(screen.getByLabelText("Maximum"));
+  if (bounds.min !== undefined) {
+    await user.type(screen.getByLabelText("Minimum"), String(bounds.min));
+  }
+  if (bounds.max !== undefined) {
+    await user.type(screen.getByLabelText("Maximum"), String(bounds.max));
+  }
+  await user.click(screen.getByRole("button", { name: "Apply validation" }));
+}
+
+async function setupFormulaFill(
+  user: ReturnType<typeof userEvent.setup>,
+  operation: FormulaFillOperation,
+  translatedValue: number
+): Promise<{ address: string; formula: string }> {
+  if (operation === "Fill Right") {
+    await editCell(user, "A2", "5");
+    await editCell(user, "B2", String(translatedValue));
+    await editCell(user, "B1", "=A2");
+    await applyNumberValidation(user, "C1", { max: 10 });
+    return { address: "C1", formula: "=B2" };
+  }
+
+  await editCell(user, "A1", "5");
+  await editCell(user, "A2", String(translatedValue));
+  await editCell(user, "B1", "=A1");
+  await applyNumberValidation(user, operation === "AutoFill" ? "B1" : "B2", { max: 10 });
+  return { address: "B2", formula: "=A2" };
+}
+
+async function runFormulaFill(user: ReturnType<typeof userEvent.setup>, operation: FormulaFillOperation) {
+  if (operation === "Fill Down") {
+    selectRange("B1 5", "B2");
+    await user.click(screen.getByRole("button", { name: "Fill down" }));
+    return;
+  }
+  if (operation === "Fill Right") {
+    selectRange("B1 5", "C1");
+    await user.click(screen.getByRole("button", { name: "Fill right" }));
+    return;
+  }
+
+  await user.click(screen.getByRole("gridcell", { name: "B1 5" }));
+  fireEvent.mouseDown(screen.getByRole("button", { name: "AutoFill selection" }));
+  fireEvent.mouseEnter(screen.getByRole("gridcell", { name: "B2" }));
+  fireEvent.mouseUp(screen.getByRole("grid", { name: "Spreadsheet grid" }));
+}
 
 async function editCell(user: ReturnType<typeof userEvent.setup>, address: string, value: string) {
   await user.dblClick(screen.getByRole("gridcell", { name: addressNamePattern(address) }));

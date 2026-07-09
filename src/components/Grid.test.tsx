@@ -564,6 +564,8 @@ describe("Grid", () => {
     const menu = screen.getByRole("menu", { name: "AutoFilter menu for Region" });
 
     expect(displayValueSpy).toHaveBeenCalledWith(sheet.id, "A202");
+    const scansAfterOpen = displayValueSpy.mock.calls.filter(([, address]) => address === "A202").length;
+    expect(scansAfterOpen).toBe(1);
     expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(200);
     expect(within(menu).getByRole("status")).toHaveTextContent("Showing 200 of 201 values");
     expect(within(menu).queryByRole("menuitemcheckbox", { name: "Value 201" })).not.toBeInTheDocument();
@@ -575,8 +577,106 @@ describe("Grid", () => {
     expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(1);
     expect(within(menu).getByRole("menuitemcheckbox", { name: "Value 201" })).toBeInTheDocument();
     expect(within(menu).getByRole("status")).toHaveTextContent("Showing 1 of 1 matching values (201 total)");
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Value 201" }));
+    expect(displayValueSpy.mock.calls.filter(([, address]) => address === "A202")).toHaveLength(scansAfterOpen);
+  });
+
+  it("keeps blank, formula-empty, and zero AutoFilter choices distinct", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 4,
+      columnCount: 1,
+      cells: { A1: "Value", A3: '=""', A4: 0 },
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 3, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 1,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: []
+    };
+    const appliedValues: string[][] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onAutoFilterColumn={(_column, values) => appliedValues.push(values)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Value" }));
+    const menu = screen.getByRole("menu", { name: "AutoFilter menu for Value" });
+
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Blank" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Empty result" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "0" })).toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Blank" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Apply selected values" }));
+
+    expect(appliedValues).toEqual([[BLANK_FILTER_VALUE]]);
+  });
+
+  it("orders AutoFilter choices deterministically without the runtime's default locale", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 1,
+      cells: { A1: "Value", A2: "ä", A3: "z" },
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 2, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 1,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Value" }));
+    expect(
+      within(screen.getByRole("menu", { name: "AutoFilter menu for Value" }))
+        .getAllByRole("menuitemcheckbox")
+        .map((choice) => choice.textContent)
+    ).toEqual(["z", "ä"]);
   });
 });
+
+const BLANK_FILTER_VALUE = "\u0000js-spreadsheet:blank";
 
 function createFixtureSheet(): { sheet: SheetModel; workbook: WorkbookModel } {
   const sheet: SheetModel = {

@@ -30,6 +30,7 @@ import {
 } from "./sheetDimensions";
 import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
 import type { ComputedCellValue } from "./formulaEngine";
+import { compareDeterministicText } from "./filters";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
@@ -2940,7 +2941,7 @@ function compareSortRows(
   const comparison =
     leftNumber !== null && rightNumber !== null
       ? leftNumber - rightNumber
-      : String(left.key).localeCompare(String(right.key), undefined, { numeric: true, sensitivity: "base" });
+      : compareDeterministicText(String(left.key), String(right.key));
 
   if (comparison === 0) {
     return left.originalIndex - right.originalIndex;
