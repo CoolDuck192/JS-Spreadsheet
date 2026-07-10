@@ -4,7 +4,7 @@ import type { QueryRequest, QueryResult, QueryRow } from "../core/query";
 import type { ColumnDef, TableCellMetadata, TableViewState } from "../core/types";
 import { createTestRemoteSource, defaultRemoteCapabilities } from "./testUtils";
 import { createRemoteTableSession } from "./RemoteTableSession";
-import type { RemoteMutation, RemoteMutationResult } from "./types";
+import type { RemoteMutation, RemoteMutationResult, RemoteSourceEvent } from "./types";
 
 type Employee = {
   id: string;
@@ -413,6 +413,118 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("starts and stops the declared remote subscription with the session lifecycle", async () => {
+    let listener: ((event: RemoteSourceEvent<Employee>) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn((next: (event: RemoteSourceEvent<Employee>) => void) => {
+      listener = next;
+      return unsubscribe;
+    });
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: false,
+      subscription: true,
+      undo: false
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "none",
+      undoMode: "none",
+      query: async () => unpaginatedResult("1", employees),
+      subscribe,
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+
+    session.start();
+    await waitUntilReady(session);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    listener?.({
+      kind: "rows-upserted",
+      revision: "2",
+      rows: [{ ...employees[0], name: "Grace" }]
+    });
+    await vi.waitFor(() => {
+      expect(session.getSnapshot().getCell("employee-1", "name").displayValue).toBe("Grace");
+    });
+
+    session.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    session.destroy();
+  });
+
+  it("reloads the authoritative row and retries a retained conflict only at its current revision", async () => {
+    const reloadHarness = await createConflictHarness();
+    const reloadConflict = reloadHarness.session.getSnapshot().conflicts[0];
+    expect(reloadConflict).toMatchObject({
+      operationId: "command-2",
+      rowId: "employee-1",
+      columnId: "salary",
+      attemptedValue: 120,
+      authoritativeValue: 115,
+      revision: "2"
+    });
+
+    expect(await reloadHarness.session.dispatch({
+      type: "reload-authoritative",
+      operationId: reloadConflict.operationId,
+      rowId: reloadConflict.rowId
+    })).toMatchObject({ status: "pending" });
+    expect(reloadHarness.session.getSnapshot().conflicts).toHaveLength(0);
+    await waitForCalls(reloadHarness.query, 2);
+    reloadHarness.session.destroy();
+
+    const retryHarness = await createConflictHarness();
+    const retryConflict = retryHarness.session.getSnapshot().conflicts[0];
+    expect(await retryHarness.session.dispatch({
+      type: "retry-with-revision",
+      operationId: retryConflict.operationId,
+      rowId: retryConflict.rowId,
+      expectedRevision: retryConflict.revision
+    })).toMatchObject({ status: "pending", operationId: "command-3" });
+    expect(retryHarness.mutate).toHaveBeenCalledTimes(2);
+    const first = retryHarness.mutate.mock.calls[0][0][0];
+    const retried = retryHarness.mutate.mock.calls[1][0][0];
+    expect(retried).toMatchObject({
+      kind: "cell-value",
+      rowId: "employee-1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      baseRevision: "2"
+    });
+    expect(retried.clientMutationId).not.toBe(first.clientMutationId);
+    expect(retryHarness.session.getSnapshot().conflicts).toHaveLength(0);
+    retryHarness.session.destroy();
+  });
+
+  it("rejects stale conflict reconciliation without losing the retained conflict", async () => {
+    const harness = await createConflictHarness();
+    const conflict = harness.session.getSnapshot().conflicts[0];
+    const calls = harness.mutate.mock.calls.length;
+    const before = harness.session.getSnapshot().conflicts;
+
+    for (const intent of [
+      { type: "reload-authoritative", operationId: "", rowId: conflict.rowId } as const,
+      { type: "reload-authoritative", operationId: conflict.operationId, rowId: "missing" } as const,
+      {
+        type: "retry-with-revision",
+        operationId: conflict.operationId,
+        rowId: conflict.rowId,
+        expectedRevision: "1"
+      } as const
+    ]) {
+      expect(await harness.session.dispatch(intent)).toMatchObject({
+        status: "rejected",
+        reason: "validation",
+        issues: [{ code: "REMOTE_CONFLICT_NOT_CURRENT" }]
+      });
+    }
+    expect(harness.mutate).toHaveBeenCalledTimes(calls);
+    expect(harness.session.getSnapshot().conflicts).toEqual(before);
+    harness.session.destroy();
+  });
+
   it("preserves the last valid projection for invalid controlled grouping/pagination", () => {
     const query = vi.fn(async (request: QueryRequest) => offsetResult("r1", employees, request));
     const source = createTestRemoteSource<Employee>({ query });
@@ -607,6 +719,53 @@ function createDeferredMutation<TRow>() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function createConflictHarness() {
+  let queryRevision = "1";
+  let queryRow = employees[0];
+  const query = vi.fn(async () => unpaginatedResult(queryRevision, [queryRow]));
+  const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+    if (mutate.mock.calls.length === 1) {
+      queryRevision = "2";
+      queryRow = { ...employees[0], salary: 115 };
+      return batch.map((mutation) => ({
+        clientMutationId: mutation.clientMutationId,
+        status: "conflict" as const,
+        revision: "2",
+        current: queryRow
+      }));
+    }
+    return new Promise<readonly RemoteMutationResult<Employee>[]>(() => undefined);
+  });
+  const capabilities = {
+    ...defaultRemoteCapabilities(),
+    pagination: false,
+    subscription: false,
+    undo: false
+  } satisfies TableCapabilities;
+  let command = 0;
+  const source = createTestRemoteSource<Employee>({
+    capabilities,
+    paginationMode: "none",
+    undoMode: "none",
+    query,
+    mutate,
+    compareRevisions: numericRevisionComparator
+  });
+  const session = createRemoteTableSession({
+    source,
+    columns,
+    commandIdFactory: () => `command-${++command}`
+  });
+  session.start();
+  await waitUntilReady(session);
+  expect(await session.dispatch({
+    type: "edit-cells",
+    edits: [{ rowId: "employee-1", columnId: "salary", rawText: "120" }]
+  })).toMatchObject({ status: "pending", operationId: "command-2" });
+  await vi.waitFor(() => expect(session.getSnapshot().conflicts).toHaveLength(1));
+  return { session, query, mutate };
 }
 
 function numericRevisionComparator(candidate: string, current: string) {

@@ -37,6 +37,7 @@ import {
   RemoteQueryController,
   type RemoteQuerySnapshot
 } from "./RemoteQueryController";
+import { RemoteSubscriptionController } from "./RemoteSubscriptionController";
 import type { RemoteTableSource } from "./types";
 
 export type RemoteTableSessionOptions<
@@ -107,6 +108,7 @@ class RemoteTableSessionImpl<
   private commandIdFactory: CommandIdFactory;
   private controller: RemoteQueryController<TRow> | null = null;
   private mutationController: RemoteMutationController<TRow> | null = null;
+  private subscriptionController: RemoteSubscriptionController<TRow> | null = null;
   private readonly overlays = new OptimisticOverlayStore();
   private controllerUnsubscribe: (() => void) | null = null;
   private controllerSource: RemoteTableSource<TRow> | null = null;
@@ -209,6 +211,16 @@ class RemoteTableSessionImpl<
         },
         limits: this.options.mutationLimits
       });
+      if (source.capabilities.subscription) {
+        this.subscriptionController = new RemoteSubscriptionController({
+          source,
+          queryController: controller,
+          mutationController: this.mutationController,
+          getActiveQuery: () => this.lastQuery ?? queryFromState(this.state),
+          createOperationId: this.commandIdFactory
+        });
+        this.subscriptionController.start();
+      }
       this.controllerUnsubscribe = controller.subscribe(() => {
         if (this.destroyed || this.controller !== controller || this.options.source !== source) return;
         this.localRevision += 1;
@@ -307,9 +319,11 @@ class RemoteTableSessionImpl<
       case "delete-rows":
       case "undo":
       case "redo":
-      case "reload-authoritative":
-      case "retry-with-revision":
         return unsupported("Remote mutations and reconciliation are not enabled yet");
+      case "reload-authoritative":
+        return this.reloadAuthoritative(intent, commandId);
+      case "retry-with-revision":
+        return this.retryConflict(intent, commandId);
       case "refresh":
         try {
           await this.refreshWithId(commandId);
@@ -635,6 +649,52 @@ class RemoteTableSessionImpl<
     return { status: "pending", operationId: commandId };
   }
 
+  private reloadAuthoritative(
+    intent: Extract<TableIntent<TRow>, { type: "reload-authoritative" }>,
+    commandId: string
+  ): CommandResult<TRow> {
+    const controller = this.controller;
+    const mutations = this.mutationController;
+    const conflict = mutations?.getConflict(intent.operationId, intent.rowId);
+    if (!controller || !mutations || !conflict) return conflictNotCurrent();
+    if (!mutations.abandonConflict(intent.operationId, intent.rowId)) return conflictNotCurrent();
+    controller.invalidate();
+    void controller.refresh(commandId).catch(() => {});
+    return { status: "pending", operationId: commandId };
+  }
+
+  private retryConflict(
+    intent: Extract<TableIntent<TRow>, { type: "retry-with-revision" }>,
+    commandId: string
+  ): CommandResult<TRow> {
+    const controller = this.controller;
+    const mutations = this.mutationController;
+    const conflict = mutations?.getConflict(intent.operationId, intent.rowId);
+    const currentRevision = controller?.getCurrentRevision();
+    if (
+      !controller
+      || !mutations
+      || !conflict
+      || intent.expectedRevision !== conflict.revision
+      || currentRevision !== intent.expectedRevision
+    ) {
+      return conflictNotCurrent();
+    }
+    const prepared = mutations.consumeConflictForRetry(
+      intent.operationId,
+      intent.rowId,
+      intent.expectedRevision
+    );
+    if (!prepared) return conflictNotCurrent();
+    const preflight = mutations.preflight(commandId, prepared);
+    if (preflight) return preflight;
+    void mutations.execute(commandId, prepared).then(() => {
+      this.snapshot = null;
+      this.refreshAfterInvalidation(commandId);
+    }).catch(() => {});
+    return { status: "pending", operationId: commandId };
+  }
+
   private readAuthoritativeCell(row: TRow, rowId: string, columnId: string):
     | { cell: OptimisticCell; rowVersion?: string }
     | { issue: TableCellIssue } {
@@ -814,6 +874,8 @@ class RemoteTableSessionImpl<
   }
 
   private teardownController(): void {
+    this.subscriptionController?.destroy();
+    this.subscriptionController = null;
     this.mutationController?.destroy();
     this.mutationController = null;
     this.overlays.clear();
@@ -1109,6 +1171,13 @@ function validationResult(
     ...(columnId === undefined ? {} : { columnId })
   };
   return { status: "rejected", reason: "validation", issues: [issue] };
+}
+
+function conflictNotCurrent(): Extract<CommandResult, { status: "rejected" }> {
+  return validationResult(
+    "REMOTE_CONFLICT_NOT_CURRENT",
+    "The remote conflict is no longer current"
+  );
 }
 
 function compatibleValue(

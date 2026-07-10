@@ -170,6 +170,9 @@ export class RemoteQueryController<TRow> {
 
   invalidate(): void {
     if (this.destroyed) return;
+    this.generation += 1;
+    this.abortController?.abort();
+    this.abortController = null;
     this.cache.clear();
     this.publish({
       ...emptySnapshot<TRow>(),

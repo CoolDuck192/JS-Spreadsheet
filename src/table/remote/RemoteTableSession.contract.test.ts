@@ -6,6 +6,7 @@ import type { ColumnDef } from "../core/types";
 import { defineTableSessionContract } from "../core/session.contract";
 import { createRemoteTableSession } from "./RemoteTableSession";
 import { createTestRemoteSource } from "./testUtils";
+import type { RemoteMutation } from "./types";
 
 type Row = { id: string; name: string; amount: number };
 
@@ -22,13 +23,32 @@ const columns: readonly ColumnDef<Row>[] = [
 ];
 
 defineTableSessionContract("remote", async () => {
+  let queryRevision = "r1";
+  let queryRow = row;
+  let mutationCalls = 0;
   const source = createTestRemoteSource<Row>({
     capabilities: mutableCapabilities(),
     paginationMode: "none",
     mutationMode: "versioned",
     undoMode: "none",
-    query: async (request) => result(request),
-    mutate: () => new Promise(() => undefined),
+    compareRevisions: (candidate, current) => candidate === current
+      ? "equal"
+      : Number(candidate.slice(1)) > Number(current.slice(1)) ? "newer" : "older",
+    query: async (request) => result(request, queryRevision, queryRow),
+    mutate: async (batch: readonly RemoteMutation[]) => {
+      mutationCalls += 1;
+      if (mutationCalls === 1) {
+        queryRevision = "r2";
+        queryRow = { ...row, name: "Authoritative" };
+        return batch.map((mutation) => ({
+          clientMutationId: mutation.clientMutationId,
+          status: "conflict" as const,
+          revision: queryRevision,
+          current: queryRow
+        }));
+      }
+      return new Promise(() => undefined);
+    },
     export: async () => ({
       bytes: new Uint8Array([1]),
       mediaType: "text/csv",
@@ -38,6 +58,12 @@ defineTableSessionContract("remote", async () => {
   const session = createRemoteTableSession({ source, columns });
   session.start();
   await vi.waitFor(() => expect(session.getSnapshot().status.phase).toBe("ready"));
+  await session.dispatch({
+    type: "edit-cells",
+    edits: [{ rowId: "row-1", columnId: "name", rawText: "Attempted" }]
+  });
+  await vi.waitFor(() => expect(session.getSnapshot().conflicts).toHaveLength(1));
+  const conflict = session.getSnapshot().conflicts[0];
   const featureOperations: Partial<Record<TableFeature, () => Promise<CommandResult>>> = {
     sort: () => session.dispatch({ type: "set-sorting", sorting: [{ columnId: "amount", direction: "desc" }] }),
     filter: () => session.dispatch({
@@ -83,6 +109,19 @@ defineTableSessionContract("remote", async () => {
     editableCell: { rowId: "row-1", columnId: "name" },
     validRawText: "Grace",
     featureOperations,
+    conflictResolution: {
+      reload: {
+        type: "reload-authoritative",
+        operationId: conflict.operationId,
+        rowId: conflict.rowId
+      },
+      retry: {
+        type: "retry-with-revision",
+        operationId: conflict.operationId,
+        rowId: conflict.rowId,
+        expectedRevision: conflict.revision
+      }
+    },
     cleanup: () => session.destroy()
   };
 });
@@ -139,11 +178,15 @@ function mutableCapabilities(): TableCapabilities {
   };
 }
 
-function result(request: QueryRequest): QueryResult<Row> {
+function result(
+  request: QueryRequest,
+  revision: string = "r1",
+  currentRow: Row = row
+): QueryResult<Row> {
   if (request.pagination.kind !== "none") throw new Error("expected unpaginated query");
   return {
-    items: [{ kind: "data", id: row.id, original: row, depth: 0 }],
-    revision: "r1",
+    items: [{ kind: "data", id: currentRow.id, original: currentRow, depth: 0 }],
+    revision,
     completeness: "completeDataset",
     pageInfo: { kind: "none", total: { kind: "known", value: 1 } }
   };

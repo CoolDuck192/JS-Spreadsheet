@@ -55,6 +55,8 @@ export class RemoteMutationController<TRow> {
   private readonly maxPendingCells: number;
   private readonly batches = new Map<string, MutationBatch>();
   private readonly conflicts = new Map<string, TableConflict<TRow>>();
+  private readonly attempts = new Map<string, PreparedRemoteMutation>();
+  private readonly reconciliationTombstones = new Set<string>();
   private issues: TableCellIssue[] = [];
   private destroyed = false;
 
@@ -94,6 +96,7 @@ export class RemoteMutationController<TRow> {
 
     const mutations: RemoteMutation[] = prepared.map((item, index) => {
       const clientMutationId = `${operationId}:${index}`;
+      this.attempts.set(clientMutationId, item);
       this.overlays.add({
         clientMutationId,
         operationId,
@@ -173,13 +176,18 @@ export class RemoteMutationController<TRow> {
 
     for (const result of ordered) {
       const overlay = this.overlays.get(result.clientMutationId);
-      if (!overlay) continue;
+      if (!overlay) {
+        this.reconciliationTombstones.delete(result.clientMutationId);
+        continue;
+      }
       const comparison = this.source.compareRevisions(
         result.revision,
         this.queryController.getCurrentRevision() ?? latestRevision
       );
       if (comparison === "older") {
         this.overlays.remove(result.clientMutationId);
+        this.attempts.delete(result.clientMutationId);
+        this.conflicts.delete(result.clientMutationId);
         issues.push({
           code: "REMOTE_MUTATION_STALE_ACK",
           message: "The source returned an older mutation acknowledgement",
@@ -210,9 +218,13 @@ export class RemoteMutationController<TRow> {
           committedRows.push(result.row);
           this.queryController.applyCanonicalRows([result.row], result.revision, false);
           this.overlays.remove(result.clientMutationId);
+          this.attempts.delete(result.clientMutationId);
+          this.conflicts.delete(result.clientMutationId);
           break;
         case "rejected":
           this.overlays.remove(result.clientMutationId);
+          this.attempts.delete(result.clientMutationId);
+          this.conflicts.delete(result.clientMutationId);
           issues.push(...result.issues.map((issue) => ({
             ...issue,
             rowId: overlay.rowId,
@@ -297,6 +309,109 @@ export class RemoteMutationController<TRow> {
     return this.issues;
   }
 
+  hasOverlayForRow(rowId: string): boolean {
+    return this.overlays.values().some((overlay) => overlay.rowId === rowId);
+  }
+
+  acceptAuthoritativeRows(rows: readonly TRow[], revision: string): void {
+    for (const row of rows) {
+      const rowId = this.source.getRowId(row);
+      for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
+        let authoritativeValue: unknown;
+        try {
+          authoritativeValue = this.source.readCell?.(row, overlay.columnId).evaluatedValue;
+        } catch {
+          authoritativeValue = undefined;
+        }
+        if (!Object.is(authoritativeValue, overlay.cell.evaluatedValue)) {
+          this.overlays.updateStatus(overlay.clientMutationId, "conflict");
+          this.conflicts.set(overlay.clientMutationId, {
+            operationId: overlay.operationId,
+            rowId,
+            columnId: overlay.columnId,
+            attemptedValue: overlay.cell.evaluatedValue,
+            authoritativeValue,
+            current: row,
+            revision
+          });
+        }
+      }
+    }
+    this.queryController.applyCanonicalRows(rows, revision, false);
+    this.queryController.noteCurrentRevision(revision, false);
+  }
+
+  acceptAuthoritativeDeletions(rowIds: readonly string[], revision: string): void {
+    for (const rowId of rowIds) {
+      const current = this.queryController.getCanonicalRow(rowId);
+      if (!current) continue;
+      for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
+        this.overlays.updateStatus(overlay.clientMutationId, "conflict");
+        this.conflicts.set(overlay.clientMutationId, {
+          operationId: overlay.operationId,
+          rowId,
+          columnId: overlay.columnId,
+          attemptedValue: overlay.cell.evaluatedValue,
+          authoritativeValue: undefined,
+          current,
+          revision
+        });
+      }
+    }
+    this.queryController.deleteCanonicalRows(rowIds, revision, false);
+    this.queryController.noteCurrentRevision(revision, false);
+  }
+
+  abandonConflict(operationId: string, rowId: string): boolean {
+    const mutationIds = this.conflictMutationIds(operationId, rowId);
+    if (mutationIds.length === 0) return false;
+    const acknowledgementPending = this.batches.has(operationId);
+    for (const mutationId of mutationIds) {
+      this.conflicts.delete(mutationId);
+      this.overlays.remove(mutationId);
+      this.attempts.delete(mutationId);
+      if (acknowledgementPending) this.reconciliationTombstones.add(mutationId);
+    }
+    this.detachResolvedBatch(operationId, mutationIds);
+    this.publish();
+    return true;
+  }
+
+  consumeConflictForRetry(
+    operationId: string,
+    rowId: string,
+    expectedRevision: string
+  ): readonly PreparedRemoteMutation[] | null {
+    const mutationIds = this.conflictMutationIds(operationId, rowId);
+    if (
+      mutationIds.length === 0
+      || mutationIds.some((mutationId) => this.conflicts.get(mutationId)?.revision !== expectedRevision)
+    ) {
+      return null;
+    }
+    const attempts = mutationIds.flatMap((mutationId) => {
+      const attempt = this.attempts.get(mutationId);
+      return attempt ? [attempt] : [];
+    });
+    if (attempts.length !== mutationIds.length) return null;
+    const acknowledgementPending = this.batches.has(operationId);
+    for (const mutationId of mutationIds) {
+      this.conflicts.delete(mutationId);
+      this.overlays.remove(mutationId);
+      this.attempts.delete(mutationId);
+      if (acknowledgementPending) this.reconciliationTombstones.add(mutationId);
+    }
+    this.detachResolvedBatch(operationId, mutationIds);
+    this.publish();
+    return attempts;
+  }
+
+  getConflict(operationId: string, rowId: string): TableConflict<TRow> | undefined {
+    return this.conflictMutationIds(operationId, rowId)
+      .map((mutationId) => this.conflicts.get(mutationId))
+      .find((conflict): conflict is TableConflict<TRow> => conflict !== undefined);
+  }
+
   getDiagnostics(): { pendingOperations: number; pendingCells: number; conflicts: number } {
     return {
       pendingOperations: this.batches.size,
@@ -311,6 +426,8 @@ export class RemoteMutationController<TRow> {
     for (const batch of this.batches.values()) batch.abortController.abort();
     this.batches.clear();
     this.conflicts.clear();
+    this.attempts.clear();
+    this.reconciliationTombstones.clear();
     this.issues = [];
     this.overlays.clear();
   }
@@ -319,6 +436,8 @@ export class RemoteMutationController<TRow> {
     for (const mutationId of batch.mutationIds) {
       this.overlays.remove(mutationId);
       this.conflicts.delete(mutationId);
+      this.attempts.delete(mutationId);
+      this.reconciliationTombstones.delete(mutationId);
     }
     this.batches.delete(batch.operationId);
     if (!silent) this.publish();
@@ -326,6 +445,19 @@ export class RemoteMutationController<TRow> {
 
   private publish(): void {
     if (!this.destroyed) this.onChange();
+  }
+
+  private conflictMutationIds(operationId: string, rowId: string): string[] {
+    return [...this.conflicts.entries()]
+      .filter(([, conflict]) => conflict.operationId === operationId && conflict.rowId === rowId)
+      .map(([mutationId]) => mutationId);
+  }
+
+  private detachResolvedBatch(operationId: string, mutationIds: readonly string[]): void {
+    const batch = this.batches.get(operationId);
+    if (!batch || batch.mutationIds.some((mutationId) => !mutationIds.includes(mutationId))) return;
+    batch.abortController.abort();
+    this.batches.delete(operationId);
   }
 }
 
