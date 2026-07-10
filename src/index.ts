@@ -27,6 +27,8 @@ export {
   useWorkbookSessionContext
 } from "./react/WorkbookSessionContext";
 export { DataTable } from "./react/DataTable";
+export { WorkbookTableView } from "./react/workbook/WorkbookTableView";
+export type { WorkbookTableViewProps } from "./react/workbook/WorkbookTableView";
 export { useTableSession } from "./react/useTableSession";
 export { useTableSnapshot } from "./react/useTableSnapshot";
 export {
@@ -46,6 +48,11 @@ export {
   RecordTableSession,
   createLocalRecordTableSession
 } from "./table/local/RecordTableSession";
+export { createWorkbookTableSession } from "./table/workbook/WorkbookTableSession";
+export type {
+  WorkbookTableRow,
+  WorkbookTableSession
+} from "./table/workbook/WorkbookTableSession";
 export type {
   LocalRecordSource,
   LocalRecordTableSessionOptions,

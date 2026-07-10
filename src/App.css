@@ -3427,6 +3427,59 @@ button {
   height: 12px;
 }
 
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view {
+  position: absolute;
+  inset: 76px 14px 42px;
+  z-index: 45;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  border-radius: 10px;
+  background: var(--js-spreadsheet-surface, #fff);
+  box-shadow: 0 18px 48px rgb(16 24 40 / 18%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  background: var(--js-spreadsheet-surface-muted, #f7f8fa);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header h2,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header p {
+  margin: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header p {
+  color: var(--js-spreadsheet-text-muted, #667085);
+  font-size: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__issue {
+  border-bottom: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  padding: 8px 12px;
+  color: var(--js-spreadsheet-danger, #b42318);
+  background: color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 7%, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__table {
+  min-height: 0;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 0;
+}
+
 .file-drop-overlay {
   position: fixed;
   inset: 0;

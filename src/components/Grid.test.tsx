@@ -78,7 +78,7 @@ describe("Grid", () => {
       cells: { A1: "Region", A2: "West", A3: "East", B1: "Amount" },
       autoFilterRange: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } }
     };
-    const workbook: WorkbookModel = { version: 1, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [] };
+    const workbook: WorkbookModel = { version: 2, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [], tables: [] };
     const contexts: Array<{ address: string; row: number; column: number }> = [];
     render(
       <Grid
@@ -117,7 +117,7 @@ describe("Grid", () => {
         }
       ]
     };
-    const workbook: WorkbookModel = { version: 1, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [] };
+    const workbook: WorkbookModel = { version: 2, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [], tables: [] };
     const { container } = render(
       <Grid
         sheet={sheet}

@@ -99,6 +99,7 @@ import type {
   WorkbookImporter
 } from "./core/workbook/services";
 import { useWorkbookSession } from "./react/useWorkbookSession";
+import { WorkbookTableView } from "./react/workbook/WorkbookTableView";
 
 const INITIAL_SELECTION: CellRange = {
   start: { row: 0, column: 0 },
@@ -758,6 +759,32 @@ function SpreadsheetWorkbook({
     setTableCommandIssues({ tableId, issues: [] });
     setStatus(nextStatus);
     return true;
+  }
+
+  function openTableCellInSpreadsheet(tableId: string, cell?: { rowId: string; columnId: string }) {
+    const latestWorkbook = session.getSnapshot().workbook;
+    const table = latestWorkbook.tables.find((candidate) => candidate.id === tableId);
+    const body = table ? getStructuredTableBodyRange(table) : null;
+    const rowIndex = table && cell ? table.rowIds.indexOf(cell.rowId) : 0;
+    const column = table && cell
+      ? table.columns.find((candidate) => candidate.id === cell.columnId)
+      : table?.columns[0];
+    if (!table || !body || rowIndex < 0 || !column) {
+      setStatus("The table cell is no longer available in the spreadsheet");
+      return;
+    }
+    const coordinate = { row: body.start.row + rowIndex, column: column.sheetColumn };
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.activate", sheetId: table.sheetId },
+        { type: "selection.set", selection: { start: coordinate, end: coordinate } }
+      ]
+    }, `Selected ${formatCellAddress(coordinate)} in the spreadsheet`);
+    if (result.status !== "committed") return;
+    setOpenTableId(null);
+    gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
+    gridScrollRef.current?.focus({ preventScroll: true });
   }
 
   function applyFormatPainter(targetSelection: CellRange) {
@@ -3178,6 +3205,13 @@ function SpreadsheetWorkbook({
             onDeleteColumn={handleDeleteColumns}
             onComment={handleComment}
             onLink={handleLink}
+          />
+        ) : null}
+        {openTableId ? (
+          <WorkbookTableView
+            session={session.table(openTableId)}
+            onClose={() => setOpenTableId(null)}
+            onOpenInSpreadsheet={(cell) => openTableCellInSpreadsheet(openTableId, cell)}
           />
         ) : null}
         {features?.charts !== false ? <SheetCharts

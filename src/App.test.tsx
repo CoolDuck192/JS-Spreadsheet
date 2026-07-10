@@ -1071,6 +1071,23 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   });
 
+  it("opens a live adaptive table and returns the stable cell selection to the spreadsheet", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Open table view" }));
+    expect(screen.getByRole("dialog", { name: "Workbook table table-sales" })).toBeInTheDocument();
+
+    const tableCell = screen.getByRole("gridcell", { name: "sales-west Sales" });
+    expect(tableCell).toHaveTextContent("10");
+    await user.click(tableCell);
+    await user.click(screen.getByRole("button", { name: "Open in Spreadsheet" }));
+
+    expect(screen.queryByRole("dialog", { name: "Workbook table table-sales" })).not.toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("opens saved workbooks with stale active sheet ids", () => {
     localStorage.setItem(
       "javascript-spreadsheet-workbook",
