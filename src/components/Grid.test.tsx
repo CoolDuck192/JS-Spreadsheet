@@ -275,6 +275,36 @@ describe("Grid", () => {
     expect(contexts.at(-1)).toEqual({ column: 3, x: 432, y: 60, opener: columnD });
   });
 
+  it("leaves native column-header context behavior untouched when no callback is supplied", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const selections: CellRange[] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const columnB = screen.getByRole("columnheader", { name: "Column B" });
+    const mouseNotCanceled = fireEvent.contextMenu(columnB, { clientX: 240, clientY: 60 });
+    const shiftF10NotCanceled = fireEvent.keyDown(columnB, { key: "F10", shiftKey: true });
+    const contextMenuKeyNotCanceled = fireEvent.keyDown(columnB, { key: "ContextMenu" });
+
+    expect([mouseNotCanceled, shiftF10NotCanceled, contextMenuKeyNotCanceled]).toEqual([true, true, true]);
+    expect(selections).toEqual([]);
+  });
+
   it("does not render hidden rows or columns", () => {
     const sheet: SheetModel = {
       id: "sheet-1",

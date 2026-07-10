@@ -1061,15 +1061,17 @@ export function Grid({
           y: event.clientY
         });
       }}
-      onColumnHeaderContextMenu={(column, event) => {
-        event.preventDefault();
-        openColumnHeaderContextMenu(
-          parseSheetIndex(column.id, "column:"),
-          event.clientX,
-          event.clientY,
-          event.currentTarget
-        );
-      }}
+      onColumnHeaderContextMenu={onColumnHeaderContextMenu
+        ? (column, event) => {
+            event.preventDefault();
+            openColumnHeaderContextMenu(
+              parseSheetIndex(column.id, "column:"),
+              event.clientX,
+              event.clientY,
+              event.currentTarget
+            );
+          }
+        : undefined}
       onReadOnlyCellEditAttempt={(cell) => {
         const resolved = resolveCell(cell.rowId, cell.columnId);
         if (resolved.mergeInfo?.role !== "covered") {
@@ -1136,7 +1138,10 @@ export function Grid({
         });
       }}
       onColumnHeaderKeyDown={(column, event) => {
-        if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
+        if (
+          onColumnHeaderContextMenu &&
+          ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu")
+        ) {
           event.preventDefault();
           event.stopPropagation();
           const rect = event.currentTarget.getBoundingClientRect();

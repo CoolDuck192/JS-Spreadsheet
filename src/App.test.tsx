@@ -1963,6 +1963,37 @@ describe("App", () => {
     expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
   });
 
+  it("does not expand same-sheet tables outside the selected row or column boundary context", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={columnBoundaryContextWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "D1 Department" })).toHaveTextContent("Department");
+    expect(screen.getByRole("gridcell", { name: "E1 Cost" })).toHaveTextContent("Cost");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+  });
+
+  it("does not include a matching table boundary from another sheet", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={columnBoundaryContextWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Other" }));
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("gridcell", { name: "A1 OtherRegion" })).toHaveTextContent("OtherRegion");
+    expect(screen.getByRole("gridcell", { name: "B1 OtherSales" })).toHaveTextContent("OtherSales");
+    expect(screen.getByRole("gridcell", { name: "C1" })).toHaveTextContent("");
+  });
+
   it("appends a column after the final worksheet column", async () => {
     const user = userEvent.setup();
     render(<Spreadsheet storage={false} />);
@@ -3396,6 +3427,108 @@ function structuredTableWorkbook(): ReturnType<typeof createBlankWorkbook> {
         ],
         rowIds: ["cost-operations", "cost-technology"],
         style: { theme: "TableStyleMedium2", showRowStripes: true }
+      }
+    ]
+  };
+}
+
+function columnBoundaryContextWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  const otherSheetId = "sheet-other";
+  return {
+    ...workbook,
+    sheets: [
+      {
+        ...sheet,
+        name: "Active",
+        cells: {
+          A1: "Region",
+          B1: "Sales",
+          A2: "West",
+          B2: 10,
+          A3: "East",
+          B3: 8,
+          C1: "Department",
+          D1: "Cost",
+          C2: "Operations",
+          D2: 5,
+          C3: "Technology",
+          D3: 7,
+          A5: "Team",
+          B5: "Value",
+          A6: "North",
+          B6: 3,
+          A7: "South",
+          B7: 4
+        }
+      },
+      {
+        ...sheet,
+        id: otherSheetId,
+        name: "Other",
+        cells: {
+          A1: "OtherRegion",
+          B1: "OtherSales",
+          A2: "West",
+          B2: 12,
+          A3: "East",
+          B3: 9
+        }
+      }
+    ],
+    tables: [
+      {
+        id: "table-selected",
+        name: "SelectedTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "selected-region", name: "Region", sheetColumn: 0 },
+          { id: "selected-sales", name: "Sales", sheetColumn: 1 }
+        ],
+        rowIds: ["selected-west", "selected-east"]
+      },
+      {
+        id: "table-adjacent",
+        name: "AdjacentTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 2 }, end: { row: 2, column: 3 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "adjacent-department", name: "Department", sheetColumn: 2 },
+          { id: "adjacent-cost", name: "Cost", sheetColumn: 3 }
+        ],
+        rowIds: ["adjacent-operations", "adjacent-technology"]
+      },
+      {
+        id: "table-lower",
+        name: "LowerTable",
+        sheetId: sheet.id,
+        range: { start: { row: 4, column: 0 }, end: { row: 6, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "lower-team", name: "Team", sheetColumn: 0 },
+          { id: "lower-value", name: "Value", sheetColumn: 1 }
+        ],
+        rowIds: ["lower-north", "lower-south"]
+      },
+      {
+        id: "table-other",
+        name: "OtherTable",
+        sheetId: otherSheetId,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "other-region", name: "OtherRegion", sheetColumn: 0 },
+          { id: "other-sales", name: "OtherSales", sheetColumn: 1 }
+        ],
+        rowIds: ["other-west", "other-east"]
       }
     ]
   };

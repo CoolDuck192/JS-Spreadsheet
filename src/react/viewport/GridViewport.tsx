@@ -306,7 +306,9 @@ export function GridViewport({
                   onMouseDown={(event) => onColumnHeaderMouseDown?.(column, event)}
                   onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
                   onClick={(event) => onColumnHeaderClick?.(column, event)}
-                  onContextMenu={(event) => onColumnHeaderContextMenu?.(column, event)}
+                  onContextMenu={onColumnHeaderContextMenu
+                    ? (event) => onColumnHeaderContextMenu(column, event)
+                    : undefined}
                   onKeyDown={(event) => onColumnHeaderKeyDown?.(column, event)}
                   onDragOver={(event) => onColumnHeaderDragOver?.(column, event)}
                   onDrop={(event) => onColumnHeaderDrop?.(column, event)}
