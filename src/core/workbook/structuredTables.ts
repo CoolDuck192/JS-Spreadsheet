@@ -222,7 +222,8 @@ function renameColumn(
   const columnIndex = table.columns.findIndex((column) => column.id === columnId);
   if (columnIndex < 0) return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Structured table column does not exist");
   if (name.trim().length === 0 || table.columns.some(
-    (column, index) => index !== columnIndex && normalizeHeader(column.name) === normalizeHeader(name)
+    (column, index) => index !== columnIndex
+      && normalizeStructuredTableHeader(column.name) === normalizeStructuredTableHeader(name)
   )) {
     return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be nonblank and unique");
   }
@@ -262,7 +263,7 @@ function resizeTable(
 
   const width = range.end.column - range.start.column + 1;
   const columns = table.columns.slice(0, width).map((column) => ({ ...column }));
-  const names = new Set(columns.map((column) => normalizeHeader(column.name)));
+  const names = new Set(columns.map((column) => normalizeStructuredTableHeader(column.name)));
   let nextWorkbook = workbook;
   for (let index = columns.length; index < width; index += 1) {
     const sheetColumn = range.start.column + index;
@@ -275,11 +276,11 @@ function resizeTable(
     }
     if (typeof headerValue === "string" && headerValue.trim().length > 0) {
       name = headerValue;
-      if (names.has(normalizeHeader(name))) {
+      if (names.has(normalizeStructuredTableHeader(name))) {
         return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be unique");
       }
     } else {
-      name = nextColumnName(index + 1, names);
+      name = nextStructuredTableColumnName(index + 1, names);
       if (table.headerRow) {
         nextWorkbook = setRawCell(nextWorkbook, table.sheetId, {
           row: range.start.row,
@@ -287,7 +288,7 @@ function resizeTable(
         }, name);
       }
     }
-    names.add(normalizeHeader(name));
+    names.add(normalizeStructuredTableHeader(name));
     columns.push({ id: services.createId("table-column"), name, sheetColumn });
   }
   const bodyCount = height - Number(table.headerRow) - Number(table.totalsRow);
@@ -546,7 +547,7 @@ function readHeaderNames(workbook: WorkbookModel, sheetId: string, range: CellRa
   for (let column = range.start.column; column <= range.end.column; column += 1) {
     const value = getCellContent(workbook, sheetId, formatCellAddress({ row: range.start.row, column }));
     if (typeof value !== "string" || value.trim().length === 0) return null;
-    const key = normalizeHeader(value);
+    const key = normalizeStructuredTableHeader(value);
     if (keys.has(key)) return null;
     keys.add(key);
     names.push(value);
@@ -730,10 +731,13 @@ function nextTableName(workbook: WorkbookModel): string {
   }
 }
 
-function nextColumnName(start: number, existing: ReadonlySet<string>): string {
-  for (let index = start; ; index += 1) {
+export function nextStructuredTableColumnName(
+  ordinal: number,
+  normalizedNames: ReadonlySet<string>
+): string {
+  for (let index = ordinal; ; index += 1) {
     const candidate = `Column${index}`;
-    if (!existing.has(normalizeHeader(candidate))) return candidate;
+    if (!normalizedNames.has(normalizeStructuredTableHeader(candidate))) return candidate;
   }
 }
 
@@ -750,8 +754,8 @@ function cloneStyle(style: TableStyle): TableStyle {
   return { ...style };
 }
 
-function normalizeHeader(name: string): string {
-  return name.normalize("NFKC").toLowerCase();
+export function normalizeStructuredTableHeader(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
 }
 
 function validRange(range: CellRange): boolean {
