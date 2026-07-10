@@ -13,8 +13,11 @@ import type {
   SheetModel,
   SheetFilter,
   SheetProtection,
+  StructuredTable,
   WorkbookModel
 } from "../types";
+import { createRandomId, type IdGenerator } from "../core/ids";
+import type { FilterExpression } from "../table/core/query";
 import {
   formatCellAddress,
   getRangeAddresses,
@@ -1715,7 +1718,11 @@ export function renameSheet(workbook: WorkbookModel, sheetId: string, name: stri
   });
 }
 
-export function duplicateSheet(workbook: WorkbookModel, sheetId: string): WorkbookModel {
+export function duplicateSheet(
+  workbook: WorkbookModel,
+  sheetId: string,
+  createId: IdGenerator = createRandomId
+): WorkbookModel {
   const source = getSheet(workbook, sheetId);
   const copy: SheetModel = {
     ...source,
@@ -1739,11 +1746,74 @@ export function duplicateSheet(workbook: WorkbookModel, sheetId: string): Workbo
     protection: cloneSheetProtection(getSheetProtection(source))
   };
 
+  const sourceTables = workbook.tables.filter((table) => table.sheetId === sheetId);
+  const usedNames = new Set(workbook.tables.map((table) => table.name.normalize("NFKC").toLowerCase()));
+  const copiedTables = sourceTables.map((table) => duplicateStructuredTable(table, copy.id, createId, usedNames));
+
   return {
     ...workbook,
     activeSheetId: copy.id,
-    sheets: [...workbook.sheets, copy]
+    sheets: [...workbook.sheets, copy],
+    tables: [...workbook.tables, ...copiedTables]
   };
+}
+
+function duplicateStructuredTable(
+  table: StructuredTable,
+  sheetId: string,
+  createId: IdGenerator,
+  usedNames: Set<string>
+): StructuredTable {
+  const columnIdMap = new Map<string, string>();
+  const columns = table.columns.map((column) => {
+    const id = createId("table-column");
+    columnIdMap.set(column.id, id);
+    return { ...column, id };
+  });
+  const name = nextDuplicatedTableName(usedNames);
+  return {
+    ...table,
+    id: createId("table"),
+    name,
+    sheetId,
+    range: cloneRange(table.range),
+    columns,
+    rowIds: table.rowIds.map(() => createId("table-row")),
+    ...(table.keyColumnId === undefined
+      ? {}
+      : { keyColumnId: columnIdMap.get(table.keyColumnId) }),
+    ...(table.style === undefined ? {} : { style: { ...table.style } }),
+    ...(table.sort === undefined
+      ? {}
+      : { sort: table.sort.map((sort) => ({ ...sort, columnId: columnIdMap.get(sort.columnId) ?? sort.columnId })) }),
+    ...(table.filter === undefined
+      ? {}
+      : { filter: remapTableFilter(table.filter, columnIdMap) })
+  };
+}
+
+function nextDuplicatedTableName(usedNames: Set<string>): string {
+  for (let index = 1; ; index += 1) {
+    const name = `Table${index}`;
+    const key = name.toLowerCase();
+    if (!usedNames.has(key)) {
+      usedNames.add(key);
+      return name;
+    }
+  }
+}
+
+function remapTableFilter(
+  filter: FilterExpression,
+  columnIdMap: ReadonlyMap<string, string>
+): FilterExpression {
+  if (filter.kind === "logical") {
+    return { ...filter, operands: filter.operands.map((operand) => remapTableFilter(operand, columnIdMap)) };
+  }
+  if (filter.kind === "not") {
+    return { kind: "not", operand: remapTableFilter(filter.operand, columnIdMap) };
+  }
+  return { ...filter, columnId: columnIdMap.get(filter.columnId) ?? filter.columnId };
 }
 
 export function deleteSheet(workbook: WorkbookModel, sheetId: string): WorkbookModel {
@@ -1760,7 +1830,8 @@ export function deleteSheet(workbook: WorkbookModel, sheetId: string): WorkbookM
     ...workbook,
     activeSheetId: workbook.activeSheetId === sheetId ? firstVisibleSheetId(sheets) ?? sheets[0].id : workbook.activeSheetId,
     sheets,
-    namedRanges: (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId).map(cloneNamedRange)
+    namedRanges: (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId).map(cloneNamedRange),
+    tables: workbook.tables.filter((table) => table.sheetId !== sheetId)
   };
 }
 
