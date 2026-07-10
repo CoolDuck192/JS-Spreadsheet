@@ -67,6 +67,8 @@ export function GridViewport({
   onColumnHeaderMouseEnter,
   onColumnHeaderClick,
   onColumnHeaderKeyDown,
+  onColumnHeaderDragOver,
+  onColumnHeaderDrop,
   onRowHeaderMouseDown,
   onRowHeaderMouseEnter,
   onRowHeaderClick,
@@ -303,6 +305,8 @@ export function GridViewport({
                   onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
                   onClick={(event) => onColumnHeaderClick?.(column, event)}
                   onKeyDown={(event) => onColumnHeaderKeyDown?.(column, event)}
+                  onDragOver={(event) => onColumnHeaderDragOver?.(column, event)}
+                  onDrop={(event) => onColumnHeaderDrop?.(column, event)}
                 >
                   {renderColumnHeader ? renderColumnHeader(column) : column.label}
                 </div>
@@ -743,7 +747,9 @@ function mergeClassNames(...values: Array<string | undefined>): string {
 }
 
 function isEditorEventTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && Boolean(target.closest('[data-grid-editor-overlay="true"]'));
+  return target instanceof Element && Boolean(target.closest(
+    '[data-grid-editor-overlay="true"], input, select, textarea, button, [contenteditable="true"]'
+  ));
 }
 
 const visuallyHiddenStyle: CSSProperties = {

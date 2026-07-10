@@ -1,5 +1,6 @@
 import type {
   CSSProperties,
+  DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -121,6 +122,8 @@ export type GridViewportProps = {
   onColumnHeaderMouseEnter?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
   onColumnHeaderClick?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
   onColumnHeaderKeyDown?(column: GridViewportColumn, event: ReactKeyboardEvent<HTMLDivElement>): void;
+  onColumnHeaderDragOver?(column: GridViewportColumn, event: ReactDragEvent<HTMLDivElement>): void;
+  onColumnHeaderDrop?(column: GridViewportColumn, event: ReactDragEvent<HTMLDivElement>): void;
   onRowHeaderMouseDown?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;
   onRowHeaderMouseEnter?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;
   onRowHeaderClick?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;

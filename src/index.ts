@@ -26,6 +26,40 @@ export {
   WorkbookSessionProvider,
   useWorkbookSessionContext
 } from "./react/WorkbookSessionContext";
+export { DataTable } from "./react/DataTable";
+export { useTableSession } from "./react/useTableSession";
+export { useTableSnapshot } from "./react/useTableSnapshot";
+export {
+  TableSessionProvider,
+  useTableSessionContext
+} from "./react/TableSessionContext";
+export type {
+  CellEditorProps,
+  CellRenderContext,
+  ColumnDef,
+  DataTableHandle,
+  DataTablePresentationProps,
+  DataTableProps,
+  HeaderRenderContext
+} from "./react/tableTypes";
+export {
+  RecordTableSession,
+  createLocalRecordTableSession
+} from "./table/local/RecordTableSession";
+export type {
+  LocalRecordSource,
+  LocalRecordTableSessionOptions,
+  RecordFormulaService
+} from "./table/local/RecordTableSession";
+export type {
+  ExportArtifact,
+  ExportOptions,
+  TableIntent,
+  TableSelection,
+  TableSession,
+  TableViewSnapshot,
+  TableViewState
+} from "./table/core/types";
 export {
   createWorkbookSession,
   type CreateWorkbookSessionOptions,

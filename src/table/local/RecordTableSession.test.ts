@@ -483,6 +483,25 @@ describe("createLocalRecordTableSession", () => {
     });
   });
 
+  it("renders aggregate values under their source column when aggregate ids differ", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: {
+        kind: "local",
+        rows: [employee("e1", "Ada", 100), employee("e2", "Grace", 200)],
+        getRowId: (row) => row.id
+      }
+    }));
+    await session.dispatch({ type: "set-grouping", grouping: [{ columnId: "active" }] });
+    await session.dispatch({
+      type: "set-aggregates",
+      aggregates: [{ id: "salary-sum", columnId: "salary", function: "sum" }]
+    });
+
+    const group = session.getSnapshot().rows.find((row) => row.kind === "group");
+    expect(group).toBeDefined();
+    expect(session.getSnapshot().getCell(group!.id, "salary").displayValue).toBe("300");
+  });
+
   it("preserves a last valid projection when controlled state is invalid", () => {
     const onStateChange = vi.fn();
     const session = createLocalRecordTableSession(deterministicOptions({ state: { grouping: [] }, onStateChange }));

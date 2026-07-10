@@ -33,3 +33,5 @@ export {
   TableSessionProvider,
   useTableSessionContext
 } from "./TableSessionContext";
+export { DataTable } from "./DataTable";
+export { exportArtifactToBlob } from "./exportArtifact";

@@ -4,7 +4,7 @@ import { parseCellInput } from "../../core/values/parseCellInput";
 import { createLocalTableCapabilities, resolveTableOperationStates, type TableFeatureConfiguration } from "../core/capabilities";
 import { createCommandIdFactory, type CommandIdFactory } from "../core/commandId";
 import { normalizeColumns } from "../core/columnHelper";
-import type { PaginationRequest, QueryRequest, QueryRow } from "../core/query";
+import type { PaginationRequest, QueryRequest, QueryRow, TableAggregateRequest } from "../core/query";
 import { safeInvokeTableExtension } from "../core/safeInvoke";
 import type {
   ChangeContext,
@@ -150,7 +150,7 @@ export class RecordTableSession<
     this.columnsById = new Map(this.columns.map((column) => [column.id, column]));
     this.rows = [...options.source.rows];
     this.document = cloneDocument(options.document ?? options.defaultDocument ?? EMPTY_TABLE_DOCUMENT);
-    this.state = mergeState(DEFAULT_TABLE_VIEW_STATE, options.defaultState, options.state);
+    this.state = mergeState(defaultStateForColumns(this.columns), options.defaultState, options.state);
     this.controlledRows = Boolean(options.source.onRowsChange);
     this.controlledDocument = options.document !== undefined;
     this.controlledStateKeys = new Set(Object.keys(options.state ?? {}) as (keyof TableViewState)[]);
@@ -359,7 +359,7 @@ export class RecordTableSession<
         const column = this.columnsById.get(columnId);
         if (!column) throw new Error(`Unknown column id: ${columnId}`);
         const row = model.dataRowsById.get(rowId);
-        if (!row) return groupOrAggregateCell(snapshotRows, rowId, columnId);
+        if (!row) return groupOrAggregateCell(snapshotRows, rowId, columnId, this.state.aggregates);
         const evaluation = evaluate(row, rowId, columnId);
         const metadata = this.document.cells[createTableMetadataKey(rowId, columnId)] ?? {};
         const context = this.columnContext(row, rowId, columnId, evaluate);
@@ -1093,6 +1093,19 @@ function mergeState(
   return cloneState({ ...base, ...defaults, ...controlled });
 }
 
+function defaultStateForColumns<TRow>(columns: readonly ColumnDef<TRow, any>[]): TableViewState {
+  return {
+    ...DEFAULT_TABLE_VIEW_STATE,
+    columnVisibility: Object.fromEntries(columns
+      .filter((column) => column.visible === false)
+      .map((column) => [column.id, false])),
+    columnPinning: {
+      left: columns.filter((column) => column.pin === "left").map((column) => column.id),
+      right: columns.filter((column) => column.pin === "right").map((column) => column.id)
+    }
+  };
+}
+
 function mergeControlledState(current: TableViewState, controlled?: Partial<TableViewState>): TableViewState {
   return cloneState({ ...current, ...controlled });
 }
@@ -1465,11 +1478,21 @@ function isErrorValue(value: unknown): value is { kind: "error"; code: string } 
   return typeof value === "object" && value !== null && "kind" in value && value.kind === "error" && "code" in value;
 }
 
-function groupOrAggregateCell<TRow>(rows: readonly QueryRow<TRow>[], rowId: string, columnId: string) {
+function groupOrAggregateCell<TRow>(
+  rows: readonly QueryRow<TRow>[],
+  rowId: string,
+  columnId: string,
+  aggregateRequests: readonly TableAggregateRequest[]
+) {
   const row = rows.find((candidate) => candidate.id === rowId);
+  const aggregateId = aggregateRequests.find((request) => request.columnId === columnId)?.id;
   let value: unknown = null;
-  if (row?.kind === "group") value = row.columnId === columnId ? row.key.type === "null" ? null : row.key.value : row.aggregates[columnId];
-  if (row?.kind === "aggregate") value = row.aggregates[columnId];
+  if (row?.kind === "group") {
+    value = row.columnId === columnId
+      ? row.key.type === "null" ? null : row.key.value
+      : aggregateId === undefined ? null : row.aggregates[aggregateId];
+  }
+  if (row?.kind === "aggregate") value = aggregateId === undefined ? null : row.aggregates[aggregateId];
   return {
     rowId,
     columnId,
