@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DataTable } from "../react/DataTable";
@@ -15,6 +15,34 @@ const columns: readonly ColumnDef<Person>[] = [{
 }];
 
 describe("embedded style isolation", () => {
+  it("keeps standalone document sizing out of embedded and published styles", () => {
+    const standalonePath = "src/standalone.css";
+    expect(existsSync(standalonePath)).toBe(true);
+    if (!existsSync(standalonePath)) {
+      return;
+    }
+
+    expect(readFileSync(standalonePath, "utf8").trim()).toBe(`html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.js-spreadsheet-standalone {
+  min-height: 0 !important;
+}`);
+
+    const publicCss = readFileSync("src/entry/styles.css", "utf8");
+    expect(publicCss).not.toContain("standalone.css");
+    expect(publicCss).not.toMatch(/^(?:\s*)(?:#root|body|html)\s*[{,]/m);
+  });
+
   it("does not decorate host controls and keeps table instances separate", () => {
     render(
       <>
@@ -41,6 +69,9 @@ describe("embedded style isolation", () => {
     const workbookCss = readFileSync("src/App.css", "utf8");
     expect(workbookCss).toContain("@scope (.js-spreadsheet-root.js-spreadsheet-workbook)");
     expect(workbookCss).not.toMatch(/^(?:\s*)(?::root|body|html|button|input|select|\*)\s*[{,]/m);
+    expect(workbookCss).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*?\.spreadsheet-surface\s*\{[^}]*height:\s*100%;[^}]*\}/
+    );
   });
 
   it("keeps visually hidden descriptions compatible with modern and fallback clipping", () => {

@@ -1,12 +1,41 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { Grid } from "./Grid";
+import { Grid, type GridScrollApi } from "./Grid";
 import { formatCellAddress } from "../lib/addressing";
 import { createFormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
 
 describe("Grid", () => {
+  it("focuses a spreadsheet cell through the numeric scroll API", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    let scrollApi: GridScrollApi | null = null;
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onRegisterScrollApi={(api) => {
+          scrollApi = api;
+        }}
+      />
+    );
+
+    act(() => scrollApi?.focusCell(0, 1));
+
+    expect(screen.getByRole("gridcell", { name: "B1" })).toBeVisible();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveFocus();
+  });
+
   it("renders the spreadsheet through the shared viewport kernel", () => {
     const { sheet, workbook } = createFixtureSheet();
     render(

@@ -16,6 +16,14 @@ describe("App", () => {
     vi.unstubAllGlobals();
   });
 
+  it("owns the viewport only for the standalone workbook", () => {
+    const { container } = render(<App />);
+    const root = container.querySelector<HTMLElement>("[data-js-spreadsheet-root='workbook']")!;
+
+    expect(root).toHaveClass("js-spreadsheet-standalone");
+    expect(root).toHaveStyle({ height: "100dvh", minHeight: 0 });
+  });
+
   it("edits cells and recalculates formulas", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -115,7 +123,9 @@ describe("App", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: "Add sheet" }));
-    expect(screen.getByRole("tab", { name: "Sheet2" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sheet2" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveFocus();
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(/^Added Sheet2$/);
 
     await user.click(screen.getByRole("button", { name: "Rename active sheet" }));
     expect(screen.getByRole("tab", { name: "Budget" })).toBeInTheDocument();
@@ -344,7 +354,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Add sheet" }));
 
     expect(screen.queryByRole("tablist", { name: "Sheet tabs" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Status")).toHaveTextContent("Added sheet");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Added Sheet2");
 
     // Switching ribbon tabs remounts the View controls, so re-query the toggle.
     await openRibbonTab(user, "View");

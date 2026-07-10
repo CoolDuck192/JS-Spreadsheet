@@ -93,6 +93,7 @@ describe("controlled Spreadsheet", () => {
 
   it("applies root-scoped identity, feature visibility, and theme precedence", () => {
     const style = {
+      height: 480,
       minHeight: 200,
       "--js-spreadsheet-accent": "orange"
     } as CSSProperties;
@@ -107,6 +108,7 @@ describe("controlled Spreadsheet", () => {
     );
     const root = container.querySelector<HTMLElement>("[data-js-spreadsheet-root='workbook']")!;
     expect(root).toHaveClass("js-spreadsheet-root", "js-spreadsheet-workbook", "host-sheet");
+    expect(root).toHaveStyle({ height: "480px", minHeight: "200px" });
     expect(root.style.getPropertyValue("--js-spreadsheet-accent")).toBe("orange");
     expect(root.style.getPropertyValue("--js-spreadsheet-surface")).toBe("ivory");
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();

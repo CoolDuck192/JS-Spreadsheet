@@ -45,6 +45,7 @@ export type GridViewportCell = {
 
 export type GridViewportApi = {
   ensureCellVisible(rowId: string, columnId: string): void;
+  focusCell(rowId: string, columnId: string): void;
 };
 
 export type GridViewportHeaderState = {

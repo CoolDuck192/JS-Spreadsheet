@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import type { TableSelection } from "../../table/core/types";
@@ -32,6 +32,7 @@ function StatefulViewport({
   ariaColumnCount = viewportColumns.length + 1,
   withRowHeaders = true,
   onColumnHeaderContextMenu,
+  onRegisterApi,
   initialSelection = {
     anchor: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" },
     focus: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" }
@@ -45,6 +46,7 @@ function StatefulViewport({
   ariaColumnCount?: number;
   withRowHeaders?: boolean;
   onColumnHeaderContextMenu?: GridViewportProps["onColumnHeaderContextMenu"];
+  onRegisterApi?: GridViewportProps["onRegisterApi"];
   initialSelection?: TableSelection | null;
 }) {
   const [selection, setSelection] = useState<TableSelection | null>(initialSelection);
@@ -79,6 +81,7 @@ function StatefulViewport({
         onInteraction={onInteraction}
         renderRowHeader={withRowHeaders ? (row) => row.label : undefined}
         onColumnHeaderContextMenu={onColumnHeaderContextMenu}
+        onRegisterApi={onRegisterApi}
         announce={`${viewportRows.length} rows loaded`}
       />
       <output data-testid={`${idPrefix}-last-interaction`}>{JSON.stringify(lastInteraction)}</output>
@@ -87,6 +90,21 @@ function StatefulViewport({
 }
 
 describe("GridViewport", () => {
+  it("focuses a cell through the registered viewport API", () => {
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        onRegisterApi={(next) => {
+          api = next;
+        }}
+      />
+    );
+
+    act(() => api?.focusCell("row/ada", "salary"));
+
+    expect(screen.getByRole("gridcell", { name: "Ada Salary" })).toHaveFocus();
+  });
+
   it("renders correct grid, row, header, and cell roles with one-based indexes", () => {
     render(<StatefulViewport />);
     const grid = screen.getByRole("grid", { name: "People grid" });

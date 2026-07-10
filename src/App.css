@@ -3016,7 +3016,7 @@
   }
 
   .spreadsheet-surface {
-    height: 100vh;
+    height: 100%;
     border: 0;
   }
 

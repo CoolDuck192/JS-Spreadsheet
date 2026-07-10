@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -345,6 +346,7 @@ function SpreadsheetWorkbook({
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const gridApiRef = useRef<GridScrollApi | null>(null);
+  const pendingGridFocusSheetIdRef = useRef<string | null>(null);
   const gridEditCommitInProgressRef = useRef(false);
   const googleTokenProviderRef = useRef<{
     factory: (clientId: string) => TokenProvider;
@@ -408,6 +410,13 @@ function SpreadsheetWorkbook({
   const workbook = sessionSnapshot.workbook;
   const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
+  useLayoutEffect(() => {
+    if (pendingGridFocusSheetIdRef.current !== activeSheet.id) {
+      return;
+    }
+    gridApiRef.current?.focusCell(0, 0);
+    pendingGridFocusSheetIdRef.current = null;
+  }, [activeSheet.id]);
   const activeTable = features?.structuredTables === false
     ? null
     : getStructuredTableForSelection(workbook, activeSheet.id, selection);
@@ -2269,8 +2278,11 @@ function SpreadsheetWorkbook({
         { type: "sheet.add" },
         { type: "selection.set", selection: INITIAL_SELECTION }
       ]
-    }, "Added sheet");
+    });
     if (result.status === "committed") {
+      const addedSheet = getActiveSheet(session.getSnapshot().workbook);
+      pendingGridFocusSheetIdRef.current = addedSheet.id;
+      setStatus(`Added ${addedSheet.name}`);
       setRichClipboard(null);
       setFormatPainter(null);
       setPivotPanelOpen(false);
@@ -3315,7 +3327,7 @@ function SpreadsheetWorkbook({
 }
 
 export default function App() {
-  return <Spreadsheet />;
+  return <Spreadsheet className="js-spreadsheet-standalone" style={{ height: "100dvh", minHeight: 0 }} />;
 }
 
 function projectStructuredTableCell(workbook: WorkbookModel, sheetId: string, address: string) {

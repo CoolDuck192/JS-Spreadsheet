@@ -1,6 +1,6 @@
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type CSSProperties,
@@ -176,9 +176,28 @@ export function GridViewport({
     [columnMeasurementsById, rowMeasurementsById, virtualizer.ensureCellVisible]
   );
 
-  useEffect(() => {
-    onRegisterApi?.({ ensureCellVisible });
-  }, [ensureCellVisible, onRegisterApi]);
+  const focusCell = useCallback(
+    (rowId: string, columnId: string) => {
+      ensureCellVisible(rowId, columnId);
+      const cellId = gridCellDomId(idPrefix, { rowId, columnId });
+      const focusRenderedCell = () => {
+        const cell = document.getElementById(cellId);
+        if (cell instanceof HTMLElement) {
+          cell.focus({ preventScroll: true });
+          return true;
+        }
+        return false;
+      };
+      if (!focusRenderedCell()) {
+        requestAnimationFrame(focusRenderedCell);
+      }
+    },
+    [ensureCellVisible, idPrefix]
+  );
+
+  useLayoutEffect(() => {
+    onRegisterApi?.({ ensureCellVisible, focusCell });
+  }, [ensureCellVisible, focusCell, onRegisterApi]);
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (isEditorEventTarget(event.target)) {

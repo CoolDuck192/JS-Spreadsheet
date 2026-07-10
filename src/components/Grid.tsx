@@ -64,6 +64,7 @@ export type CommitEditMove = "down" | "up" | "right" | "left";
 
 export type GridScrollApi = {
   ensureCellVisible: (row: number, column: number) => void;
+  focusCell: (row: number, column: number) => void;
 };
 
 export type StructuredTableCellProjection = {
@@ -832,7 +833,8 @@ export function Grid({
   const registerViewportApi = useCallback(
     (api: GridViewportApi) => {
       onRegisterScrollApi?.({
-        ensureCellVisible: (row, column) => api.ensureCellVisible(sheetRowId(row), sheetColumnId(column))
+        ensureCellVisible: (row, column) => api.ensureCellVisible(sheetRowId(row), sheetColumnId(column)),
+        focusCell: (row, column) => api.focusCell(sheetRowId(row), sheetColumnId(column))
       });
     },
     [onRegisterScrollApi]
