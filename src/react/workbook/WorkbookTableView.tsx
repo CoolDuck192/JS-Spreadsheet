@@ -51,11 +51,6 @@ export function WorkbookTableView({
           <button type="button" onClick={onClose}>Close table view</button>
         </div>
       </header>
-      {unavailable ? (
-        <div role="alert" className="js-spreadsheet-workbook-table-view__issue">
-          {snapshot.status.message ?? "This table is no longer available"}
-        </div>
-      ) : null}
       <DataTable
         session={session as TableSession<WorkbookTableRow, ColumnDef<WorkbookTableRow>>}
         aria-label={`Table ${session.tableId}`}
