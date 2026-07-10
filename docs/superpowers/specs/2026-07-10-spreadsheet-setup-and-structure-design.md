@@ -2,7 +2,7 @@
 
 Date: 2026-07-10
 
-Status: Interaction design approved; pending written-spec review
+Status: Approved for implementation
 
 ## Decision Summary
 
