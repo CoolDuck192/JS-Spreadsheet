@@ -614,6 +614,8 @@ describe("DataTable", () => {
     const secondToolbar = within(secondRoot).getByRole("toolbar", { name: "Data table toolbar" });
     const firstToggle = within(firstToolbar).getByRole("button", { name: "Quick tools" });
     const secondToggle = within(secondToolbar).getByRole("button", { name: "Quick tools" });
+    expect(firstToggle).not.toHaveAttribute("aria-controls");
+    expect(secondToggle).not.toHaveAttribute("aria-controls");
 
     await user.click(firstToggle);
     await user.click(secondToggle);

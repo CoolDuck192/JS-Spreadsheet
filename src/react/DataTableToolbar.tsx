@@ -111,7 +111,7 @@ export function DataTableToolbar<TRow>({
         <button type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
         {!exportState.enabled ? <span id={exportReasonId}>{exportState.reason}</span> : null}
         <span>{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
-        <button type="button" aria-label="Quick tools" aria-controls={quickToolsId} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
+        <button type="button" aria-label="Quick tools" aria-controls={quickToolsOpen ? quickToolsId : undefined} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
           Quick tools
         </button>
         {offsetPage ? (
