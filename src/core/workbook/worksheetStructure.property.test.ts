@@ -38,6 +38,7 @@ describe("worksheet structure properties", () => {
         if (result.status !== "committed") return;
         expect(migrateWorkbookModel(result.workbook)).not.toBeNull();
         assertTableStructureInvariants(result.workbook);
+        assertColumnInsertionOracle(workbook, result.workbook, direction, index, count);
         assertSurvivingMetadata(workbook, result.workbook);
       }
     ), { numRuns: 100, seed: 20260710 });
@@ -54,13 +55,31 @@ function generatedTwoTableWorkbook(gap: number): WorkbookModel {
       id: "table-generated-sales",
       name: "GeneratedSales",
       sheetId,
-      range: range(0, 0, 3, firstEnd),
+      range: range(0, 0, 4, firstEnd),
       headerRow: true,
-      totalsRow: false,
+      totalsRow: true,
       columns: [
-        { id: "sales-region", name: "Region", sheetColumn: 0, dataType: "text" },
-        { id: "sales-amount", name: "Amount", sheetColumn: 1, dataType: "number" },
-        { id: "sales-variance", name: "Variance", sheetColumn: 2, dataType: "number" }
+        {
+          id: "sales-region",
+          name: "Region",
+          sheetColumn: 0,
+          dataType: "text",
+          totalsLabel: "Grand Total"
+        },
+        {
+          id: "sales-amount",
+          name: "Amount",
+          sheetColumn: 1,
+          dataType: "number",
+          totalsFunction: "sum"
+        },
+        {
+          id: "sales-variance",
+          name: "Variance",
+          sheetColumn: 2,
+          dataType: "number",
+          calculatedFormula: "=1+1"
+        }
       ],
       rowIds: ["sales-row-1", "sales-row-2", "sales-row-3"],
       keyColumnId: "sales-region",
@@ -95,6 +114,9 @@ function generatedTwoTableWorkbook(gap: number): WorkbookModel {
   for (const table of tables) {
     for (const column of table.columns) {
       cells[formatCellAddress({ row: table.range.start.row, column: column.sheetColumn })] = column.name;
+      if (column.totalsLabel !== undefined) {
+        cells[formatCellAddress({ row: table.range.end.row, column: column.sheetColumn })] = column.totalsLabel;
+      }
     }
   }
   return {
@@ -102,6 +124,83 @@ function generatedTwoTableWorkbook(gap: number): WorkbookModel {
     sheets: [{ ...workbook.sheets[0], cells }],
     tables
   };
+}
+
+function assertColumnInsertionOracle(
+  before: WorkbookModel,
+  after: WorkbookModel,
+  direction: "before" | "inside" | "after",
+  index: number,
+  count: number
+): void {
+  const beforeSheet = before.sheets.find((sheet) => sheet.id === before.activeSheetId)!;
+  const afterSheet = after.sheets.find((sheet) => sheet.id === before.activeSheetId)!;
+  const beforeFirst = before.tables[0];
+  const afterFirst = after.tables.find((table) => table.id === beforeFirst.id)!;
+  const beforeSecond = before.tables[1];
+  const afterSecond = after.tables.find((table) => table.id === beforeSecond.id)!;
+
+  expect(afterSheet.columnCount).toBe(beforeSheet.columnCount + count);
+  expect(afterSheet.rowCount).toBe(beforeSheet.rowCount);
+
+  const shiftFirstColumn = (sheetColumn: number): number => direction === "before"
+    || (direction === "inside" && sheetColumn >= index)
+    ? sheetColumn + count
+    : sheetColumn;
+  const expectedExistingFirstColumns = beforeFirst.columns.map((column) => ({
+    ...column,
+    sheetColumn: shiftFirstColumn(column.sheetColumn)
+  }));
+  const expectedNewFirstColumns = direction === "before"
+    ? []
+    : Array.from({ length: count }, (_, offset) => ({
+        id: `table-column-generated-${offset + 1}`,
+        name: `Column${index + offset + 1}`,
+        sheetColumn: index + offset
+      }));
+  const expectedFirstColumns = [...expectedExistingFirstColumns, ...expectedNewFirstColumns]
+    .sort((left, right) => left.sheetColumn - right.sheetColumn);
+
+  expect(afterFirst.range).toEqual({
+    start: {
+      ...beforeFirst.range.start,
+      column: direction === "before" ? beforeFirst.range.start.column + count : beforeFirst.range.start.column
+    },
+    end: { ...beforeFirst.range.end, column: beforeFirst.range.end.column + count }
+  });
+  expect(afterFirst.columns).toEqual(expectedFirstColumns);
+  const existingFirstIds = new Set(beforeFirst.columns.map((column) => column.id));
+  expect(afterFirst.columns.filter((column) => existingFirstIds.has(column.id)).map((column) => column.id))
+    .toEqual(beforeFirst.columns.map((column) => column.id));
+  expect(afterFirst.columns.filter((column) => !existingFirstIds.has(column.id)))
+    .toEqual(expectedNewFirstColumns);
+
+  expect(afterSecond.range).toEqual({
+    start: { ...beforeSecond.range.start, column: beforeSecond.range.start.column + count },
+    end: { ...beforeSecond.range.end, column: beforeSecond.range.end.column + count }
+  });
+  expect(afterSecond.columns).toEqual(beforeSecond.columns.map((column) => ({
+    ...column,
+    sheetColumn: column.sheetColumn + count
+  })));
+
+  for (const table of [afterFirst, afterSecond]) {
+    for (const column of table.columns) {
+      const address = formatCellAddress({ row: table.range.start.row, column: column.sheetColumn });
+      expect(afterSheet.cells[address]).toBe(column.name);
+    }
+  }
+  for (const column of expectedNewFirstColumns) {
+    const address = formatCellAddress({ row: afterFirst.range.start.row, column: column.sheetColumn });
+    expect(afterSheet.cells[address]).toBe(column.name);
+  }
+
+  const totalsLabelColumn = afterFirst.columns.find((column) => column.id === "sales-region")!;
+  const totalsAddress = formatCellAddress({
+    row: afterFirst.range.end.row,
+    column: totalsLabelColumn.sheetColumn
+  });
+  expect(afterSheet.cells[totalsAddress]).toBe("Grand Total");
 }
 
 function assertTableStructureInvariants(workbook: WorkbookModel): void {

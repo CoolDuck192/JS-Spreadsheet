@@ -520,6 +520,31 @@ describe("WorkbookSession", () => {
     expect(createId).not.toHaveBeenCalled();
   });
 
+  it("rejects column insertion preflight without allocating ids or changing the snapshot", () => {
+    const createId = vi.fn(() => "unused-table-column");
+    const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    const result = session.dispatch({
+      type: "columns.insert",
+      sheetId: before.workbook.activeSheetId,
+      index: 2,
+      count: 1,
+      expandTableIds: ["table-sales", "table-sales"]
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "TABLE_EXPANSION_CONTEXT_INVALID",
+        message: "Column insertion expansion context contains duplicate table ids"
+      }]
+    });
+    expect(session.getSnapshot()).toBe(before);
+    expect(createId).not.toHaveBeenCalled();
+  });
+
   it("preserves safe exception detail in diagnostics while keeping rejections generic", () => {
     const diagnostics: WorkbookDiagnosticEvent[] = [];
     const session = createWorkbookSession({
