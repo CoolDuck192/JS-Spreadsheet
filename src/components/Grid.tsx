@@ -14,6 +14,7 @@ import {
 } from "../lib/filters";
 import type { FormulaEngine } from "../lib/formulaEngine";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../lib/formulaSuggestions";
+import { findVisibleRange, measureAxis, type AxisMeasurement } from "../core/viewport/axis";
 import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
@@ -23,7 +24,9 @@ import {
 import { validateCellCandidate } from "../lib/validation";
 
 const DEFAULT_VIEWPORT_HEIGHT = 560;
+const DEFAULT_VIEWPORT_WIDTH = 960;
 const ROW_OVERSCAN = 16;
+const COLUMN_OVERSCAN = 2;
 const ROW_HEADER_WIDTH = 48;
 const COLUMN_HEADER_HEIGHT = 28;
 const AUTO_SCROLL_MAX_STEP = 48;
@@ -97,6 +100,11 @@ type DragMode =
 
 type OverlayRect = { top: number; left: number; width: number; height: number };
 
+type ColumnMeasurement = AxisMeasurement<number>;
+type ColumnTrack =
+  | { kind: "column"; measurement: ColumnMeasurement }
+  | { kind: "spacer"; key: string; width: number };
+
 type AutoFilterChoice = { key: string; label: string; value: string };
 type AutoFilterChoiceCache = {
   sheet: SheetModel;
@@ -146,7 +154,12 @@ export function Grid({
   const [dragMode, setDragMode] = useState<DragMode | null>(null);
   const [autoFillDrag, setAutoFillDrag] = useState<{ source: CellRange; target: CellRange } | null>(null);
   const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: DEFAULT_VIEWPORT_HEIGHT });
+  const [viewport, setViewport] = useState({
+    scrollTop: 0,
+    scrollLeft: 0,
+    height: DEFAULT_VIEWPORT_HEIGHT,
+    width: DEFAULT_VIEWPORT_WIDTH
+  });
   const scrollFrameRef = useRef<number | null>(null);
   const dragModeRef = useRef<DragMode | null>(null);
   const autoFillDragRef = useRef<{ source: CellRange; target: CellRange } | null>(null);
@@ -155,28 +168,35 @@ export function Grid({
   const normalizedSelection = useMemo(() => normalizeRange(selection), [selection]);
   // Everything derived from the sheet alone is memoized on the sheet snapshot's
   // identity: scroll/selection renders must stay O(visible rows), not O(rowCount).
-  const columns = useMemo(
-    () =>
-      Array.from({ length: sheet.columnCount }, (_, column) => column).filter(
-        (column) => !(sheet.hiddenColumns ?? {})[String(column)]
-      ),
-    [sheet]
-  );
   const columnWidths = useMemo(
     () => Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft)),
     [sheet, resizeDraft]
   );
   // Layout x-offsets of the visible columns, in unzoomed content pixels past the
   // row header. Drives pointer->cell math and the selection overlays.
-  const columnLayout = useMemo(() => {
-    let cursor = 0;
-    return columns.map((column) => {
-      const width = columnWidths[column];
-      const entry = { column, left: cursor, width };
-      cursor += width;
-      return entry;
-    });
-  }, [columns, columnWidths]);
+  const columnMeasurements = useMemo(
+    () =>
+      measureAxis(
+        sheet.columnCount,
+        (column) => column,
+        (column) => columnWidths[column],
+        (column) => Boolean((sheet.hiddenColumns ?? {})[String(column)])
+      ),
+    [columnWidths, sheet]
+  );
+  const columnLayout = useMemo(
+    () =>
+      columnMeasurements.map((measurement) => ({
+        column: measurement.index,
+        left: measurement.start,
+        width: measurement.size
+      })),
+    [columnMeasurements]
+  );
+  const columnMeasurementsByIndex = useMemo(
+    () => new Map(columnMeasurements.map((measurement) => [measurement.index, measurement])),
+    [columnMeasurements]
+  );
   const filteredRows = useMemo(
     () =>
       getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
@@ -204,6 +224,39 @@ export function Grid({
     (rowMeasurements[firstVisibleIndex]?.start ?? 0) - (frozenTopRow ? rowHeight(sheet, 0, resizeDraft) : 0)
   );
   const bottomSpacerHeight = Math.max(0, (rowMeasurements.at(-1)?.end ?? 0) - (visibleRowMeasurements.at(-1)?.end ?? 0));
+  const zoom = (zoomLevel || 100) / 100;
+  const viewportContentLeft = Math.max(0, viewport.scrollLeft / zoom - (showHeaders ? ROW_HEADER_WIDTH : 0));
+  const viewportContentRight = Math.max(
+    viewportContentLeft,
+    (viewport.scrollLeft + viewport.width) / zoom - (showHeaders ? ROW_HEADER_WIDTH : 0)
+  );
+  const visibleColumnRange = findVisibleRange(
+    columnMeasurements,
+    viewportContentLeft,
+    viewportContentRight,
+    COLUMN_OVERSCAN
+  );
+  const visibleColumnMeasurements = useMemo(
+    () => columnMeasurements.slice(visibleColumnRange.first, visibleColumnRange.last),
+    [columnMeasurements, visibleColumnRange.first, visibleColumnRange.last]
+  );
+  const editingColumn = editingCell ? addressToCoord(editingCell.address).column : null;
+  const renderedColumnMeasurements = useMemo(
+    () =>
+      collectRenderedColumnMeasurements({
+        measurementsByIndex: columnMeasurementsByIndex,
+        visible: visibleColumnMeasurements,
+        freezeFirstColumn,
+        editingColumn,
+        merges: sheet.merges
+      }),
+    [columnMeasurementsByIndex, editingColumn, freezeFirstColumn, sheet.merges, visibleColumnMeasurements]
+  );
+  const totalColumnWidth = columnMeasurements.at(-1)?.end ?? 0;
+  const columnTracks = useMemo(
+    () => buildColumnTracks(renderedColumnMeasurements, totalColumnWidth),
+    [renderedColumnMeasurements, totalColumnWidth]
+  );
   const isWholeSheetSelected =
     normalizedSelection.start.row === 0 &&
     normalizedSelection.start.column === 0 &&
@@ -215,7 +268,7 @@ export function Grid({
     "--column-header-height": showHeaders ? `${COLUMN_HEADER_HEIGHT}px` : "0px"
   } as CSSProperties;
   const gridClassName = ["grid-scroll", showGridlines ? "" : "grid-scroll--no-gridlines"].filter(Boolean).join(" ");
-  const gridColumnCount = columns.length + (showHeaders ? 1 : 0);
+  const gridColumnCount = columnTracks.length + (showHeaders ? 1 : 0);
   const conditionalRuleValuesCache = useMemo(() => new Map<string, string[]>(), [formulaEngine, sheet]);
 
   function getConditionalRuleValues(rule: ConditionalFormatRule): readonly string[] {
@@ -574,7 +627,12 @@ export function Grid({
   const editingRow = editingCell ? addressToCoord(editingCell.address).row : -1;
 
   useEffect(() => {
-    setViewport({ scrollTop: 0, height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT });
+    setViewport({
+      scrollTop: 0,
+      scrollLeft: 0,
+      height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
+      width: scrollRef?.current?.clientWidth || DEFAULT_VIEWPORT_WIDTH
+    });
     if (scrollRef?.current) {
       scrollRef.current.scrollTop = 0;
       scrollRef.current.scrollLeft = 0;
@@ -588,7 +646,10 @@ export function Grid({
     }
     const observer = new ResizeObserver(() => {
       const height = element.clientHeight || DEFAULT_VIEWPORT_HEIGHT;
-      setViewport((current) => (current.height === height ? current : { ...current, height }));
+      const width = element.clientWidth || DEFAULT_VIEWPORT_WIDTH;
+      setViewport((current) =>
+        current.height === height && current.width === width ? current : { ...current, height, width }
+      );
     });
     observer.observe(element);
     return () => observer.disconnect();
@@ -805,10 +866,17 @@ export function Grid({
         const applyViewport = () => {
           const nextViewport = {
             scrollTop: element.scrollTop,
-            height: element.clientHeight || DEFAULT_VIEWPORT_HEIGHT
+            scrollLeft: element.scrollLeft,
+            height: element.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
+            width: element.clientWidth || DEFAULT_VIEWPORT_WIDTH
           };
           setViewport((current) =>
-            current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height ? current : nextViewport
+            current.scrollTop === nextViewport.scrollTop &&
+            current.scrollLeft === nextViewport.scrollLeft &&
+            current.height === nextViewport.height &&
+            current.width === nextViewport.width
+              ? current
+              : nextViewport
           );
         };
         if (scrollFrameRef.current !== null) {
@@ -829,7 +897,10 @@ export function Grid({
       <div
         className="spreadsheet-grid"
         style={{
-          gridTemplateColumns: [showHeaders ? `${ROW_HEADER_WIDTH}px` : "", ...columns.map((column) => `${columnWidths[column]}px`)]
+          gridTemplateColumns: [
+            showHeaders ? `${ROW_HEADER_WIDTH}px` : "",
+            ...columnTracks.map((track) => `${track.kind === "column" ? track.measurement.size : track.width}px`)
+          ]
             .filter(Boolean)
             .join(" ")
         }}
@@ -849,7 +920,18 @@ export function Grid({
           />
         ) : null}
         {showHeaders
-          ? columns.map((column) => {
+          ? columnTracks.map((track) => {
+          if (track.kind === "spacer") {
+            return (
+              <div
+                key={`header-${track.key}`}
+                className="column-header grid-column-spacer"
+                aria-hidden="true"
+                style={{ width: track.width, pointerEvents: "none" }}
+              />
+            );
+          }
+          const column = track.measurement.index;
           const columnName = columnIndexToName(column);
           const isColumnSelected =
             normalizedSelection.start.row === 0 &&
@@ -933,7 +1015,7 @@ export function Grid({
             key={row}
             row={row}
             rowHeight={height}
-            columns={columns}
+            columnTracks={columnTracks}
             columnWidths={columnWidths}
             sheet={sheet}
             formulaEngine={formulaEngine}
@@ -1042,6 +1124,68 @@ export function Grid({
   );
 }
 
+function collectRenderedColumnMeasurements({
+  measurementsByIndex,
+  visible,
+  freezeFirstColumn,
+  editingColumn,
+  merges
+}: {
+  measurementsByIndex: ReadonlyMap<number, ColumnMeasurement>;
+  visible: readonly ColumnMeasurement[];
+  freezeFirstColumn: boolean;
+  editingColumn: number | null;
+  merges: SheetModel["merges"];
+}): ColumnMeasurement[] {
+  const rendered = new Map<number, ColumnMeasurement>();
+  const retain = (measurement: ColumnMeasurement | undefined) => {
+    if (measurement) {
+      rendered.set(measurement.index, measurement);
+    }
+  };
+
+  visible.forEach(retain);
+  if (freezeFirstColumn) {
+    retain(measurementsByIndex.get(0));
+  }
+  if (editingColumn !== null) {
+    retain(measurementsByIndex.get(editingColumn));
+  }
+
+  const firstVisibleColumn = visible[0]?.index;
+  const lastVisibleColumn = visible.at(-1)?.index;
+  if (firstVisibleColumn !== undefined && lastVisibleColumn !== undefined) {
+    for (const merge of merges ?? []) {
+      const range = normalizeRange(merge.range);
+      if (range.start.column <= lastVisibleColumn && range.end.column >= firstVisibleColumn) {
+        retain(measurementsByIndex.get(range.start.column));
+      }
+    }
+  }
+
+  return [...rendered.values()].sort((left, right) => left.start - right.start);
+}
+
+function buildColumnTracks(measurements: readonly ColumnMeasurement[], totalWidth: number): ColumnTrack[] {
+  const tracks: ColumnTrack[] = [];
+  let cursor = 0;
+  for (const measurement of measurements) {
+    if (measurement.start > cursor) {
+      tracks.push({
+        kind: "spacer",
+        key: `spacer-${cursor}-${measurement.start}`,
+        width: measurement.start - cursor
+      });
+    }
+    tracks.push({ kind: "column", measurement });
+    cursor = measurement.end;
+  }
+  if (totalWidth > cursor) {
+    tracks.push({ kind: "spacer", key: `spacer-${cursor}-${totalWidth}`, width: totalWidth - cursor });
+  }
+  return tracks;
+}
+
 // Rows re-render only when their own props change: scrolling mounts new rows,
 // typing re-renders just the editing row, and an edit commit (new sheet
 // snapshot) refreshes the visible window.
@@ -1050,7 +1194,7 @@ const MemoRowFragment = memo(RowFragment);
 function RowFragment({
   row,
   rowHeight,
-  columns,
+  columnTracks,
   columnWidths,
   sheet,
   formulaEngine,
@@ -1089,7 +1233,7 @@ function RowFragment({
 }: {
   row: number;
   rowHeight: number;
-  columns: number[];
+  columnTracks: readonly ColumnTrack[];
   columnWidths: number[];
   sheet: SheetModel;
   formulaEngine: FormulaEngine;
@@ -1223,7 +1367,26 @@ function RowFragment({
           />
         </div>
       ) : null}
-      {columns.map((column) => {
+      {columnTracks.map((track) => {
+        if (track.kind === "spacer") {
+          return (
+            <div
+              key={`${row}-${track.key}`}
+              className="cell grid-column-spacer"
+              aria-hidden="true"
+              style={{
+                width: track.width,
+                minWidth: track.width,
+                maxWidth: track.width,
+                height: rowHeight,
+                minHeight: rowHeight,
+                padding: 0,
+                pointerEvents: "none"
+              }}
+            />
+          );
+        }
+        const column = track.measurement.index;
         const address = formatCellAddress({ row, column });
         const mergeInfo = getMergeInfo(sheet, row, column);
         const isMergeAnchor = mergeInfo?.role === "anchor";
@@ -1302,7 +1465,9 @@ function RowFragment({
         const selectedAutoFilterValues =
           autoFilterDraft?.column === column ? autoFilterDraft.values : activeAutoFilterValues(activeAutoFilter);
         const cellWidth =
-          isMergeAnchor && mergeInfo ? sumColumnWidths(columnWidths, mergeInfo.range.start.column, mergeInfo.range.end.column) : columnWidths[column];
+          isMergeAnchor && mergeInfo
+            ? sumColumnWidths(columnWidths, mergeInfo.range.start.column, mergeInfo.range.end.column, sheet.hiddenColumns)
+            : columnWidths[column];
         const cellHeight =
           isMergeAnchor && mergeInfo ? sumRowHeights(sheet, mergeInfo.range.start.row, mergeInfo.range.end.row) : rowHeight;
         const borderStyle = getBorderStyle(mergedFormat?.borders);
@@ -2046,9 +2211,17 @@ function wrapSuggestionIndex(index: number, suggestionCount: number): number {
   return ((index % suggestionCount) + suggestionCount) % suggestionCount;
 }
 
-function sumColumnWidths(columnWidths: number[], startColumn: number, endColumn: number): number {
+function sumColumnWidths(
+  columnWidths: number[],
+  startColumn: number,
+  endColumn: number,
+  hiddenColumns: SheetModel["hiddenColumns"]
+): number {
   let width = 0;
   for (let column = startColumn; column <= endColumn; column += 1) {
+    if (hiddenColumns?.[String(column)]) {
+      continue;
+    }
     width += columnWidths[column] ?? DEFAULT_COLUMN_WIDTH;
   }
   return width;
