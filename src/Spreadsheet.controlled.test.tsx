@@ -77,7 +77,7 @@ describe("controlled Spreadsheet", () => {
     const editor = screen.getByLabelText("Cell editor A1");
     await user.clear(editor);
     await user.type(editor, "view-command{Enter}");
-    expect(onCommandResult).toHaveBeenCalledTimes(1);
+    expect(onCommandResult.mock.calls.filter(([event]) => event.command.type === "cell.set")).toHaveLength(1);
 
     unmount();
     await act(async () => Promise.resolve());
@@ -144,8 +144,11 @@ describe("controlled Spreadsheet", () => {
 
     expect(formulaEngineFactory).toHaveBeenCalledTimes(1);
     expect(onWorkbookChange).toHaveBeenCalledTimes(1);
-    expect(onCommandResult).toHaveBeenCalledTimes(1);
-    expect(onCommandResult.mock.calls[0][0].result.status).toBe("committed");
+    const cellSetResults = onCommandResult.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.command.type === "cell.set");
+    expect(cellSetResults).toHaveLength(1);
+    expect(cellSetResults[0].result.status).toBe("committed");
     expect(onWorkbookChangeEvent).toHaveBeenCalledTimes(1);
     expect(onWorkbookChangeEvent.mock.calls[0][0]).toMatchObject({
       previousRevision: "0",

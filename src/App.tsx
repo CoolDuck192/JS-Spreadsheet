@@ -500,19 +500,6 @@ function SpreadsheetWorkbook({
     return dispatchCommand({ type: "selection.set", selection: nextSelection });
   }
 
-  // Transitional compatibility helpers removed by the final bypass audit.
-  function commitWorkbook(nextWorkbook: WorkbookModel, nextStatus = "Saved") {
-    return dispatchCommand({
-      type: "workbook.replace",
-      workbook: nextWorkbook,
-      history: "commit"
-    }, nextStatus);
-  }
-
-  function applyHistoryTransition(direction: "undo" | "redo", nextStatus: string) {
-    return dispatchCommand({ type: `history.${direction}` }, nextStatus);
-  }
-
   function closeFloatingPanels() {
     setFindPanelOpen(false);
     setFilterPanelOpen(false);
