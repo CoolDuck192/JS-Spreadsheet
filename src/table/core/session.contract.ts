@@ -17,11 +17,11 @@ export type TableSessionContractHarness<TRow> = {
 
 export function defineTableSessionContract<TRow>(
   name: string,
-  createHarness: () => TableSessionContractHarness<TRow>
+  createHarness: () => TableSessionContractHarness<TRow> | Promise<TableSessionContractHarness<TRow>>
 ): void {
   describe(`${name} TableSession contract`, () => {
     it("keeps snapshot identity stable until one publication", async () => {
-      const harness = createHarness();
+      const harness = await createHarness();
       const before = harness.session.getSnapshot();
       expect(harness.session.getSnapshot()).toBe(before);
       let publications = 0;
@@ -31,7 +31,7 @@ export function defineTableSessionContract<TRow>(
         edits: [{ ...harness.editableCell, rawText: harness.validRawText }]
       });
       if (before.operationStates.edit.enabled) {
-        expect(result.status).toBe("committed");
+        expect(["committed", "pending"]).toContain(result.status);
         expect(publications).toBe(1);
         expect(harness.session.getSnapshot()).not.toBe(before);
       } else {
@@ -42,7 +42,7 @@ export function defineTableSessionContract<TRow>(
     });
 
     it("matches every advertised feature state to command behavior", async () => {
-      const harness = createHarness();
+      const harness = await createHarness();
       const snapshot = harness.session.getSnapshot();
       for (const [feature, operation] of Object.entries(harness.featureOperations) as Array<[TableFeature, () => Promise<CommandResult>]>) {
         const result = await operation();
@@ -57,7 +57,7 @@ export function defineTableSessionContract<TRow>(
 
     for (const kind of ["reload", "retry"] as const) {
       it(`${kind} conflict resolution is supported only by a configured source harness`, async () => {
-        const harness = createHarness();
+        const harness = await createHarness();
         const configured = harness.conflictResolution;
         const intent: TableIntent<TRow> = configured?.[kind] ?? (kind === "reload"
           ? { type: "reload-authoritative", operationId: "contract-conflict", rowId: "contract-row" }

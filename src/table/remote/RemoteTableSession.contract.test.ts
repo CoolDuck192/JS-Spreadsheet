@@ -11,17 +11,24 @@ type Row = { id: string; name: string; amount: number };
 
 const row: Row = { id: "row-1", name: "Ada", amount: 10 };
 const columns: readonly ColumnDef<Row>[] = [
-  { id: "name", header: "Name", accessor: (value) => value.name },
-  { id: "amount", header: "Amount", dataType: "number", accessor: (value) => value.amount }
+  {
+    id: "name", header: "Name", accessor: (value) => value.name,
+    update: (value, name) => ({ ...value, name: String(name) })
+  },
+  {
+    id: "amount", header: "Amount", dataType: "number", accessor: (value) => value.amount,
+    update: (value, amount) => ({ ...value, amount: Number(amount) })
+  }
 ];
 
-defineTableSessionContract("remote read-only", () => {
+defineTableSessionContract("remote", async () => {
   const source = createTestRemoteSource<Row>({
-    capabilities: readOnlyCapabilities(),
+    capabilities: mutableCapabilities(),
     paginationMode: "none",
-    mutationMode: "none",
+    mutationMode: "versioned",
     undoMode: "none",
     query: async (request) => result(request),
+    mutate: () => new Promise(() => undefined),
     export: async () => ({
       bytes: new Uint8Array([1]),
       mediaType: "text/csv",
@@ -30,6 +37,7 @@ defineTableSessionContract("remote read-only", () => {
   });
   const session = createRemoteTableSession({ source, columns });
   session.start();
+  await vi.waitFor(() => expect(session.getSnapshot().status.phase).toBe("ready"));
   const featureOperations: Partial<Record<TableFeature, () => Promise<CommandResult>>> = {
     sort: () => session.dispatch({ type: "set-sorting", sorting: [{ columnId: "amount", direction: "desc" }] }),
     filter: () => session.dispatch({
@@ -44,6 +52,25 @@ defineTableSessionContract("remote read-only", () => {
     pagination: () => session.dispatch({
       type: "set-pagination",
       pagination: { kind: "none" }
+    }),
+    edit: () => session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "row-1", columnId: "name", rawText: "Grace" }]
+    }),
+    bulkEdit: () => session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "row-1", columnId: "name", rawText: "Grace" },
+        { rowId: "row-1", columnId: "amount", rawText: "20" }
+      ]
+    }),
+    metadata: () => session.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-1", columnId: "name", patch: { comment: "note" } }]
+    }),
+    validation: () => session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "row-1", columnId: "amount", rawText: "20" }]
     }),
     export: async () => {
       await vi.waitFor(() => expect(session.getSnapshot().status.phase).toBe("ready"));
@@ -96,6 +123,19 @@ function readOnlyCapabilities(): TableCapabilities {
     pagination: { ...complete, modes: ["none"] },
     edit: false, bulkEdit: false, metadata: false, validation: false,
     formula: "none", subscription: false, undo: false, export: { ...complete }
+  };
+}
+
+function mutableCapabilities(): TableCapabilities {
+  const capabilities = readOnlyCapabilities();
+  const complete = { executor: "server" as const, scope: "completeDataset" as const };
+  return {
+    ...capabilities,
+    edit: { ...complete },
+    bulkEdit: { ...complete },
+    metadata: { ...complete },
+    validation: { ...complete },
+    formula: "server"
   };
 }
 

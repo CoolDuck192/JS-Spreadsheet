@@ -139,25 +139,33 @@ export class RemoteQueryController<TRow> {
     return this.cache.getCanonicalRow(rowId);
   }
 
-  applyCanonicalRows(rows: readonly TRow[], revision: string): void {
+  getCurrentRevision(): string | null {
+    return this.currentRevision;
+  }
+
+  applyCanonicalRows(rows: readonly TRow[], revision: string, publish = true): void {
     if (this.destroyed) return;
     this.cache.applyCanonicalRows(rows, revision, this.source.getRowId);
     this.currentRevision = revision;
-    this.publishFromCache();
+    if (publish) this.publishFromCache();
   }
 
-  deleteCanonicalRows(rowIds: readonly string[], revision: string): void {
+  deleteCanonicalRows(rowIds: readonly string[], revision: string, publish = true): void {
     if (this.destroyed) return;
     this.cache.deleteCanonicalRows(rowIds, revision);
     this.currentRevision = revision;
-    this.publishFromCache();
+    if (publish) this.publishFromCache();
   }
 
-  noteCurrentRevision(revision: string): void {
+  noteCurrentRevision(revision: string, publish = true): void {
     if (this.destroyed) return;
     this.cache.noteRevision(revision);
     this.currentRevision = revision;
-    this.publishFromCache();
+    if (publish) this.publishFromCache();
+  }
+
+  publishCanonicalState(): void {
+    if (!this.destroyed) this.publishFromCache();
   }
 
   invalidate(): void {

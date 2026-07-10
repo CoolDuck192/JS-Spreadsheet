@@ -1,4 +1,5 @@
 import type { CommandResult } from "../../core/commands/types";
+import { parseCellInput } from "../../core/values/parseCellInput";
 import {
   resolveTableOperationStates,
   type TableFeature,
@@ -20,9 +21,18 @@ import type {
   TableIntent,
   TableSession,
   TableStateUpdater,
+  TableValidation,
   TableViewSnapshot,
   TableViewState
 } from "../core/types";
+import {
+  OptimisticOverlayStore,
+  type OptimisticCell
+} from "./OptimisticOverlayStore";
+import {
+  RemoteMutationController,
+  type PreparedRemoteMutation
+} from "./RemoteMutationController";
 import {
   RemoteQueryController,
   type RemoteQuerySnapshot
@@ -96,6 +106,8 @@ class RemoteTableSessionImpl<
   private controlledStateKeys: Set<keyof TableViewState>;
   private commandIdFactory: CommandIdFactory;
   private controller: RemoteQueryController<TRow> | null = null;
+  private mutationController: RemoteMutationController<TRow> | null = null;
+  private readonly overlays = new OptimisticOverlayStore();
   private controllerUnsubscribe: (() => void) | null = null;
   private controllerSource: RemoteTableSource<TRow> | null = null;
   private readonly exportControllers = new Set<AbortController>();
@@ -184,6 +196,19 @@ class RemoteTableSessionImpl<
       });
       this.controller = controller;
       this.controllerSource = source;
+      this.mutationController = new RemoteMutationController({
+        source,
+        queryController: controller,
+        overlays: this.overlays,
+        getActiveQuery: () => this.lastQuery ?? queryFromState(this.state),
+        onChange: () => {
+          if (this.destroyed || this.controller !== controller) return;
+          this.localRevision += 1;
+          this.snapshot = null;
+          this.publish();
+        },
+        limits: this.options.mutationLimits
+      });
       this.controllerUnsubscribe = controller.subscribe(() => {
         if (this.destroyed || this.controller !== controller || this.options.source !== source) return;
         this.localRevision += 1;
@@ -221,11 +246,12 @@ class RemoteTableSessionImpl<
         reason: GROUPING_PAGINATION_ISSUE.message
       };
     }
-    const issues: TableCellIssue[] = this.invalidControlledState
+    const baseIssues: TableCellIssue[] = this.invalidControlledState
       ? [GROUPING_PAGINATION_ISSUE]
       : query.error
         ? [{ code: query.error.code, message: query.error.message }]
         : [];
+    const issues = [...baseIssues, ...(this.mutationController?.getIssues() ?? [])];
     const snapshot: TableViewSnapshot<TRow, TColumn> = {
       revision: `${query.revision ?? "0"}:${this.localRevision}`,
       rows,
@@ -243,8 +269,8 @@ class RemoteTableSessionImpl<
       issues,
       capabilities: this.options.source.capabilities,
       operationStates,
-      pendingOperations: [],
-      conflicts: [],
+      pendingOperations: this.mutationController?.getPendingOperations() ?? [],
+      conflicts: this.mutationController?.getConflicts() ?? [],
       canUndo: false,
       canRedo: false,
       pageInfo: query.pageInfo,
@@ -274,7 +300,9 @@ class RemoteTableSessionImpl<
     switch (intent.type) {
       case "edit-cells":
       case "clear-cells":
+        return this.editCells(intent, commandId);
       case "update-cell-metadata":
+        return this.updateCellMetadata(intent, commandId);
       case "insert-rows":
       case "delete-rows":
       case "undo":
@@ -349,8 +377,8 @@ class RemoteTableSessionImpl<
       queryGeneration: query?.generation ?? 0,
       cachedPages: query?.cachedPages ?? 0,
       cachedItems: query?.cachedItems ?? 0,
-      pendingMutations: 0,
-      conflicts: 0,
+      pendingMutations: this.mutationController?.getDiagnostics().pendingOperations ?? 0,
+      conflicts: this.mutationController?.getDiagnostics().conflicts ?? 0,
       journalEntries: 0,
       destroyed: this.destroyed
     };
@@ -446,6 +474,207 @@ class RemoteTableSessionImpl<
     return { status: "committed", revision: this.getSnapshot().revision, changed: true };
   }
 
+  private async editCells(
+    intent: Extract<TableIntent<TRow>, { type: "edit-cells" | "clear-cells" }>,
+    commandId: string
+  ): Promise<CommandResult<TRow>> {
+    if (!this.controller || !this.mutationController) return unsupported("Remote table is not started");
+    const edits = intent.type === "edit-cells"
+      ? intent.edits
+      : intent.cells.map((cell) => ({ ...cell, rawText: "" }));
+    const seen = new Set<string>();
+    const prepared: PreparedRemoteMutation[] = [];
+
+    for (const edit of edits) {
+      const key = `${edit.rowId.length}:${edit.rowId}${edit.columnId}`;
+      if (seen.has(key)) {
+        return validationResult("TABLE_CELL_DUPLICATE", "A mutation batch may edit each cell once");
+      }
+      seen.add(key);
+      const row = this.controller.getCanonicalRow(edit.rowId);
+      if (!row) return validationResult("TABLE_ROW_NOT_FOUND", "Row not found", edit.rowId, edit.columnId);
+      const column = this.columnsById.get(edit.columnId);
+      if (!column) return validationResult("TABLE_COLUMN_NOT_FOUND", "Column not found", edit.rowId, edit.columnId);
+      const context = this.columnContext(row, edit.rowId, edit.columnId);
+      if (!this.isEditable(column, context)) {
+        return {
+          status: "rejected",
+          reason: "permission",
+          issues: [{ code: "TABLE_CELL_READ_ONLY", message: "Cell is read-only" }]
+        };
+      }
+      const authoritative = this.readAuthoritativeCell(row, edit.rowId, edit.columnId);
+      if ("issue" in authoritative) {
+        return { status: "rejected", reason: "unsupported", issues: [authoritative.issue] };
+      }
+      const input = parseCellInput(edit.rawText);
+      let parsedValue: unknown = input.stored;
+      let evaluatedValue: unknown = input.formula
+        ? authoritative.cell.evaluatedValue
+        : input.stored;
+      let formula = input.formula;
+      if (column.parse) {
+        const parsed = safeInvokeTableExtension("parse", () => column.parse!(input, context));
+        if (!parsed.ok) return { status: "rejected", reason: "unsupported", issues: [parsed.issue] };
+        if (!parsed.value.ok) return { status: "rejected", reason: "validation", issues: parsed.value.issues };
+        parsedValue = parsed.value.value;
+        evaluatedValue = parsed.value.evaluatedValue ?? parsed.value.value;
+        formula = parsed.value.formula ?? formula;
+      }
+      if (formula && !this.getSnapshot().operationStates.formula.enabled) {
+        return unsupported(this.getSnapshot().operationStates.formula.reason ?? "Formulas are unsupported");
+      }
+      if (!compatibleValue(parsedValue, column.dataType, Boolean(formula))) {
+        return validationResult("TABLE_VALUE_TYPE", "Cell value has an incompatible type", edit.rowId, edit.columnId);
+      }
+      if (column.validate) {
+        const validation = safeInvokeTableExtension("validate", () => column.validate!({
+          ...context,
+          raw: edit.rawText,
+          parsed: parsedValue,
+          evaluated: evaluatedValue
+        }));
+        if (!validation.ok) return { status: "rejected", reason: "unsupported", issues: [validation.issue] };
+        if (validation.value.length > 0) return { status: "rejected", reason: "validation", issues: validation.value };
+      }
+      const metadataIssues = validateRemoteMetadata(
+        parsedValue,
+        authoritative.cell.metadata.validation,
+        edit.rowId,
+        edit.columnId
+      );
+      if (metadataIssues.length > 0) {
+        return { status: "rejected", reason: "validation", issues: metadataIssues };
+      }
+      const formatted = column.format
+        ? safeInvokeTableExtension("format", () => column.format!(evaluatedValue, context))
+        : null;
+      if (formatted && !formatted.ok) {
+        return { status: "rejected", reason: "unsupported", issues: [formatted.issue] };
+      }
+      prepared.push({
+        kind: "cell-value",
+        rowId: edit.rowId,
+        columnId: edit.columnId,
+        rawText: edit.rawText,
+        parsedValue,
+        ...(formula === undefined ? {} : { formula }),
+        ...(authoritative.rowVersion === undefined ? {} : { rowVersion: authoritative.rowVersion }),
+        optimisticCell: {
+          storedValue: formula ?? parsedValue,
+          evaluatedValue,
+          displayValue: formatted?.ok ? formatted.value : formatDefault(evaluatedValue),
+          ...(formula === undefined ? {} : { formula }),
+          metadata: authoritative.cell.metadata
+        }
+      });
+    }
+
+    if (prepared.length === 0) {
+      return { status: "committed", revision: this.getSnapshot().revision, changed: false };
+    }
+    const preflight = this.mutationController.preflight(commandId, prepared);
+    if (preflight) return preflight;
+    void this.mutationController.execute(commandId, prepared).then(() => {
+      this.snapshot = null;
+      this.refreshAfterInvalidation(commandId);
+    }).catch(() => {});
+    return { status: "pending", operationId: commandId };
+  }
+
+  private async updateCellMetadata(
+    intent: Extract<TableIntent<TRow>, { type: "update-cell-metadata" }>,
+    commandId: string
+  ): Promise<CommandResult<TRow>> {
+    if (!this.controller || !this.mutationController || !this.options.source.readCell) {
+      return unsupported("Remote metadata is unavailable");
+    }
+    const prepared: PreparedRemoteMutation[] = [];
+    const seen = new Set<string>();
+    for (const update of intent.updates) {
+      const key = `${update.rowId.length}:${update.rowId}${update.columnId}`;
+      if (seen.has(key)) return validationResult("TABLE_CELL_DUPLICATE", "A metadata batch may update each cell once");
+      seen.add(key);
+      const row = this.controller.getCanonicalRow(update.rowId);
+      if (!row) return validationResult("TABLE_ROW_NOT_FOUND", "Row not found", update.rowId, update.columnId);
+      if (!this.columnsById.has(update.columnId)) {
+        return validationResult("TABLE_COLUMN_NOT_FOUND", "Column not found", update.rowId, update.columnId);
+      }
+      if (update.patch.formula && !this.getSnapshot().operationStates.formula.enabled) {
+        return unsupported(this.getSnapshot().operationStates.formula.reason ?? "Formulas are unsupported");
+      }
+      const authoritative = this.readAuthoritativeCell(row, update.rowId, update.columnId);
+      if ("issue" in authoritative) {
+        return { status: "rejected", reason: "unsupported", issues: [authoritative.issue] };
+      }
+      const metadata = cleanMetadata({ ...authoritative.cell.metadata, ...update.patch });
+      prepared.push({
+        kind: "cell-metadata",
+        rowId: update.rowId,
+        columnId: update.columnId,
+        metadata,
+        ...(authoritative.rowVersion === undefined ? {} : { rowVersion: authoritative.rowVersion }),
+        optimisticCell: {
+          storedValue: authoritative.cell.storedValue,
+          evaluatedValue: authoritative.cell.evaluatedValue,
+          displayValue: authoritative.cell.displayValue,
+          ...(authoritative.cell.formula === undefined ? {} : { formula: authoritative.cell.formula }),
+          metadata
+        }
+      });
+    }
+    if (prepared.length === 0) {
+      return { status: "committed", revision: this.getSnapshot().revision, changed: false };
+    }
+    const preflight = this.mutationController.preflight(commandId, prepared);
+    if (preflight) return preflight;
+    void this.mutationController.execute(commandId, prepared).then(() => {
+      this.snapshot = null;
+      this.refreshAfterInvalidation(commandId);
+    }).catch(() => {});
+    return { status: "pending", operationId: commandId };
+  }
+
+  private readAuthoritativeCell(row: TRow, rowId: string, columnId: string):
+    | { cell: OptimisticCell; rowVersion?: string }
+    | { issue: TableCellIssue } {
+    if (!this.options.source.readCell) {
+      const evaluated = this.evaluateColumn(row, rowId, columnId, new Set());
+      return {
+        cell: {
+          storedValue: evaluated.storedValue,
+          evaluatedValue: evaluated.evaluatedValue,
+          displayValue: evaluated.displayValue ?? formatDefault(evaluated.evaluatedValue),
+          ...(evaluated.formula === undefined ? {} : { formula: evaluated.formula }),
+          metadata: evaluated.metadata,
+          issues: evaluated.issues
+        }
+      };
+    }
+    const read = safeInvokeTableExtension("accessor", () => this.options.source.readCell!(row, columnId));
+    if (!read.ok) return { issue: { ...read.issue, rowId, columnId } };
+    return {
+      cell: {
+        storedValue: read.value.storedValue,
+        evaluatedValue: read.value.evaluatedValue,
+        displayValue: read.value.displayValue ?? formatDefault(read.value.evaluatedValue),
+        ...(read.value.formula === undefined ? {} : { formula: read.value.formula }),
+        metadata: read.value.metadata ?? {},
+        issues: (read.value.issues ?? []).map((issue) => ({
+          ...issue,
+          rowId,
+          columnId: issue.columnId ?? columnId
+        }))
+      },
+      ...(read.value.rowVersion === undefined ? {} : { rowVersion: read.value.rowVersion })
+    };
+  }
+
+  private refreshAfterInvalidation(commandId: string): void {
+    if (this.controller?.getSnapshot().status !== "error" || !this.started) return;
+    void this.controller.refresh(`${commandId}:refresh`).catch(() => {});
+  }
+
   private readCell(
     rows: readonly QueryRow<TRow>[],
     rowId: string,
@@ -458,6 +687,21 @@ class RemoteTableSessionImpl<
     if (queryRow.kind !== "data") return summaryCell(queryRow, columnId, this.state);
 
     const row = queryRow.original;
+    const context = this.columnContext(row, rowId, columnId);
+    const overlay = this.mutationController?.getOverlay(rowId, columnId);
+    if (overlay) {
+      return {
+        rowId,
+        columnId,
+        storedValue: overlay.cell.storedValue,
+        evaluatedValue: overlay.cell.evaluatedValue,
+        displayValue: overlay.cell.displayValue,
+        ...(overlay.cell.formula === undefined ? {} : { formula: overlay.cell.formula }),
+        metadata: overlay.cell.metadata,
+        editable: overlay.status !== "conflict" && this.isEditable(column, context),
+        issues: overlay.cell.issues ?? []
+      };
+    }
     const sourceCell = this.options.source.readCell
       ? safeInvokeTableExtension("accessor", () => this.options.source.readCell!(row, columnId))
       : null;
@@ -477,7 +721,6 @@ class RemoteTableSessionImpl<
           issues: (sourceCell.value.issues ?? []).map((issue) => ({ ...issue, rowId, columnId: issue.columnId ?? columnId }))
         }
       : this.evaluateColumn(row, rowId, columnId, new Set());
-    const context = this.columnContext(row, rowId, columnId);
     const formatted = evaluation.displayValue === undefined && column.format
       ? safeInvokeTableExtension("format", () => column.format!(evaluation.evaluatedValue, context))
       : null;
@@ -571,6 +814,9 @@ class RemoteTableSessionImpl<
   }
 
   private teardownController(): void {
+    this.mutationController?.destroy();
+    this.mutationController = null;
+    this.overlays.clear();
     this.controllerUnsubscribe?.();
     this.controllerUnsubscribe = null;
     this.controller?.destroy();
@@ -842,12 +1088,81 @@ function validateExportArtifact(artifact: ExportArtifact, format: ExportOptions[
   }
 }
 
-function unsupported(message: string): CommandResult {
+function unsupported(message: string): Extract<CommandResult, { status: "rejected" }> {
   return {
     status: "rejected",
     reason: "unsupported",
     issues: [{ code: "TABLE_CAPABILITY_UNSUPPORTED", message }]
   };
+}
+
+function validationResult(
+  code: string,
+  message: string,
+  rowId?: string,
+  columnId?: string
+): Extract<CommandResult, { status: "rejected" }> {
+  const issue: TableCellIssue = {
+    code,
+    message,
+    ...(rowId === undefined ? {} : { rowId }),
+    ...(columnId === undefined ? {} : { columnId })
+  };
+  return { status: "rejected", reason: "validation", issues: [issue] };
+}
+
+function compatibleValue(
+  value: unknown,
+  dataType: ColumnDef<unknown, any>["dataType"],
+  isFormula: boolean
+): boolean {
+  if (isFormula || value === null || value === undefined || dataType === undefined || dataType === "custom") return true;
+  switch (dataType) {
+    case "text": return typeof value === "string";
+    case "number": return typeof value === "number" && Number.isFinite(value);
+    case "boolean": return typeof value === "boolean";
+    case "date":
+    case "datetime":
+      return typeof value === "number" && Number.isFinite(value) || typeof value === "string";
+  }
+}
+
+function validateRemoteMetadata(
+  value: unknown,
+  validation: TableValidation | undefined,
+  rowId: string,
+  columnId: string
+): TableCellIssue[] {
+  if (!validation || (value === null && validation.allowBlank !== false)) return [];
+  let valid = true;
+  switch (validation.kind) {
+    case "list":
+      valid = typeof value === "string" && validation.values.includes(value);
+      break;
+    case "number":
+      valid = typeof value === "number"
+        && Number.isFinite(value)
+        && (validation.min === undefined || value >= validation.min)
+        && (validation.max === undefined || value <= validation.max);
+      break;
+    case "textLength":
+      valid = typeof value === "string"
+        && (validation.min === undefined || value.length >= validation.min)
+        && (validation.max === undefined || value.length <= validation.max);
+      break;
+  }
+  return valid ? [] : [{
+    code: "TABLE_VALIDATION_FAILED",
+    message: "Cell value does not satisfy its validation rule",
+    rowId,
+    columnId
+  }];
+}
+
+function cleanMetadata(metadata: TableCellMetadata): TableCellMetadata {
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([, value]) => value !== undefined)
+  ) as TableCellMetadata;
 }
 
 function safeBoolean(callback: () => boolean): boolean {

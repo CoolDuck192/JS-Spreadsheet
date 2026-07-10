@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TableCapabilities } from "../core/capabilities";
 import type { QueryRequest, QueryResult, QueryRow } from "../core/query";
-import type { ColumnDef, TableViewState } from "../core/types";
+import type { ColumnDef, TableCellMetadata, TableViewState } from "../core/types";
 import { createTestRemoteSource, defaultRemoteCapabilities } from "./testUtils";
 import { createRemoteTableSession } from "./RemoteTableSession";
+import type { RemoteMutation, RemoteMutationResult } from "./types";
 
 type Employee = {
   id: string;
@@ -240,7 +241,16 @@ describe("RemoteTableSession", () => {
 
   it("keeps layout local, enforces grouping pagination, and rejects Task 4 mutations", async () => {
     const query = vi.fn(async (request: QueryRequest) => offsetResult("r1", employees, request));
-    const session = createRemoteTableSession({ source: createTestRemoteSource({ query }), columns });
+    const session = createRemoteTableSession({
+      source: createTestRemoteSource({
+        query,
+        capabilities: loadedRowCapabilities(),
+        mutationMode: "none",
+        undoMode: "none",
+        readCell: undefined
+      }),
+      columns
+    });
     session.start();
     await waitUntilReady(session);
 
@@ -260,6 +270,145 @@ describe("RemoteTableSession", () => {
       type: "edit-cells",
       edits: [{ rowId: "employee-1", columnId: "name", rawText: "Grace" }]
     })).toMatchObject({ status: "rejected", reason: "unsupported" });
+
+    session.destroy();
+  });
+
+  it("prevalidates a typed batch, publishes bounded overlays, and reconciles an authoritative row", async () => {
+    let serverRow: Employee = employees[0];
+    let serverRevision = "1";
+    const acknowledgement = createDeferredMutation<Employee>();
+    const mutate = vi.fn(async (_batch: readonly RemoteMutation[]) => acknowledgement.promise);
+    const query = vi.fn(async (request: QueryRequest) => offsetResult(serverRevision, [serverRow], request));
+    const source = createTestRemoteSource<Employee>({
+      query,
+      mutate,
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "employee-1", columnId: "salary", rawText: "120" },
+        { rowId: "employee-1", columnId: "active", rawText: "not-a-boolean" }
+      ]
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(mutate).not.toHaveBeenCalled();
+
+    const pending = await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "employee-1", columnId: "salary", rawText: "120" },
+        { rowId: "employee-1", columnId: "active", rawText: "FALSE" },
+        { rowId: "employee-1", columnId: "startDate", rawText: "2026-02-03" }
+      ]
+    });
+    expect(pending).toMatchObject({ status: "pending" });
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(120);
+    expect(session.getSnapshot().getCell("employee-1", "active").storedValue).toBe(false);
+    expect(typeof session.getSnapshot().getCell("employee-1", "startDate").storedValue).toBe("number");
+    expect(session.getSnapshot().rows[0]).toMatchObject({
+      kind: "data",
+      original: { salary: 100, active: true, startDate: "2026-01-02" }
+    });
+    expect(session.getSnapshot().pendingOperations).toHaveLength(1);
+
+    const sent = mutate.mock.calls[0][0];
+    expect(sent.map((mutation) => mutation.kind === "cell-value" ? mutation.parsedValue : null)).toEqual([
+      120,
+      false,
+      expect.any(Number)
+    ]);
+    serverRow = {
+      ...serverRow,
+      salary: 120,
+      active: false,
+      startDate: "2026-02-03",
+      name: "Ada (recalculated)"
+    };
+    serverRevision = "2";
+    acknowledgement.resolve(sent.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: "2",
+      row: serverRow,
+      rowVersion: "row-2"
+    })));
+
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
+    await vi.waitFor(() => expect(session.getSnapshot().status.phase).toBe("ready"));
+    expect(session.getSnapshot().getCell("employee-1", "salary").evaluatedValue).toBe(120);
+    expect(session.getSnapshot().getCell("employee-1", "name").displayValue).toBe("Ada (recalculated)");
+
+    session.destroy();
+  });
+
+  it("sends complete metadata replacements and blocks formulas when formula capability is absent", async () => {
+    let metadata: TableCellMetadata = { comment: "original" };
+    const acknowledgement = createDeferredMutation<Employee>();
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: false,
+      formula: "none" as const,
+      undo: false,
+      subscription: false
+    } satisfies TableCapabilities;
+    const mutate = vi.fn(async (batch) => {
+      const mutation = batch[0];
+      if (mutation.kind === "cell-metadata") metadata = mutation.metadata;
+      return acknowledgement.promise;
+    });
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "none",
+      undoMode: "none",
+      query: async () => unpaginatedResult("1", employees),
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return { storedValue: value, evaluatedValue: value, metadata };
+      },
+      mutate,
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "=A1" }]
+    })).toMatchObject({ status: "rejected", reason: "unsupported" });
+    expect(mutate).not.toHaveBeenCalled();
+
+    expect(await session.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "employee-1",
+        columnId: "name",
+        patch: { comment: undefined, format: { bold: true } }
+      }]
+    })).toMatchObject({ status: "pending" });
+    const sent = mutate.mock.calls[0][0][0];
+    expect(sent).toMatchObject({
+      kind: "cell-metadata",
+      metadata: { format: { bold: true } }
+    });
+    expect(sent).not.toHaveProperty("metadata.comment");
+    expect(session.getSnapshot().getCell("employee-1", "name").metadata)
+      .toEqual({ format: { bold: true } });
+
+    acknowledgement.resolve([{
+      clientMutationId: sent.clientMutationId,
+      status: "committed",
+      revision: "2",
+      row: employees[0]
+    }]);
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
+    expect(session.getSnapshot().getCell("employee-1", "name").metadata)
+      .toEqual({ format: { bold: true } });
 
     session.destroy();
   });
@@ -438,6 +587,31 @@ function offsetResult(
       hasMore: false
     }
   };
+}
+
+function unpaginatedResult(
+  revision: string,
+  rows: readonly Employee[]
+): QueryResult<Employee> {
+  return {
+    items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "completeDataset",
+    pageInfo: { kind: "none", total: { kind: "known", value: rows.length } }
+  };
+}
+
+function createDeferredMutation<TRow>() {
+  let resolve!: (results: readonly RemoteMutationResult<TRow>[]) => void;
+  const promise = new Promise<readonly RemoteMutationResult<TRow>[]>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function numericRevisionComparator(candidate: string, current: string) {
+  if (candidate === current) return "equal" as const;
+  return Number(candidate) > Number(current) ? "newer" as const : "older" as const;
 }
 
 function loadedRowCapabilities(): TableCapabilities {
