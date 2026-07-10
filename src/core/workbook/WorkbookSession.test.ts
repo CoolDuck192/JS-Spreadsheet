@@ -330,6 +330,150 @@ describe("WorkbookSession", () => {
     expect(diagnostics[0]).toMatchObject({ category: "command", metadata: { outcome: "rejected" } });
   });
 
+  it("recreates the live projection from the committed workbook when update and rebuild both fail", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 1);
+    let factoryCalls = 0;
+    let poisonedEngineDestroyed = 0;
+    const session = createWorkbookSession({
+      workbook,
+      formulaEngineFactory(initialWorkbook) {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          return createPoisoningFormulaEngine(initialWorkbook, () => poisonedEngineDestroyed += 1);
+        }
+        return createRawFormulaEngine(initialWorkbook);
+      }
+    });
+    const initial = session.getSnapshot();
+
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "99" })).toEqual({
+      status: "rejected",
+      reason: "unsupported",
+      issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+    });
+    expect(session.getSnapshot()).toBe(initial);
+    expect(session.getCellEvaluation(sheetId, "A1")).toBe(1);
+    expect(factoryCalls).toBe(2);
+    expect(poisonedEngineDestroyed).toBe(1);
+
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "2" })).toEqual({
+      status: "committed",
+      revision: "1",
+      changed: true
+    });
+    expect(session.getCellEvaluation(sheetId, "A1")).toBe(2);
+  });
+
+  it("uses a stable error and rejects projection-dependent mutations while recovery is unavailable", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 1);
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    let factoryCalls = 0;
+    const session = createWorkbookSession({
+      workbook,
+      formulaEngineFactory(initialWorkbook) {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          return createPoisoningFormulaEngine(initialWorkbook, () => {
+            throw new Error("destroy failed");
+          });
+        }
+        throw new Error("factory unavailable");
+      },
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+    const initial = session.getSnapshot();
+
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "secret-candidate" }))
+      .toMatchObject({ status: "rejected", reason: "unsupported" });
+    expect(session.getSnapshot()).toBe(initial);
+    const firstUnavailable = session.getCellEvaluation(sheetId, "A1");
+    expect(firstUnavailable).toEqual({ kind: "error", code: "#PROJECTION!" });
+    expect(session.getCellEvaluation(sheetId, "A1")).toBe(firstUnavailable);
+
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "second-secret" })).toEqual({
+      status: "rejected",
+      reason: "unsupported",
+      issues: [{ code: "projection.unavailable", message: "Formula projection is unavailable" }]
+    });
+    expect(session.getSnapshot()).toBe(initial);
+    expect(factoryCalls).toBe(3);
+    expect(JSON.stringify(diagnostics)).not.toContain("secret-candidate");
+    expect(JSON.stringify(diagnostics)).not.toContain("second-secret");
+    expect(() => session.destroy()).not.toThrow();
+    expect(() => session.destroy()).not.toThrow();
+  });
+
+  it("retries an unavailable projection before the next dependent mutation", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 1);
+    let factoryCalls = 0;
+    const session = createWorkbookSession({
+      workbook,
+      formulaEngineFactory(initialWorkbook) {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          return createPoisoningFormulaEngine(initialWorkbook);
+        }
+        if (factoryCalls === 2) {
+          throw new Error("transient factory failure");
+        }
+        return createRawFormulaEngine(initialWorkbook);
+      }
+    });
+
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "9" }))
+      .toMatchObject({ status: "rejected" });
+    expect(session.getCellEvaluation(sheetId, "A1")).toEqual({ kind: "error", code: "#PROJECTION!" });
+    expect(session.dispatch({ type: "cell.set", sheetId, address: "A1", input: "3" })).toEqual({
+      status: "committed",
+      revision: "1",
+      changed: true
+    });
+    expect(session.getCellEvaluation(sheetId, "A1")).toBe(3);
+    expect(factoryCalls).toBe(3);
+  });
+
+  it("maps only exact zero-or-one freeze counts and rejects all other counts atomically", () => {
+    const session = createWorkbookSession({ workbook: createBlankWorkbook() });
+    const sheetId = session.getSnapshot().workbook.activeSheetId;
+
+    expect(session.dispatch({ type: "sheet.freeze.set", sheetId, rows: 1, columns: 0 }))
+      .toEqual({ status: "committed", revision: "1", changed: true });
+    expect(session.getSnapshot().workbook.sheets[0]).toMatchObject({
+      freezeTopRow: true,
+      freezeFirstColumn: false
+    });
+    expect(session.dispatch({ type: "sheet.freeze.set", sheetId, rows: 0, columns: 1 }))
+      .toEqual({ status: "committed", revision: "2", changed: true });
+    expect(session.getSnapshot().workbook.sheets[0]).toMatchObject({
+      freezeTopRow: false,
+      freezeFirstColumn: true
+    });
+
+    for (const [rows, columns] of [
+      [-1, 0],
+      [0, -1],
+      [0.5, 0],
+      [0, 0.5],
+      [2, 0],
+      [0, 2],
+      [5, 3]
+    ] as const) {
+      const before = session.getSnapshot();
+      expect(session.dispatch({ type: "sheet.freeze.set", sheetId, rows, columns })).toEqual({
+        status: "rejected",
+        reason: "unsupported",
+        issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+      });
+      expect(session.getSnapshot()).toBe(before);
+    }
+  });
+
   it("updates selection without workbook history and persistence without workbook revision", () => {
     const session = createWorkbookSession({ workbook: createBlankWorkbook() });
     let notifications = 0;
@@ -577,4 +721,54 @@ function createTrackingFormulaEngineFactory(records: TrackingEngine[]): (workboo
 
 function sequenceNow(...values: number[]): () => number {
   return () => values.shift() ?? 0;
+}
+
+function createRawFormulaEngine(workbook: WorkbookModel): FormulaEngine {
+  let projected = workbook;
+  return {
+    getDisplayValue(sheetId, address) {
+      const value = getCellContent(projected, sheetId, address);
+      return value === null ? "" : String(value);
+    },
+    getComputedValue(sheetId, address) {
+      return getCellContent(projected, sheetId, address);
+    },
+    getRawContent(sheetId, address) {
+      return getCellContent(projected, sheetId, address);
+    },
+    update(nextWorkbook) {
+      projected = nextWorkbook;
+    },
+    rebuild(nextWorkbook) {
+      projected = nextWorkbook;
+    },
+    destroy() {}
+  };
+}
+
+function createPoisoningFormulaEngine(
+  workbook: WorkbookModel,
+  onDestroy: () => void = () => {}
+): FormulaEngine {
+  let projected = workbook;
+  return {
+    getDisplayValue(sheetId, address) {
+      const value = getCellContent(projected, sheetId, address);
+      return value === null ? "" : String(value);
+    },
+    getComputedValue(sheetId, address) {
+      return getCellContent(projected, sheetId, address);
+    },
+    getRawContent(sheetId, address) {
+      return getCellContent(projected, sheetId, address);
+    },
+    update(nextWorkbook) {
+      projected = nextWorkbook;
+      throw new Error("projection update failed after mutation");
+    },
+    rebuild() {
+      throw new Error("projection rebuild failed");
+    },
+    destroy: onDestroy
+  };
 }

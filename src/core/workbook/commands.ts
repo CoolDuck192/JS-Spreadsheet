@@ -425,11 +425,11 @@ export function applyWorkbookMutation(
     case "sheet.tabColor.set":
       return applied(setSheetTabColor(workbook, command.sheetId, command.color));
     case "sheet.freeze.set":
-      checkedIndex(command.rows);
-      checkedIndex(command.columns);
+      checkedFreezeCount(command.rows);
+      checkedFreezeCount(command.columns);
       return applied(setSheetFreezePanes(workbook, command.sheetId, {
-        freezeTopRow: command.rows > 0,
-        freezeFirstColumn: command.columns > 0
+        freezeTopRow: command.rows === 1,
+        freezeFirstColumn: command.columns === 1
       }));
     case "sheet.protection.set":
       return applied(setSheetProtection(workbook, command.sheetId, command.protected));
@@ -631,6 +631,12 @@ function checkedStructure(index: number, count: number): void {
 function checkedDimension(value: number): void {
   if (!Number.isFinite(value)) {
     throw new Error("Dimension must be finite");
+  }
+}
+
+function checkedFreezeCount(value: number): void {
+  if (value !== 0 && value !== 1) {
+    throw new Error("Freeze count must be zero or one");
   }
 }
 

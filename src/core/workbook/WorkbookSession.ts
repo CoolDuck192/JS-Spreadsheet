@@ -83,9 +83,15 @@ const DEFAULT_SELECTION: CellRange = {
   end: { row: 0, column: 0 }
 };
 
+const PROJECTION_UNAVAILABLE_VALUE: ComputedCellValue = Object.freeze({
+  kind: "error",
+  code: "#PROJECTION!"
+});
+
 export function createWorkbookSession(options: CreateWorkbookSessionOptions): WorkbookSession {
   const formulaEngineFactory = options.formulaEngineFactory ?? createFormulaEngine;
-  const formulaEngine = formulaEngineFactory(options.workbook);
+  let formulaEngine: FormulaEngine | null = formulaEngineFactory(options.workbook);
+  let projectionUnavailable = false;
   const listeners = new Set<() => void>();
   const diagnosticListeners = new Set<(event: WorkbookDiagnosticEvent) => void>();
   const createCommandId = options.createCommandId ?? createDefaultCommandIdFactory();
@@ -127,6 +133,20 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
         now(),
         "command",
         "conflict",
+        false
+      ));
+      return result;
+    }
+
+    if (projectionUnavailable && commandRequiresProjection(command) && !recoverProjection()) {
+      const result = projectionUnavailableResult();
+      emitDiagnostic(createDiagnostic(
+        command,
+        envelope.id,
+        startedAt,
+        now(),
+        "command",
+        "rejected",
         false
       ));
       return result;
@@ -237,13 +257,9 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
 
     if (workbookChanged) {
       try {
-        formulaEngine.update(nextState.workbook);
+        formulaEngine!.update(nextState.workbook);
       } catch {
-        try {
-          formulaEngine.rebuild(history.present);
-        } catch {
-          // The command state remains untouched even if the host engine cannot recover.
-        }
+        recoverProjection();
         const result: WorkbookCommandResult = invalidCommandResult();
         emitDiagnostic(createDiagnostic(
           command,
@@ -304,12 +320,43 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     }
   }
 
+  function recoverProjection(): boolean {
+    const previousEngine = formulaEngine;
+    if (previousEngine) {
+      try {
+        previousEngine.rebuild(history.present);
+        projectionUnavailable = false;
+        return true;
+      } catch {
+        formulaEngine = null;
+        projectionUnavailable = true;
+        try {
+          previousEngine.destroy();
+        } catch {
+          // A poisoned engine must not prevent replacement with a clean projection.
+        }
+      }
+    }
+
+    try {
+      formulaEngine = formulaEngineFactory(history.present);
+      projectionUnavailable = false;
+      return true;
+    } catch {
+      formulaEngine = null;
+      projectionUnavailable = true;
+      return false;
+    }
+  }
+
   return {
     getSnapshot() {
       return snapshot;
     },
     getCellEvaluation(sheetId, address) {
-      return formulaEngine.getComputedValue(sheetId, address);
+      return projectionUnavailable || !formulaEngine
+        ? PROJECTION_UNAVAILABLE_VALUE
+        : formulaEngine.getComputedValue(sheetId, address);
     },
     subscribe(listener) {
       if (destroyed) {
@@ -340,7 +387,14 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       destroyed = true;
       listeners.clear();
       diagnosticListeners.clear();
-      formulaEngine.destroy();
+      const engine = formulaEngine;
+      formulaEngine = null;
+      projectionUnavailable = true;
+      try {
+        engine?.destroy();
+      } catch {
+        // Cleanup remains idempotent even for a failed host-provided engine.
+      }
     }
   };
 
@@ -553,6 +607,21 @@ function destroyedResult(): WorkbookCommandResult {
     reason: "unsupported",
     issues: [{ code: "session.destroyed", message: "Workbook session is destroyed" }]
   };
+}
+
+function projectionUnavailableResult(): WorkbookCommandResult {
+  return {
+    status: "rejected",
+    reason: "unsupported",
+    issues: [{ code: "projection.unavailable", message: "Formula projection is unavailable" }]
+  };
+}
+
+function commandRequiresProjection(command: WorkbookCommand): boolean {
+  if (command.type === "selection.set" || command.type === "persistence.status") {
+    return false;
+  }
+  return command.type !== "transaction" || command.commands.some(commandRequiresProjection);
 }
 
 function createDefaultNow(): () => number {
