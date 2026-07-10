@@ -22,3 +22,44 @@ export {
   type TableFeatureConfiguration,
   type TableOperationState
 } from "./capabilities";
+export { createColumnHelper, normalizeColumns, type ColumnHelper } from "./columnHelper";
+export { createCommandIdFactory, type CommandIdFactory } from "./commandId";
+export { safeInvokeTableExtension, type TableExtensionKind } from "./safeInvoke";
+export type {
+  CalculatedColumnDefinition,
+  ChangeContext,
+  ColumnBaseDef,
+  ColumnDef,
+  ColumnParseResult,
+  ColumnValidationContext,
+  ColumnValueContext,
+  ExportArtifact,
+  ExportOptions,
+  NamedTableStyle,
+  RowAnchor,
+  RowUpdater,
+  TableAbortSignal,
+  TableCellEdit,
+  TableCellFormat,
+  TableCellIssue,
+  TableCellMetadata,
+  TableCellMetadataUpdate,
+  TableCellRef,
+  TableCellSnapshot,
+  TableConflict,
+  TableDataType,
+  TableDiagnosticEvent,
+  TableHeaderAction,
+  TableIntent,
+  TableMetadataDocument,
+  TableMetadataUpdater,
+  TablePendingOperation,
+  TableRowSnapshot,
+  TableRowView,
+  TableSelection,
+  TableSession,
+  TableStateUpdater,
+  TableValidation,
+  TableViewSnapshot,
+  TableViewState
+} from "./types";
