@@ -80,6 +80,7 @@ export function GridViewport({
 }: GridViewportProps) {
   const internalRootRef = useRef<HTMLDivElement>(null);
   const rootRef = scrollRef ?? internalRootRef;
+  const pendingFocusFrameRef = useRef<number | null>(null);
   const rowHeaderWidth = renderRowHeader ? requestedRowHeaderWidth : 0;
   const headerHeight = showColumnHeaders ? requestedColumnHeaderHeight : 0;
   const getRowKey = useCallback((index: number) => rows[index].id, [rows]);
@@ -176,12 +177,20 @@ export function GridViewport({
     [columnMeasurementsById, rowMeasurementsById, virtualizer.ensureCellVisible]
   );
 
+  const cancelPendingFocus = useCallback(() => {
+    if (pendingFocusFrameRef.current !== null) {
+      cancelAnimationFrame(pendingFocusFrameRef.current);
+      pendingFocusFrameRef.current = null;
+    }
+  }, []);
+
   const focusCell = useCallback(
     (rowId: string, columnId: string) => {
+      cancelPendingFocus();
       ensureCellVisible(rowId, columnId);
       const cellId = gridCellDomId(idPrefix, { rowId, columnId });
       const focusRenderedCell = () => {
-        const cell = document.getElementById(cellId);
+        const cell = rootRef.current?.querySelector<HTMLElement>(`[id="${cellId}"]`);
         if (cell instanceof HTMLElement) {
           cell.focus({ preventScroll: true });
           return true;
@@ -189,11 +198,16 @@ export function GridViewport({
         return false;
       };
       if (!focusRenderedCell()) {
-        requestAnimationFrame(focusRenderedCell);
+        pendingFocusFrameRef.current = requestAnimationFrame(() => {
+          pendingFocusFrameRef.current = null;
+          focusRenderedCell();
+        });
       }
     },
-    [ensureCellVisible, idPrefix]
+    [cancelPendingFocus, ensureCellVisible, idPrefix, rootRef]
   );
+
+  useLayoutEffect(() => cancelPendingFocus, [cancelPendingFocus, focusCell]);
 
   useLayoutEffect(() => {
     onRegisterApi?.({ ensureCellVisible, focusCell });

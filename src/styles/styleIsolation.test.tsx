@@ -36,11 +36,30 @@ body {
 
 .js-spreadsheet-standalone {
   min-height: 0 !important;
+}
+
+.js-spreadsheet-standalone .app-shell {
+  min-height: 0;
 }`);
 
     const publicCss = readFileSync("src/entry/styles.css", "utf8");
     expect(publicCss).not.toContain("standalone.css");
     expect(publicCss).not.toMatch(/^(?:\s*)(?:#root|body|html)\s*[{,]/m);
+  });
+
+  it("lets only the standalone app shell shrink below the embedded minimum", () => {
+    const standaloneCss = readFileSync("src/standalone.css", "utf8");
+    const workbookCss = readFileSync("src/App.css", "utf8");
+
+    expect(standaloneCss).toMatch(
+      /\.js-spreadsheet-standalone\s+\.app-shell\s*\{[^}]*min-height:\s*0;[^}]*\}/
+    );
+    expect(workbookCss).toMatch(
+      /\.js-spreadsheet-root\.js-spreadsheet-workbook\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
+    );
+    expect(workbookCss).toMatch(
+      /@scope \(\.js-spreadsheet-root\.js-spreadsheet-workbook\)[\s\S]*?\.app-shell\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
+    );
   });
 
   it("does not decorate host controls and keeps table instances separate", () => {

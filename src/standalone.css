@@ -13,3 +13,7 @@ body {
 .js-spreadsheet-standalone {
   min-height: 0 !important;
 }
+
+.js-spreadsheet-standalone .app-shell {
+  min-height: 0;
+}
