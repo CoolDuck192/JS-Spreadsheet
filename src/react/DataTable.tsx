@@ -432,7 +432,8 @@ function DataTableSurface<TRow>({
   const layout = presentation.layout ?? "fixed";
   return (
     <div
-      className={["js-spreadsheet-data-table-surface", presentation.className].filter(Boolean).join(" ")}
+      className={["js-spreadsheet-root", "js-spreadsheet-data-table", presentation.className].filter(Boolean).join(" ")}
+      data-js-spreadsheet-root="data-table"
       data-table-layout={layout}
       data-row-height-mode={presentation.rowHeight === "auto" ? "auto" : "fixed"}
       style={presentation.style}
