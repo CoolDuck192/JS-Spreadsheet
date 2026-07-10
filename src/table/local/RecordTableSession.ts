@@ -24,7 +24,14 @@ import type {
   TableViewState
 } from "../core/types";
 import { buildLocalRowModel, type LocalEvaluatedValue, type LocalRowModel } from "./localRowModel";
-import { createTableMetadataKey } from "./tableMetadata";
+import {
+  createLocalHistory,
+  pushLocalHistory,
+  redoLocalHistory,
+  undoLocalHistory,
+  type LocalHistory
+} from "./localHistory";
+import { createTableMetadataKey, parseTableMetadataKey } from "./tableMetadata";
 
 export type LocalRecordSource<TRow> = {
   kind: "local";
@@ -90,11 +97,19 @@ const GROUPING_PAGINATION_ISSUE: TableCellIssue = {
 };
 
 type AnyColumn<TRow> = ColumnDef<TRow, any>;
-type HistoryEntry<TRow> = {
-  beforeRows: readonly TRow[];
-  afterRows: readonly TRow[];
-  beforeDocument: TableMetadataDocument;
-  afterDocument: TableMetadataDocument;
+type PositionedRow<TRow> = { rowId: string; row: TRow; index: number };
+type RowHistoryOperation<TRow> =
+  | { kind: "none" }
+  | { kind: "replace"; records: readonly { rowId: string; previous: TRow; row: TRow }[] }
+  | { kind: "insert"; records: readonly PositionedRow<TRow>[] }
+  | { kind: "delete"; rowIds: readonly string[] };
+type MetadataHistoryOperation = {
+  key: string;
+  value: TableCellMetadata | null;
+};
+type LocalSessionOperation<TRow> = {
+  rows: RowHistoryOperation<TRow>;
+  metadata: readonly MetadataHistoryOperation[];
 };
 type Evaluation = {
   storedValue: unknown;
@@ -124,8 +139,7 @@ export class RecordTableSession<
   private listeners = new Set<() => void>();
   private destroyed = false;
   private commandIdFactory: CommandIdFactory;
-  private historyPast: HistoryEntry<TRow>[] = [];
-  private historyFuture: HistoryEntry<TRow>[] = [];
+  private history: LocalHistory<LocalSessionOperation<TRow>>;
   private invalidControlledState = false;
   private sessionIssues: TableCellIssue[] = [];
 
@@ -144,6 +158,7 @@ export class RecordTableSession<
     this.resetKey = options.source.resetKey;
     this.commandIdFactory = options.commandIdFactory ?? createCommandIdFactory();
     this.validateHistoryLimit(options.historyLimit);
+    this.history = createLocalHistory(options.historyLimit ?? 100);
     this.validateRows(this.rows);
     this.handleInvalidControlledState();
   }
@@ -151,14 +166,24 @@ export class RecordTableSession<
   updateOptions(options: LocalRecordTableSessionOptions<TRow, TColumn>): void {
     validateOptions(options);
     this.validateHistoryLimit(options.historyLimit);
+    const nextHistoryLimit = options.historyLimit ?? 100;
+    if (nextHistoryLimit !== this.history.limit) {
+      this.history = {
+        limit: nextHistoryLimit,
+        past: this.history.past.slice(-nextHistoryLimit),
+        future: this.history.future.slice(-nextHistoryLimit)
+      };
+    }
     const previousControlledRows = this.controlledRows;
     const nextControlledRows = Boolean(options.source.onRowsChange);
     const modeChanged = previousControlledRows !== nextControlledRows;
-    let externalChanged = false;
+    let externalChanged = options.formulaService !== this.options.formulaService
+      || !stateSliceEqual(options.features ?? {}, this.options.features ?? {})
+      || options.source.getSubRows !== this.options.source.getSubRows;
 
     if (modeChanged) {
       this.rows = [...options.source.rows];
-      this.clearHistory();
+      this.clearHistory(nextHistoryLimit);
       this.dropInvalidSelection(options.source, this.rows);
       externalChanged = true;
     } else if (nextControlledRows && options.source.rows !== this.sourceRowsReference) {
@@ -166,13 +191,13 @@ export class RecordTableSession<
         === rowIdList(options.source.rows, options.source.getRowId).join("\u0000");
       this.rows = [...options.source.rows];
       if (!sameIdentityOrder) {
-        this.clearHistory();
+        this.clearHistory(nextHistoryLimit);
         this.dropInvalidSelection(options.source, this.rows);
       }
       externalChanged = true;
     } else if (!nextControlledRows && options.source.resetKey !== this.resetKey) {
       this.rows = [...options.source.rows];
-      this.clearHistory();
+      this.clearHistory(nextHistoryLimit);
       this.dropInvalidSelection(options.source, this.rows);
       externalChanged = true;
     }
@@ -187,7 +212,7 @@ export class RecordTableSession<
     const nextControlledDocument = options.document !== undefined;
     if (nextControlledDocument !== this.controlledDocument) {
       this.document = cloneDocument(options.document ?? options.defaultDocument ?? EMPTY_TABLE_DOCUMENT);
-      this.clearHistory();
+      this.clearHistory(nextHistoryLimit);
       externalChanged = true;
     } else if (nextControlledDocument && options.document !== this.options.document) {
       this.document = cloneDocument(options.document!);
@@ -327,8 +352,8 @@ export class RecordTableSession<
       operationStates,
       pendingOperations: [],
       conflicts: [],
-      canUndo: this.historyPast.length > 0,
-      canRedo: this.historyFuture.length > 0,
+      canUndo: this.history.past.length > 0,
+      canRedo: this.history.future.length > 0,
       pageInfo: model.pageInfo,
       getCell: (rowId, columnId) => {
         const column = this.columnsById.get(columnId);
@@ -342,6 +367,7 @@ export class RecordTableSession<
           ? safeInvokeTableExtension("format", () => column.format!(evaluation.evaluatedValue, context))
           : null;
         const formatIssue = formatted && !formatted.ok ? [{ ...formatted.issue, rowId, columnId }] : [];
+        const editability = this.isEditable(column, context, metadata);
         return {
           rowId,
           columnId,
@@ -351,8 +377,12 @@ export class RecordTableSession<
             ?? (formatted?.ok ? formatted.value : formatDefault(evaluation.evaluatedValue)),
           ...(metadata.formula ? { formula: metadata.formula } : {}),
           metadata,
-          editable: this.isEditable(column, context, metadata).editable,
-          issues: dedupeIssues([...evaluation.issues, ...formatIssue])
+          editable: editability.editable,
+          issues: dedupeIssues([
+            ...evaluation.issues,
+            ...formatIssue,
+            ...(editability.issue ? [editability.issue] : [])
+          ])
         };
       },
       getRowIndex: (rowId) => snapshotRows.findIndex((row) => row.id === rowId),
@@ -375,14 +405,14 @@ export class RecordTableSession<
     if (intent.type === "reload-authoritative" || intent.type === "retry-with-revision") {
       return this.rejectUnsupported(commandId, intent, startedAt, "Conflict resolution is not supported by local tables");
     }
-    if (intent.type === "undo") return this.replayHistory("undo", commandId, startedAt);
-    if (intent.type === "redo") return this.replayHistory("redo", commandId, startedAt);
-    if (intent.type === "refresh") return this.finishNoChange(commandId, intent, startedAt);
 
     const feature = intentFeature(intent);
     if (feature && !this.getSnapshot().operationStates[feature].enabled) {
       return this.rejectUnsupported(commandId, intent, startedAt, this.getSnapshot().operationStates[feature].reason);
     }
+    if (intent.type === "undo") return this.replayHistory("undo", commandId, startedAt);
+    if (intent.type === "redo") return this.replayHistory("redo", commandId, startedAt);
+    if (intent.type === "refresh") return this.finishNoChange(commandId, intent, startedAt);
 
     if (intent.type === "edit-cells" || intent.type === "clear-cells") {
       const edits = intent.type === "edit-cells"
@@ -393,9 +423,8 @@ export class RecordTableSession<
     if (intent.type === "update-cell-metadata") {
       return this.updateMetadata(intent.updates, commandId, startedAt);
     }
-    if (intent.type === "insert-rows" || intent.type === "delete-rows") {
-      return this.rejectUnsupported(commandId, intent, startedAt, "Structural row edits are not implemented");
-    }
+    if (intent.type === "insert-rows") return this.insertRows(intent, commandId, startedAt);
+    if (intent.type === "delete-rows") return this.deleteRows(intent.rowIds, commandId, startedAt);
 
     return this.updateViewState(intent, commandId, startedAt);
   }
@@ -407,12 +436,20 @@ export class RecordTableSession<
 
   async undo(): Promise<CommandResult> {
     const commandId = this.commandIdFactory();
-    return this.replayHistory("undo", commandId, now());
+    const startedAt = now();
+    if (!this.getSnapshot().operationStates.undo.enabled) {
+      return this.rejectUnsupported(commandId, { type: "undo" }, startedAt, this.getSnapshot().operationStates.undo.reason);
+    }
+    return this.replayHistory("undo", commandId, startedAt);
   }
 
   async redo(): Promise<CommandResult> {
     const commandId = this.commandIdFactory();
-    return this.replayHistory("redo", commandId, now());
+    const startedAt = now();
+    if (!this.getSnapshot().operationStates.undo.enabled) {
+      return this.rejectUnsupported(commandId, { type: "redo" }, startedAt, this.getSnapshot().operationStates.undo.reason);
+    }
+    return this.replayHistory("redo", commandId, startedAt);
   }
 
   async export(options: ExportOptions): Promise<ExportArtifact> {
@@ -460,18 +497,24 @@ export class RecordTableSession<
     commandId: string,
     startedAt: number
   ): Promise<CommandResult> {
-    let candidateRows = this.rows;
-    let candidateDocument = this.document;
-    let changed = false;
+    const prepared: Array<{
+      edit: { rowId: string; columnId: string; rawText: string };
+      metadataKey: string;
+      value: unknown;
+      formula: string | undefined;
+      update: (row: TRow, value: any) => TRow;
+    }> = [];
+    const formulaOperation = this.getSnapshot().operationStates.formula;
+
     for (const edit of edits) {
-      const rowIndex = findRowIndex(candidateRows, edit.rowId, this.options.source.getRowId);
+      const rowIndex = findRowIndex(this.rows, edit.rowId, this.options.source.getRowId);
       if (rowIndex < 0) return this.reject("validation", [{ code: "TABLE_ROW_NOT_FOUND", message: "Row not found", rowId: edit.rowId }], commandId, reason, startedAt, edits.length, edits.length);
-      const row = candidateRows[rowIndex];
+      const row = this.rows[rowIndex];
       const column = this.columnsById.get(edit.columnId);
       if (!column) return this.reject("validation", [{ code: "TABLE_COLUMN_NOT_FOUND", message: "Column not found", rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
       const context = this.columnContext(row, edit.rowId, edit.columnId);
       const metadataKey = createTableMetadataKey(edit.rowId, edit.columnId);
-      const metadata = candidateDocument.cells[metadataKey] ?? {};
+      const metadata = this.document.cells[metadataKey] ?? {};
       const permission = this.isEditable(column, context, metadata);
       if (permission.issue) return this.reject("unsupported", [permission.issue], commandId, reason, startedAt, edits.length, edits.length);
       if (!permission.editable) return this.reject("permission", [{ code: "TABLE_CELL_READ_ONLY", message: "Cell is read-only", rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
@@ -489,7 +532,9 @@ export class RecordTableSession<
         evaluated = parsed.value.evaluatedValue ?? value;
       } else if (input.formula) {
         formula = input.formula;
-        if (!this.options.formulaService) return this.rejectUnsupported(commandId, { type: reason, ...(reason === "edit-cells" ? { edits } : { cells: edits }) } as TableIntent<TRow>, startedAt, "Formula service is not configured");
+        if (!formulaOperation.enabled) {
+          return this.rejectUnsupported(commandId, editIntent(reason, edits), startedAt, formulaOperation.reason);
+        }
         const formulaResult = this.invokeFormula(formula, row, edit.rowId, edit.columnId);
         if ("issues" in formulaResult) return this.reject("validation", formulaResult.issues, commandId, reason, startedAt, edits.length, edits.length);
         value = formulaResult.value;
@@ -497,6 +542,9 @@ export class RecordTableSession<
       } else {
         value = input.stored;
         evaluated = value;
+      }
+      if (formula && !formulaOperation.enabled) {
+        return this.rejectUnsupported(commandId, editIntent(reason, edits), startedAt, formulaOperation.reason);
       }
       if (!compatibleValue(value, column.dataType)) {
         return this.reject("validation", [{ code: "TABLE_VALUE_TYPE", message: "Cell value has an incompatible type", rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
@@ -513,7 +561,8 @@ export class RecordTableSession<
       }
       const metadataIssues = validateMetadataValue(value, metadata.validation, edit.rowId, edit.columnId);
       if (metadataIssues.length > 0) return this.reject("validation", metadataIssues, commandId, reason, startedAt, edits.length, edits.length);
-      if (!("update" in column) || typeof column.update !== "function") {
+      const update = "update" in column ? column.update : undefined;
+      if (typeof update !== "function") {
         return this.reject("permission", [{ code: "TABLE_CELL_READ_ONLY", message: "Cell is read-only", rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
       }
       let current: unknown = null;
@@ -526,13 +575,33 @@ export class RecordTableSession<
       }
       const currentFormula = metadata.formula;
       if (Object.is(current, value) && currentFormula === formula) continue;
-      const updated = safeInvokeTableExtension("update", () => column.update!(row, value));
-      if (!updated.ok) return this.reject("unsupported", [{ ...updated.issue, rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
-      candidateRows = replaceAt(candidateRows, rowIndex, updated.value);
-      candidateDocument = patchFormula(candidateDocument, metadataKey, formula);
-      changed = true;
+      prepared.push({ edit, metadataKey, value, formula, update });
     }
-    if (!changed) return this.finishNoChange(commandId, { type: reason } as TableIntent<TRow>, startedAt);
+
+    if (prepared.length === 0) return this.finishNoChange(commandId, { type: reason } as TableIntent<TRow>, startedAt);
+
+    let candidateRows = this.rows;
+    let candidateDocument = this.document;
+    for (const candidate of prepared) {
+      const rowIndex = findRowIndex(candidateRows, candidate.edit.rowId, this.options.source.getRowId);
+      const row = candidateRows[rowIndex];
+      const updated = safeInvokeTableExtension("update", () => candidate.update(row, candidate.value));
+      if (!updated.ok) return this.reject("unsupported", [{ ...updated.issue, rowId: candidate.edit.rowId, columnId: candidate.edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
+      candidateRows = replaceAt(candidateRows, rowIndex, updated.value);
+      candidateDocument = patchFormula(candidateDocument, candidate.metadataKey, candidate.formula);
+    }
+    const candidateIds = this.safeRowIds(candidateRows);
+    if (!candidateIds.ok) return this.reject("unsupported", [candidateIds.issue], commandId, reason, startedAt, edits.length, edits.length);
+    const originalIds = this.safeRowIds(this.rows);
+    if (!originalIds.ok) return this.reject("unsupported", [originalIds.issue], commandId, reason, startedAt, edits.length, edits.length);
+    const changedIdIndex = candidateIds.value.findIndex((id, index) => id !== originalIds.value[index]);
+    if (changedIdIndex >= 0) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ID_CHANGED", message: "Cell edits cannot change stable row IDs", rowId: originalIds.value[changedIdIndex] }], commandId, reason, startedAt, edits.length, edits.length);
+    }
+    const duplicateId = firstDuplicate(candidateIds.value);
+    if (duplicateId) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ID_DUPLICATE", message: "Row IDs must remain unique", rowId: duplicateId }], commandId, reason, startedAt, edits.length, edits.length);
+    }
     return this.commitDurable(candidateRows, candidateDocument, reason, commandId, startedAt, edits.length, edits.length);
   }
 
@@ -552,6 +621,73 @@ export class RecordTableSession<
     }
     if (documentEqual(candidate, this.document)) return this.finishNoChange(commandId, { type: "update-cell-metadata", updates } as TableIntent<TRow>, startedAt);
     return this.commitDurable(this.rows, candidate, "update-cell-metadata", commandId, startedAt, updates.length, updates.length);
+  }
+
+  private async insertRows(
+    intent: Extract<TableIntent<TRow>, { type: "insert-rows" }>,
+    commandId: string,
+    startedAt: number
+  ): Promise<CommandResult> {
+    if ("count" in intent) {
+      return this.rejectUnsupported(commandId, intent, startedAt, "Local row insertion requires supplied host records");
+    }
+
+    const beforeRowId = typeof intent.beforeRowId === "string" ? intent.beforeRowId.trim() : undefined;
+    const afterRowId = typeof intent.afterRowId === "string" ? intent.afterRowId.trim() : undefined;
+    if ((beforeRowId && afterRowId) || (intent.beforeRowId !== undefined && !beforeRowId) || (intent.afterRowId !== undefined && !afterRowId)) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ANCHOR_INVALID", message: "Provide at most one nonblank row anchor" }], commandId, intent.type, startedAt, intent.rows.length, 0);
+    }
+
+    const existingIds = this.safeRowIds(this.rows);
+    if (!existingIds.ok) return this.reject("unsupported", [existingIds.issue], commandId, intent.type, startedAt, intent.rows.length, 0);
+    const insertedIds = this.safeRowIds(intent.rows);
+    if (!insertedIds.ok) return this.reject("unsupported", [insertedIds.issue], commandId, intent.type, startedAt, intent.rows.length, 0);
+    const allIds = [...existingIds.value, ...insertedIds.value];
+    const duplicate = firstDuplicate(allIds);
+    if (duplicate) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ID_DUPLICATE", message: "Row IDs must be unique", rowId: duplicate }], commandId, intent.type, startedAt, intent.rows.length, 0);
+    }
+
+    const anchorId = beforeRowId ?? afterRowId;
+    const anchorIndex = anchorId === undefined ? this.rows.length : existingIds.value.indexOf(anchorId);
+    if (anchorId !== undefined && anchorIndex < 0) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ANCHOR_NOT_FOUND", message: "Row anchor not found", rowId: anchorId }], commandId, intent.type, startedAt, intent.rows.length, 0);
+    }
+    if (intent.rows.length === 0) return this.finishNoChange(commandId, intent, startedAt);
+
+    const insertionIndex = afterRowId ? anchorIndex + 1 : anchorIndex;
+    const rows = [...this.rows];
+    rows.splice(insertionIndex, 0, ...intent.rows);
+    return this.commitDurable(rows, this.document, intent.type, commandId, startedAt, intent.rows.length, 0);
+  }
+
+  private async deleteRows(
+    requestedIds: readonly string[],
+    commandId: string,
+    startedAt: number
+  ): Promise<CommandResult> {
+    const rowIds = requestedIds.map((id) => id.trim());
+    if (rowIds.some((id) => id.length === 0) || firstDuplicate(rowIds)) {
+      return this.reject("validation", [{ code: "TABLE_ROW_ID_INVALID", message: "Delete row IDs must be unique and nonblank" }], commandId, "delete-rows", startedAt, rowIds.length, 0);
+    }
+    if (rowIds.length === 0) return this.finishNoChange(commandId, { type: "delete-rows", rowIds }, startedAt);
+
+    const existingIds = this.safeRowIds(this.rows);
+    if (!existingIds.ok) return this.reject("unsupported", [existingIds.issue], commandId, "delete-rows", startedAt, rowIds.length, 0);
+    const existing = new Set(existingIds.value);
+    const missing = rowIds.find((id) => !existing.has(id));
+    if (missing) {
+      return this.reject("validation", [{ code: "TABLE_ROW_NOT_FOUND", message: "Row not found", rowId: missing }], commandId, "delete-rows", startedAt, rowIds.length, 0);
+    }
+
+    const deleted = new Set(rowIds);
+    const rows = this.rows.filter((_, index) => !deleted.has(existingIds.value[index]));
+    const cells = Object.fromEntries(Object.entries(this.document.cells).filter(([key]) => {
+      const address = safeParseMetadataKey(key);
+      return !address || !deleted.has(address.rowId);
+    }));
+    const document = { ...this.document, cells };
+    return this.commitDurable(rows, document, "delete-rows", commandId, startedAt, rowIds.length, 0);
   }
 
   private async updateViewState(
@@ -611,24 +747,21 @@ export class RecordTableSession<
     rowCount: number,
     cellCount: number
   ): Promise<CommandResult> {
-    const entry: HistoryEntry<TRow> = {
-      beforeRows: this.rows,
-      afterRows: rows,
-      beforeDocument: this.document,
-      afterDocument: document
-    };
+    const beforeRows = this.rows;
+    const beforeDocument = this.document;
+    const redo = createHistoryOperation(beforeRows, rows, beforeDocument, document, this.options.source.getRowId);
+    const undo = createHistoryOperation(rows, beforeRows, document, beforeDocument, this.options.source.getRowId);
     this.rows = rows;
     this.document = document;
-    this.historyPast.push(entry);
-    const limit = this.options.historyLimit ?? 100;
-    if (this.historyPast.length > limit) this.historyPast.splice(0, this.historyPast.length - limit);
-    this.historyFuture = [];
+    this.history = pushLocalHistory(this.history, undo, redo);
     this.revision += 1;
     this.invalidate();
     const context = this.context(commandId, reason);
-    if (this.controlledRows) this.safeHostCallback(() => this.options.source.onRowsChange?.(rowsUpdater(entry.beforeRows, rows, this.options.source.getRowId), context));
-    if (this.controlledDocument && !documentEqual(entry.beforeDocument, document)) {
-      this.safeHostCallback(() => this.options.onDocumentChange?.(documentUpdater(entry.beforeDocument, document), context));
+    if (this.controlledRows && !rowsEqualByReference(beforeRows, rows)) {
+      this.safeHostCallback(() => this.options.source.onRowsChange?.(rowsUpdater(beforeRows, rows, this.options.source.getRowId), context));
+    }
+    if (this.controlledDocument && !documentEqual(beforeDocument, document)) {
+      this.safeHostCallback(() => this.options.onDocumentChange?.(documentUpdater(beforeDocument, document), context));
     }
     this.publish();
     this.emitDiagnostic(commandId, reason, startedAt, true, "command", rowCount, cellCount);
@@ -637,19 +770,20 @@ export class RecordTableSession<
 
   private async replayHistory(kind: "undo" | "redo", commandId: string, startedAt: number): Promise<CommandResult> {
     if (this.destroyed) return this.rejectUnsupported(commandId, { type: kind } as TableIntent<TRow>, startedAt, "Session is destroyed");
-    const source = kind === "undo" ? this.historyPast : this.historyFuture;
-    const entry = source.pop();
-    if (!entry) return this.finishNoChange(commandId, { type: kind } as TableIntent<TRow>, startedAt);
-    if (kind === "undo") this.historyFuture.push(entry);
-    else this.historyPast.push(entry);
+    const replay = kind === "undo" ? undoLocalHistory(this.history) : redoLocalHistory(this.history);
+    if (!replay.operation) return this.finishNoChange(commandId, { type: kind } as TableIntent<TRow>, startedAt);
     const beforeRows = this.rows;
     const beforeDocument = this.document;
-    this.rows = kind === "undo" ? entry.beforeRows : entry.afterRows;
-    this.document = kind === "undo" ? entry.beforeDocument : entry.afterDocument;
+    const applied = applyHistoryOperation(beforeRows, beforeDocument, replay.operation, this.options.source.getRowId);
+    this.history = replay.history;
+    this.rows = applied.rows;
+    this.document = applied.document;
     this.revision += 1;
     this.invalidate();
     const context = this.context(commandId, kind);
-    if (this.controlledRows) this.safeHostCallback(() => this.options.source.onRowsChange?.(rowsUpdater(beforeRows, this.rows, this.options.source.getRowId), context));
+    if (this.controlledRows && !rowsEqualByReference(beforeRows, this.rows)) {
+      this.safeHostCallback(() => this.options.source.onRowsChange?.(rowsUpdater(beforeRows, this.rows, this.options.source.getRowId), context));
+    }
     if (this.controlledDocument && !documentEqual(beforeDocument, this.document)) {
       this.safeHostCallback(() => this.options.onDocumentChange?.(documentUpdater(beforeDocument, this.document), context));
     }
@@ -776,13 +910,14 @@ export class RecordTableSession<
   private exportRows(scope: ExportOptions["scope"]): { rows: unknown[][]; columns: { id: string; header: string }[] } {
     const snapshot = this.getSnapshot();
     const orderedColumns = exportColumns<TRow, TColumn>(this.columns, this.state);
-    const projected = scope === "currentView"
+    const rowIds = scope === "currentView"
       ? snapshot.rows
-      : this.buildUnpaginatedModel().items;
-    const dataRows = projected.filter((row): row is Extract<QueryRow<TRow>, { kind: "data" }> => row.kind === "data");
+          .filter((row): row is Extract<QueryRow<TRow>, { kind: "data" }> => row.kind === "data")
+          .map((row) => row.id)
+      : this.buildUnpaginatedModel().orderedDataRowIds;
     return {
       columns: orderedColumns.map((column) => ({ id: column.id, header: typeof column.header === "string" ? column.header : column.id })),
-      rows: dataRows.map((row) => orderedColumns.map((column) => snapshot.getCell(row.id, column.id).evaluatedValue))
+      rows: rowIds.map((rowId) => orderedColumns.map((column) => snapshot.getCell(rowId, column.id).evaluatedValue))
     };
   }
 
@@ -804,6 +939,24 @@ export class RecordTableSession<
 
   private validateRows(rows: readonly TRow[]): void {
     buildLocalRowModel(rows, this.columns, queryFromState(DEFAULT_TABLE_VIEW_STATE), this.options.source.getRowId, undefined, this.options.source.getSubRows);
+  }
+
+  private safeRowIds(rows: readonly TRow[]):
+    | { ok: true; value: string[] }
+    | { ok: false; issue: TableCellIssue } {
+    const ids: string[] = [];
+    for (const row of rows) {
+      const result = safeInvokeTableExtension("accessor", () => this.options.source.getRowId(row));
+      if (!result.ok) return result;
+      if (typeof result.value !== "string" || result.value.trim().length === 0) {
+        return {
+          ok: false,
+          issue: { code: "TABLE_ROW_ID_INVALID", message: "Row IDs must be nonblank strings" }
+        };
+      }
+      ids.push(result.value.trim());
+    }
+    return { ok: true, value: ids };
   }
 
   private validateHistoryLimit(limit = 100): void {
@@ -840,9 +993,8 @@ export class RecordTableSession<
     this.snapshot = null;
   }
 
-  private clearHistory(): void {
-    this.historyPast = [];
-    this.historyFuture = [];
+  private clearHistory(limit = this.options.historyLimit ?? 100): void {
+    this.history = createLocalHistory(limit);
   }
 
   private publish(): void {
@@ -963,9 +1115,23 @@ function cloneState(state: TableViewState): TableViewState {
 function cloneDocument(document: TableMetadataDocument): TableMetadataDocument {
   return {
     version: 1,
-    cells: Object.fromEntries(Object.entries(document.cells).map(([key, value]) => [key, { ...value }])),
+    cells: Object.fromEntries(Object.entries(document.cells).map(([key, value]) => [key, cloneCellMetadata(value)])),
     calculatedColumns: document.calculatedColumns.map((item) => ({ ...item })),
     namedStyles: document.namedStyles.map((item) => ({ ...item, format: { ...item.format } }))
+  };
+}
+
+function cloneCellMetadata(metadata: TableCellMetadata): TableCellMetadata {
+  return {
+    ...metadata,
+    ...(metadata.format ? { format: { ...metadata.format } } : {}),
+    ...(metadata.validation
+      ? {
+          validation: metadata.validation.kind === "list"
+            ? { ...metadata.validation, values: [...metadata.validation.values] }
+            : { ...metadata.validation }
+        }
+      : {})
   };
 }
 
@@ -982,7 +1148,7 @@ function queryFromState(state: TableViewState): QueryRequest {
 
 function intentFeature<TRow>(intent: TableIntent<TRow>) {
   switch (intent.type) {
-    case "edit-cells": case "clear-cells": return "edit" as const;
+    case "edit-cells": case "clear-cells": case "insert-rows": case "delete-rows": return "edit" as const;
     case "update-cell-metadata": return "metadata" as const;
     case "set-sorting": return "sort" as const;
     case "set-filter": return "filter" as const;
@@ -992,6 +1158,15 @@ function intentFeature<TRow>(intent: TableIntent<TRow>) {
     case "undo": case "redo": return "undo" as const;
     default: return null;
   }
+}
+
+function editIntent<TRow>(
+  reason: "edit-cells" | "clear-cells",
+  edits: readonly { rowId: string; columnId: string; rawText: string }[]
+): TableIntent<TRow> {
+  return reason === "edit-cells"
+    ? { type: "edit-cells", edits }
+    : { type: "clear-cells", cells: edits.map(({ rowId, columnId }) => ({ rowId, columnId })) };
 }
 
 function compatibleValue(value: unknown, dataType: AnyColumn<unknown>["dataType"]): boolean {
@@ -1035,8 +1210,86 @@ function replaceAt<T>(values: readonly T[], index: number, value: T): readonly T
   return next;
 }
 
+function createHistoryOperation<TRow>(
+  beforeRows: readonly TRow[],
+  afterRows: readonly TRow[],
+  beforeDocument: TableMetadataDocument,
+  afterDocument: TableMetadataDocument,
+  getRowId: (row: TRow) => string
+): LocalSessionOperation<TRow> {
+  const beforeById = new Map(beforeRows.map((row) => [getRowId(row).trim(), row]));
+  const afterById = new Map(afterRows.map((row) => [getRowId(row).trim(), row]));
+  const inserted = afterRows.flatMap((row, index) => {
+    const rowId = getRowId(row).trim();
+    return beforeById.has(rowId) ? [] : [{ rowId, row, index }];
+  });
+  const deleted = beforeRows.flatMap((row) => {
+    const rowId = getRowId(row).trim();
+    return afterById.has(rowId) ? [] : [rowId];
+  });
+  const replaced = afterRows.flatMap((row) => {
+    const rowId = getRowId(row).trim();
+    const previous = beforeById.get(rowId);
+    return beforeById.has(rowId) && !Object.is(previous, row)
+      ? [{ rowId, previous: previous as TRow, row }]
+      : [];
+  });
+
+  let rows: RowHistoryOperation<TRow> = { kind: "none" };
+  if (inserted.length > 0) rows = { kind: "insert", records: inserted };
+  else if (deleted.length > 0) rows = { kind: "delete", rowIds: deleted };
+  else if (replaced.length > 0) rows = { kind: "replace", records: replaced };
+
+  const metadata: MetadataHistoryOperation[] = [];
+  for (const key of new Set([...Object.keys(beforeDocument.cells), ...Object.keys(afterDocument.cells)])) {
+    const before = beforeDocument.cells[key];
+    const after = afterDocument.cells[key];
+    if (JSON.stringify(before) !== JSON.stringify(after)) {
+      metadata.push({ key, value: after ? cloneCellMetadata(after) : null });
+    }
+  }
+  return { rows, metadata };
+}
+
+function applyHistoryOperation<TRow>(
+  currentRows: readonly TRow[],
+  currentDocument: TableMetadataDocument,
+  operation: LocalSessionOperation<TRow>,
+  getRowId: (row: TRow) => string
+): { rows: readonly TRow[]; document: TableMetadataDocument } {
+  let rows = [...currentRows];
+  if (operation.rows.kind === "replace") {
+    const replacements = new Map(operation.rows.records.map((record) => [record.rowId, record]));
+    rows = rows.map((row) => {
+      const replacement = replacements.get(getRowId(row).trim());
+      return replacement ? mergeChangedFields(row, replacement.previous, replacement.row) : row;
+    });
+  } else if (operation.rows.kind === "delete") {
+    const deleted = new Set(operation.rows.rowIds);
+    rows = rows.filter((row) => !deleted.has(getRowId(row).trim()));
+  } else if (operation.rows.kind === "insert") {
+    const present = new Set(rows.map((row) => getRowId(row).trim()));
+    for (const record of [...operation.rows.records].sort((left, right) => left.index - right.index)) {
+      if (present.has(record.rowId)) continue;
+      rows.splice(Math.min(record.index, rows.length), 0, record.row);
+      present.add(record.rowId);
+    }
+  }
+
+  if (operation.metadata.length === 0) return { rows, document: currentDocument };
+  const cells = { ...currentDocument.cells };
+  for (const change of operation.metadata) {
+    if (change.value === null) delete cells[change.key];
+    else cells[change.key] = cloneCellMetadata(change.value);
+  }
+  return { rows, document: { ...currentDocument, cells } };
+}
+
 function rowsUpdater<TRow>(before: readonly TRow[], after: readonly TRow[], getRowId: (row: TRow) => string): RowUpdater<TRow> {
   const beforeById = new Map(before.map((row) => [getRowId(row), row]));
+  const afterById = new Map(after.map((row) => [getRowId(row), row]));
+  const deletedIds = new Set([...beforeById.keys()].filter((id) => !afterById.has(id)));
+  const inserted = after.filter((row) => !beforeById.has(getRowId(row)));
   const changes = new Map<string, { replacement: TRow; patch?: Readonly<Record<string, unknown>> }>();
 
   for (const replacement of after) {
@@ -1055,28 +1308,92 @@ function rowsUpdater<TRow>(before: readonly TRow[], after: readonly TRow[], getR
     }
   }
 
-  return (previous) => previous.map((row) => {
+  return (previous) => {
+    const next = previous.filter((row) => !deletedIds.has(getRowId(row))).map((row) => {
     const change = changes.get(getRowId(row));
     if (!change) return row;
     return change.patch && isPlainRecord(row)
       ? { ...row, ...change.patch } as TRow
       : change.replacement;
-  });
+    });
+
+    const present = new Set(next.map(getRowId));
+    const desiredIds = after.map(getRowId);
+    for (const row of inserted) {
+      const rowId = getRowId(row);
+      if (present.has(rowId)) continue;
+      const desiredIndex = desiredIds.indexOf(rowId);
+      const previousId = [...desiredIds.slice(0, desiredIndex)].reverse().find((id) => present.has(id));
+      const nextId = desiredIds.slice(desiredIndex + 1).find((id) => present.has(id));
+      const index = previousId !== undefined
+        ? next.findIndex((candidate) => getRowId(candidate) === previousId) + 1
+        : nextId !== undefined
+          ? next.findIndex((candidate) => getRowId(candidate) === nextId)
+          : next.length;
+      next.splice(Math.max(0, index), 0, row);
+      present.add(rowId);
+    }
+    return next;
+  };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date);
 }
 
+function mergeChangedFields<TRow>(current: TRow, previous: TRow, next: TRow): TRow {
+  if (!isPlainRecord(current) || !isPlainRecord(previous) || !isPlainRecord(next)) return next;
+  const merged: Record<string, unknown> = { ...current };
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (Object.is(previous[key], next[key])) continue;
+    if (Object.prototype.hasOwnProperty.call(next, key)) merged[key] = next[key];
+    else delete merged[key];
+  }
+  return merged as TRow;
+}
+
+function rowsEqualByReference<T>(left: readonly T[], right: readonly T[]): boolean {
+  return left.length === right.length && left.every((value, index) => Object.is(value, right[index]));
+}
+
+function firstDuplicate(values: readonly string[]): string | null {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) return value;
+    seen.add(value);
+  }
+  return null;
+}
+
+function safeParseMetadataKey(key: string): { rowId: string; columnId: string } | null {
+  try {
+    return parseTableMetadataKey(key);
+  } catch {
+    return null;
+  }
+}
+
 function documentUpdater(before: TableMetadataDocument, after: TableMetadataDocument): TableMetadataUpdater {
-  const keys = new Set([...Object.keys(before.cells), ...Object.keys(after.cells)]);
+  const keys = [...new Set([...Object.keys(before.cells), ...Object.keys(after.cells)])]
+    .filter((key) => JSON.stringify(before.cells[key]) !== JSON.stringify(after.cells[key]));
+  const calculatedColumnsChanged = JSON.stringify(before.calculatedColumns) !== JSON.stringify(after.calculatedColumns);
+  const namedStylesChanged = JSON.stringify(before.namedStyles) !== JSON.stringify(after.namedStyles);
   return (previous) => {
     const cells = { ...previous.cells };
     for (const key of keys) {
-      if (key in after.cells) cells[key] = after.cells[key];
+      if (key in after.cells) cells[key] = cloneCellMetadata(after.cells[key]);
       else delete cells[key];
     }
-    return { ...previous, cells, calculatedColumns: after.calculatedColumns, namedStyles: after.namedStyles };
+    return {
+      ...previous,
+      cells,
+      ...(calculatedColumnsChanged
+        ? { calculatedColumns: after.calculatedColumns.map((column) => ({ ...column })) }
+        : {}),
+      ...(namedStylesChanged
+        ? { namedStyles: after.namedStyles.map((style) => ({ ...style, format: { ...style.format } })) }
+        : {})
+    };
   };
 }
 
@@ -1120,16 +1437,12 @@ function hasGroupingPaginationConflict(state: TableViewState): boolean {
 function sameColumnReferences<TRow>(left: readonly ColumnDef<TRow, any>[], right: readonly ColumnDef<TRow, any>[]): boolean {
   return left.length === right.length && left.every((column, index) => {
     const candidate = right[index];
-    const leftAccessor = "accessor" in column ? column.accessor : undefined;
-    const rightAccessor = "accessor" in candidate ? candidate.accessor : undefined;
-    const leftUpdate = "update" in column ? column.update : undefined;
-    const rightUpdate = "update" in candidate ? candidate.update : undefined;
-    const leftCalculate = "calculate" in column ? column.calculate : undefined;
-    const rightCalculate = "calculate" in candidate ? candidate.calculate : undefined;
-    return column.id === candidate.id
-      && leftAccessor === rightAccessor
-      && leftUpdate === rightUpdate
-      && leftCalculate === rightCalculate;
+    const columnRecord = column as unknown as Readonly<Record<string, unknown>>;
+    const candidateRecord = candidate as unknown as Readonly<Record<string, unknown>>;
+    const keys = Object.keys(columnRecord);
+    return keys.length === Object.keys(candidateRecord).length
+      && keys.every((key) => Object.prototype.hasOwnProperty.call(candidateRecord, key)
+        && Object.is(columnRecord[key], candidateRecord[key]));
   });
 }
 

@@ -88,6 +88,38 @@ describe("createLocalRecordTableSession", () => {
     expect(session.getSnapshot().canUndo).toBe(false);
   });
 
+  it("validates an entire edit batch before invoking any row updater", async () => {
+    const updateName = vi.fn((row: Employee, value: string) => ({ ...row, name: value }));
+    const helper = createColumnHelper<Employee>();
+    const session = createLocalRecordTableSession(deterministicOptions({
+      columns: [
+        {
+          kind: "accessor",
+          id: "name",
+          header: "Name",
+          dataType: "text",
+          accessor: (row: Employee) => row.name,
+          update: updateName
+        },
+        helper.accessor("salary", {
+          id: "salary",
+          header: "Salary",
+          dataType: "number",
+          validate: ({ parsed }) => parsed < 0 ? [{ code: "negative", message: "No negatives" }] : []
+        })
+      ]
+    }));
+    const result = await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "e1", columnId: "name", rawText: "Grace" },
+        { rowId: "e1", columnId: "salary", rawText: "-1" }
+      ]
+    });
+    expect(result).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(updateName).not.toHaveBeenCalled();
+  });
+
   it("publishes source-neutral operation state and empty local async state", () => {
     const session = createLocalRecordTableSession(deterministicOptions());
     const snapshot = session.getSnapshot();
@@ -155,6 +187,23 @@ describe("createLocalRecordTableSession", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("invalidates a memoized snapshot when formula capabilities or features change", () => {
+    const source = { kind: "local" as const, rows: [employee()], getRowId: (row: Employee) => row.id };
+    const columns = createColumns();
+    const session = createLocalRecordTableSession({ source, columns });
+    const withoutFormula = session.getSnapshot();
+    const formulaService = { evaluate: () => ({ value: 1, displayValue: "1" }) };
+
+    session.updateOptions({ source, columns, formulaService });
+    const withFormula = session.getSnapshot();
+    expect(withFormula).not.toBe(withoutFormula);
+    expect(withFormula.operationStates.formula.enabled).toBe(true);
+
+    session.updateOptions({ source, columns, formulaService, features: { formula: false } });
+    expect(session.getSnapshot()).not.toBe(withFormula);
+    expect(session.getSnapshot().operationStates.formula).toMatchObject({ enabled: false });
+  });
+
   it("resets safely when switching controlled and uncontrolled modes", async () => {
     const onRowsChange = vi.fn();
     const session = createLocalRecordTableSession(deterministicOptions({
@@ -182,15 +231,22 @@ describe("createLocalRecordTableSession", () => {
 
   it("updates cell metadata through one collision-safe document updater", async () => {
     const onDocumentChange = vi.fn();
-    const document = { version: 1 as const, cells: {}, calculatedColumns: [], namedStyles: [] };
+    const otherKey = createTableMetadataKey("e1", "salary");
+    const document = {
+      version: 1 as const,
+      cells: { [otherKey]: { comment: "original" } },
+      calculatedColumns: [],
+      namedStyles: []
+    };
     const session = createLocalRecordTableSession(deterministicOptions({ document, onDocumentChange }));
     await session.dispatch({
       type: "update-cell-metadata",
       updates: [{ rowId: "e1", columnId: "name", patch: { comment: "note" } }]
     });
     const updater = onDocumentChange.mock.calls[0][0] as (value: typeof document) => typeof document;
-    expect(updater(document).cells).toEqual({
-      [createTableMetadataKey("e1", "name")]: { comment: "note" }
+    expect(updater({ ...document, cells: { [otherKey]: { comment: "concurrent" } } }).cells).toEqual({
+      [createTableMetadataKey("e1", "name")]: { comment: "note" },
+      [otherKey]: { comment: "concurrent" }
     });
     expect(session.getSnapshot().getCell("e1", "name").metadata.comment).toBe("note");
   });
@@ -253,6 +309,19 @@ describe("createLocalRecordTableSession", () => {
     });
   });
 
+  it("rejects formulas disabled by host configuration even when a service exists", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      formulaService: { evaluate: () => ({ value: 250, displayValue: "250" }) },
+      features: { formula: false }
+    }));
+    const result = await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "e1", columnId: "salary", rawText: "=positive" }]
+    });
+    expect(result).toMatchObject({ status: "rejected", reason: "unsupported" });
+    expect(session.getSnapshot().getCell("e1", "salary").storedValue).toBe(100);
+  });
+
   it("rejects edits after a permission predicate changes", async () => {
     let permitted = true;
     const helper = createColumnHelper<Employee>();
@@ -260,6 +329,21 @@ describe("createLocalRecordTableSession", () => {
       columns: [helper.accessor("name", { id: "name", header: "Name", permitted: () => permitted })]
     }));
     permitted = false;
+    const result = await session.dispatch({ type: "edit-cells", edits: [{ rowId: "e1", columnId: "name", rawText: "Grace" }] });
+    expect(result).toMatchObject({ status: "rejected", reason: "permission" });
+  });
+
+  it("accepts changed column predicates when accessor identities stay stable", async () => {
+    const source = { kind: "local" as const, rows: [employee()], getRowId: (row: Employee) => row.id };
+    const accessor = (row: Employee) => row.name;
+    const update = (row: Employee, value: string) => ({ ...row, name: value });
+    const columns = [{ kind: "accessor" as const, id: "name", header: "Name", accessor, update, permitted: () => true }];
+    const session = createLocalRecordTableSession({ source, columns });
+    session.getSnapshot();
+    session.updateOptions({
+      source,
+      columns: [{ ...columns[0], permitted: () => false }]
+    });
     const result = await session.dispatch({ type: "edit-cells", edits: [{ rowId: "e1", columnId: "name", rawText: "Grace" }] });
     expect(result).toMatchObject({ status: "rejected", reason: "permission" });
   });
@@ -314,6 +398,28 @@ describe("createLocalRecordTableSession", () => {
     expect(xlsx.mediaType).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     expect(xlsx.fileName).toBe("all.xlsx");
     expect(xlsx.bytes.byteLength).toBeGreaterThan(0);
+  });
+
+  it("includes collapsed descendants in a complete-dataset export", async () => {
+    type TreeEmployee = Employee & { children?: readonly TreeEmployee[] };
+    const helper = createColumnHelper<TreeEmployee>();
+    const rows: readonly TreeEmployee[] = [
+      { ...employee("parent", "Parent"), children: [{ ...employee("child", "Child") }] }
+    ];
+    const source = {
+      kind: "local" as const,
+      rows,
+      getRowId: (row: TreeEmployee) => row.id,
+      getSubRows: (row: TreeEmployee) => row.children
+    };
+    const session = createLocalRecordTableSession<TreeEmployee>({
+      source,
+      columns: [helper.accessor("name", { id: "name", header: "Name" })]
+    });
+    const current = await session.export({ format: "csv", scope: "currentView" });
+    const complete = await session.export({ format: "csv", scope: "completeDataset" });
+    expect(new TextDecoder().decode(current.bytes)).toBe("Name\r\nParent\r\n");
+    expect(new TextDecoder().decode(complete.bytes)).toBe("Name\r\nParent\r\nChild\r\n");
   });
 
   it("rejects remote conflict-resolution intents without changing local state", async () => {
@@ -412,5 +518,174 @@ describe("createLocalRecordTableSession", () => {
       .toThrow("Controlled document requires onDocumentChange");
     expect(() => createLocalRecordTableSession(deterministicOptions({ state: { sorting: [] } })))
       .toThrow("Controlled state requires onStateChange");
+  });
+
+  it("inserts supplied local records before a stable row id", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: { kind: "local", rows: [employee("e1", "Ada"), employee("e3", "Linus")], getRowId: (row) => row.id }
+    }));
+    const result = await session.dispatch({
+      type: "insert-rows",
+      rows: [employee("e2", "Grace")],
+      beforeRowId: "e3"
+    });
+    expect(result).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("inserts supplied local records after a stable row id", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: { kind: "local", rows: [employee("e1", "Ada"), employee("e3", "Linus")], getRowId: (row) => row.id }
+    }));
+    await session.dispatch({ type: "insert-rows", rows: [employee("e2", "Grace")], afterRowId: "e1" });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("appends supplied local records when no anchor is present", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    await session.dispatch({ type: "insert-rows", rows: [employee("e2", "Grace"), employee("e3", "Linus")] });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("rejects count-only insertion because local records require host values", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    const before = session.getSnapshot();
+    const result = await session.dispatch({ type: "insert-rows", count: 2 });
+    expect(result).toMatchObject({ status: "rejected", reason: "unsupported" });
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("rejects duplicate inserted row ids atomically", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    const listener = vi.fn();
+    session.subscribe(listener);
+    const result = await session.dispatch({
+      type: "insert-rows",
+      rows: [employee("e2", "Grace"), employee("e2", "Duplicate")]
+    });
+    expect(result).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id)).toEqual(["e1"]);
+    expect(session.getSnapshot().canUndo).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous runtime row anchors atomically", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    const result = await session.dispatch({
+      type: "insert-rows",
+      rows: [employee("e2", "Grace")],
+      beforeRowId: "e1",
+      afterRowId: "e1"
+    } as unknown as Parameters<typeof session.dispatch>[0]);
+    expect(result).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id)).toEqual(["e1"]);
+  });
+
+  it("emits controlled structural updaters that preserve unrelated host rows", async () => {
+    const onRowsChange = vi.fn();
+    const original = [employee("e1", "Ada")];
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: { kind: "local", rows: original, getRowId: (row) => row.id, onRowsChange }
+    }));
+    await session.dispatch({ type: "insert-rows", rows: [employee("e2", "Grace")], afterRowId: "e1" });
+    const insert = onRowsChange.mock.calls[0][0] as (rows: readonly Employee[]) => readonly Employee[];
+    expect(insert([employee("external", "External"), { ...employee(), salary: 999 }]))
+      .toEqual([employee("external", "External"), { ...employee(), salary: 999 }, employee("e2", "Grace")]);
+
+    await session.dispatch({ type: "delete-rows", rowIds: ["e1"] });
+    const remove = onRowsChange.mock.calls[1][0] as (rows: readonly Employee[]) => readonly Employee[];
+    expect(remove([employee("external", "External"), employee(), employee("e2", "Grace")]))
+      .toEqual([employee("external", "External"), employee("e2", "Grace")]);
+  });
+
+  it("deletes stable row ids regardless of current sort order", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: {
+        kind: "local",
+        rows: [employee("e1", "Ada"), employee("e2", "Grace"), employee("e3", "Linus")],
+        getRowId: (row) => row.id
+      },
+      defaultState: { sorting: [{ columnId: "name", direction: "desc" }] }
+    }));
+    await session.dispatch({ type: "delete-rows", rowIds: ["e2"] });
+    await session.dispatch({ type: "set-sorting", sorting: [] });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["e1", "e3"]);
+  });
+
+  it("undoes and redoes values, row order, and metadata together", async () => {
+    const metadataKey = createTableMetadataKey("e2", "name");
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: {
+        kind: "local",
+        rows: [employee("e1", "Ada"), employee("e2", "Grace", 200), employee("e3", "Linus", 300)],
+        getRowId: (row) => row.id
+      },
+      defaultDocument: {
+        version: 1,
+        cells: { [metadataKey]: { comment: "retain me" } },
+        calculatedColumns: [],
+        namedStyles: []
+      }
+    }));
+
+    await session.dispatch({ type: "delete-rows", rowIds: ["e2"] });
+    expect(session.getSnapshot().getRowIndex("e2")).toBe(-1);
+    const undone = await session.undo();
+    expect(undone).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["e1", "e2", "e3"]);
+    expect(session.getSnapshot().getCell("e2", "name")).toMatchObject({
+      storedValue: "Grace",
+      metadata: { comment: "retain me" }
+    });
+
+    await session.redo();
+    expect(session.getSnapshot().getRowIndex("e2")).toBe(-1);
+    await session.undo();
+    expect(session.getSnapshot().getCell("e2", "salary").storedValue).toBe(200);
+  });
+
+  it("clears redo after a new durable command", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    await session.dispatch({ type: "edit-cells", edits: [{ rowId: "e1", columnId: "name", rawText: "Grace" }] });
+    await session.undo();
+    expect(session.getSnapshot().canRedo).toBe(true);
+    await session.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "e1", columnId: "name", patch: { comment: "new durable command" } }]
+    });
+    expect(session.getSnapshot().canRedo).toBe(false);
+    expect(await session.redo()).toMatchObject({ status: "committed", changed: false });
+  });
+
+  it("never retains more than the configured history limit", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({ historyLimit: 2 }));
+    for (const name of ["Grace", "Katherine", "Dorothy"]) {
+      await session.dispatch({ type: "edit-cells", edits: [{ rowId: "e1", columnId: "name", rawText: name }] });
+    }
+    expect(await session.undo()).toMatchObject({ status: "committed", changed: true });
+    expect(await session.undo()).toMatchObject({ status: "committed", changed: true });
+    expect(await session.undo()).toMatchObject({ status: "committed", changed: false });
+    expect(session.getSnapshot().getCell("e1", "name").storedValue).toBe("Grace");
+  });
+
+  it("replays history onto the latest controlled record without restoring unrelated fields", async () => {
+    const onRowsChange = vi.fn();
+    const options = deterministicOptions({
+      source: { kind: "local", rows: [employee()], getRowId: (row) => row.id, onRowsChange }
+    });
+    const session = createLocalRecordTableSession(options);
+    await session.dispatch({ type: "edit-cells", edits: [{ rowId: "e1", columnId: "name", rawText: "Grace" }] });
+    const edit = onRowsChange.mock.calls[0][0] as (rows: readonly Employee[]) => readonly Employee[];
+    const hostRows = edit([{ ...employee(), salary: 999 }]);
+    session.updateOptions({ ...options, source: { ...options.source, rows: hostRows } });
+
+    await session.undo();
+    expect(session.getSnapshot().getCell("e1", "name").storedValue).toBe("Ada");
+    expect(session.getSnapshot().getCell("e1", "salary").storedValue).toBe(999);
   });
 });
