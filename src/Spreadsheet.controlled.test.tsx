@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkbookSession } from "./core/workbook/WorkbookSession";
 import { createFormulaEngine } from "./lib/formulaEngine";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
@@ -14,6 +14,11 @@ function workbookWith(value: string) {
 }
 
 describe("controlled Spreadsheet", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   it("renders host rerenders and acknowledges a user workbook edit", async () => {
     const user = userEvent.setup();
     const first = workbookWith("first");
@@ -149,6 +154,30 @@ describe("controlled Spreadsheet", () => {
       commandId: "host-command"
     });
     expect(onDiagnostic).toHaveBeenCalled();
+  });
+
+  it("caches an injected Google token provider per component instance", async () => {
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "test-client-id");
+    vi.spyOn(window, "prompt").mockReturnValue("12345678901234567890");
+    const googleTokenProviderFactory = vi.fn(() => ({
+      getAccessToken: vi.fn().mockRejectedValue(new Error("expected test rejection"))
+    }));
+    const user = userEvent.setup();
+
+    const first = render(
+      <Spreadsheet storage={false} services={{ googleTokenProviderFactory }} />
+    );
+    await user.click(screen.getByRole("tab", { name: "File" }));
+    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent("Google Sheets import failed"));
+    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
+    await waitFor(() => expect(googleTokenProviderFactory).toHaveBeenCalledTimes(1));
+
+    first.unmount();
+    render(<Spreadsheet storage={false} services={{ googleTokenProviderFactory }} />);
+    await user.click(screen.getByRole("tab", { name: "File" }));
+    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
+    await waitFor(() => expect(googleTokenProviderFactory).toHaveBeenCalledTimes(2));
   });
 
   it("sanitizes invalid service registries and validates them once", async () => {

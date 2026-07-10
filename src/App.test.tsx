@@ -870,6 +870,16 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "A1 Move me" })).toHaveTextContent("Move me");
     expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
     expect(screen.getByLabelText("Status")).toHaveTextContent("A1 is read-only");
+
+    await user.click(screen.getByRole("button", { name: "Protect sheet" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: {
+        getData: () => "Move me"
+      }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "B1 Move me" })).toHaveTextContent("Move me");
   });
 
   it("pastes copied values without formulas or source formatting", async () => {
@@ -998,6 +1008,23 @@ describe("App", () => {
 
     expect(screen.getByRole("tab", { name: "Recovered" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("gridcell", { name: "A1 still here" })).toBeInTheDocument();
+  });
+
+  it("resets workbook history and stale cut state when creating a new workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "discard me");
+    await user.click(screen.getByRole("gridcell", { name: "A1 discard me" }));
+    await user.keyboard("{Control>}x{/Control}");
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "New workbook" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveTextContent("");
+    await openRibbonTab(user, "Home");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Paste" })).toBeDisabled();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("New workbook");
   });
 
   it("imports CSV data and resets the file picker", async () => {
