@@ -1495,6 +1495,23 @@ describe("App", () => {
     expect(screen.getByLabelText("Name box")).toHaveValue("C1");
   });
 
+  it("returns focus to the spreadsheet grid after commit and cancel", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1" }));
+    await user.type(screen.getByLabelText("Cell editor A1"), "saved{Enter}");
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    expect(grid).toContainElement(document.activeElement as HTMLElement);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "B1" }));
+    await user.type(screen.getByLabelText("Cell editor B1"), "discarded");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Cell editor B1")).not.toBeInTheDocument();
+    expect(grid).toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("selects the data region, then the whole sheet, with Ctrl+A", async () => {
     const user = userEvent.setup();
     render(<App />);

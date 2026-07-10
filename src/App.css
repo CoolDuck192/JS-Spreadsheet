@@ -2357,6 +2357,21 @@ button {
   padding-right: 20px;
 }
 
+/* GridViewport now owns the semantic cell box. Keep source-specific popovers
+   visible outside that box while their trigger cells remain virtualized. */
+.auto-filter-header-cell,
+.validation-list-cell {
+  overflow: visible;
+}
+
+.auto-filter-header-cell:has(.auto-filter-menu) {
+  z-index: 10;
+}
+
+.validation-list-cell:has(.validation-dropdown) {
+  z-index: 9;
+}
+
 .auto-filter-menu-open {
   overflow: visible;
   z-index: 10;

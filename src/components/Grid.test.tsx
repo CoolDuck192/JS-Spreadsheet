@@ -7,6 +7,175 @@ import { createFormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
 
 describe("Grid", () => {
+  it("renders the spreadsheet through the shared viewport kernel", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute(
+      "data-viewport-kernel",
+      "shared"
+    );
+  });
+
+  it("keeps formula suggestions and validation choices inside the active editor overlay", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const formulaEngine = createFormulaEngine(workbook);
+    const commonProps = {
+      sheet,
+      formulaEngine,
+      selection: { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      getCellFormat: () => undefined,
+      onSelectionChange: () => undefined,
+      onStartEdit: () => undefined,
+      onEditValueChange: () => undefined,
+      onCommitEdit: () => undefined,
+      onCancelEdit: () => undefined,
+      onPasteText: () => undefined,
+      onKeyCommand: () => undefined
+    };
+    const { rerender } = render(<Grid {...commonProps} editingCell={{ address: "A1", value: "=S" }} />);
+
+    const formulaEditor = screen.getByRole("textbox", { name: "Cell editor A1" });
+    const formulaOverlay = formulaEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]');
+    expect(formulaOverlay).not.toBeNull();
+    expect(within(formulaOverlay as HTMLElement).getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
+
+    rerender(
+      <Grid
+        {...commonProps}
+        selection={{ start: { row: 0, column: 1 }, end: { row: 0, column: 1 } }}
+        editingCell={{ address: "B1", value: "Open" }}
+        getCellValidation={(address) =>
+          address === "B1" ? { type: "list", values: ["Open", "Closed"] } : undefined
+        }
+      />
+    );
+    const validationEditor = screen.getByRole("combobox", { name: "Cell editor B1" });
+    expect(validationEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]')).not.toBeNull();
+    expect(within(validationEditor).getByRole("option", { name: "Open" })).toBeInTheDocument();
+  });
+
+  it("keeps AutoFilter menus and cell context interactions source-specific", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 2,
+      cells: { A1: "Region", A2: "West", A3: "East", B1: "Amount" },
+      autoFilterRange: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } }
+    };
+    const workbook: WorkbookModel = { version: 1, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [] };
+    const contexts: Array<{ address: string; row: number; column: number }> = [];
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onCellContextMenu={({ address, row, column }) => contexts.push({ address, row, column })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    expect(screen.getByRole("menu", { name: "AutoFilter menu for Region" })).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole("gridcell", { name: "B1 Amount" }), { clientX: 40, clientY: 60 });
+    expect(contexts).toEqual([{ address: "B1", row: 0, column: 1 }]);
+  });
+
+  it("preserves merged-cell spans and selection geometry in a virtual window", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 20,
+      columnCount: 20,
+      cells: { A1: "Merged report" },
+      merges: [
+        {
+          id: "merge-a1-c2",
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 2 } }
+        }
+      ]
+    };
+    const workbook: WorkbookModel = { version: 1, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [] };
+    const { container } = render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 1, column: 1 }, end: { row: 1, column: 1 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const merged = screen.getByRole("gridcell", { name: "A1 Merged report" });
+    expect(merged).toHaveAttribute("aria-colspan", "3");
+    expect(merged).toHaveAttribute("aria-rowspan", "2");
+    expect(container.querySelector(".selection-outline")).toHaveStyle({
+      top: "28px",
+      left: "48px",
+      width: "288px",
+      height: "56px"
+    });
+  });
+
+  it("preserves frozen row and column selection styling", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 1, column: 1 } }}
+        editingCell={null}
+        freezeTopRow
+        freezeFirstColumn
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveClass(
+      "selected-cell",
+      "frozen-top-row-cell",
+      "frozen-first-column-cell"
+    );
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("selected-cell", "frozen-top-row-cell");
+    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveClass("selected-cell", "frozen-first-column-cell");
+  });
+
   it("selects full columns, rows, and the sheet from headers", () => {
     const sheet: SheetModel = {
       id: "sheet-1",

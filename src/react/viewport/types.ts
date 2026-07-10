@@ -1,7 +1,9 @@
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
-  ReactNode
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  RefObject
 } from "react";
 import type { TableCellRef, TableSelection } from "../../table/core/types";
 
@@ -11,6 +13,9 @@ export type GridViewportRow = {
   height: number;
   kind: "data" | "group" | "aggregate";
   ariaRowIndex: number;
+  ariaLabel?: string;
+  headerAriaLabel?: string;
+  pinned?: "top" | "bottom";
 };
 
 export type GridViewportColumn = {
@@ -20,6 +25,7 @@ export type GridViewportColumn = {
   minWidth: number;
   maxWidth: number;
   pinned?: "left" | "right";
+  ariaColumnIndex?: number;
 };
 
 export type GridViewportCell = {
@@ -30,8 +36,19 @@ export type GridViewportCell = {
   invalid: boolean;
   className?: string;
   style?: CSSProperties;
+  title?: string;
   columnSpan?: number;
   rowSpan?: number;
+};
+
+export type GridViewportApi = {
+  ensureCellVisible(rowId: string, columnId: string): void;
+};
+
+export type GridViewportHeaderState = {
+  className?: string;
+  ariaSelected?: boolean;
+  tabIndex?: number;
 };
 
 export type GridEditorState = TableCellRef & { rawText: string };
@@ -68,12 +85,46 @@ export type GridViewportProps = {
   ariaColumnCount: number;
   getCell(rowId: string, columnId: string): GridViewportCell;
   selection: TableSelection | null;
+  activeCell?: TableCellRef | null;
   editing: GridEditorState | null;
   onInteraction(interaction: GridViewportInteraction): void;
   renderCell?(context: GridViewportRenderContext): ReactNode;
   renderEditor?(context: GridViewportRenderContext & { editing: GridEditorState }): ReactNode;
   renderColumnHeader?(column: GridViewportColumn): ReactNode;
   renderRowHeader?(row: GridViewportRow): ReactNode;
+  renderCornerHeader?(): ReactNode;
+  renderOverlay?(): ReactNode;
   announce?: string;
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  showColumnHeaders?: boolean;
+  rowHeaderWidth?: number;
+  columnHeaderHeight?: number;
+  rowOverscan?: number;
+  columnOverscan?: number;
+  scale?: number;
+  resetKey?: string | number;
+  retainedRowIds?: readonly string[];
+  retainedColumnIds?: readonly string[];
+  rootClassName?: string;
+  rootStyle?: CSSProperties;
+  rootDataAttributes?: Readonly<Record<string, string | number | boolean | undefined>>;
+  canvasClassName?: string;
+  canvasStyle?: CSSProperties;
+  interactionEventMode?: "pointer" | "mouse";
+  onBeforeKeyDown?(event: ReactKeyboardEvent<HTMLDivElement>): void;
   onUnhandledKeyDown?(event: ReactKeyboardEvent<HTMLElement>): void;
+  onCellMouseEnter?(cell: TableCellRef): boolean | void;
+  onCellContextMenu?(cell: TableCellRef, event: ReactMouseEvent<HTMLDivElement>): void;
+  getColumnHeaderState?(column: GridViewportColumn): GridViewportHeaderState;
+  getRowHeaderState?(row: GridViewportRow): GridViewportHeaderState;
+  onColumnHeaderMouseDown?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
+  onColumnHeaderMouseEnter?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
+  onColumnHeaderClick?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
+  onColumnHeaderKeyDown?(column: GridViewportColumn, event: ReactKeyboardEvent<HTMLDivElement>): void;
+  onRowHeaderMouseDown?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;
+  onRowHeaderMouseEnter?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;
+  onRowHeaderClick?(row: GridViewportRow, event: ReactMouseEvent<HTMLDivElement>): void;
+  onRowHeaderKeyDown?(row: GridViewportRow, event: ReactKeyboardEvent<HTMLDivElement>): void;
+  onRootMouseUp?(event: ReactMouseEvent<HTMLDivElement>): void;
+  onRegisterApi?(api: GridViewportApi): void;
 };

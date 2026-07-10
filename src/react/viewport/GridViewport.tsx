@@ -1,10 +1,13 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent
 } from "react";
+import type { AxisMeasurement } from "../../core/viewport/axis";
 import type { TableCellRef, TableSelection } from "../../table/core/types";
 import { useGridInteraction, gridCellDomId, gridLiveRegionDomId } from "./useGridInteraction";
 import { useTwoAxisVirtualizer } from "./useTwoAxisVirtualizer";
@@ -16,8 +19,8 @@ import type {
   GridViewportRow
 } from "./types";
 
-const HEADER_HEIGHT = 28;
-const ROW_HEADER_WIDTH = 56;
+const DEFAULT_HEADER_HEIGHT = 28;
+const DEFAULT_ROW_HEADER_WIDTH = 56;
 
 export function GridViewport({
   idPrefix,
@@ -28,17 +31,53 @@ export function GridViewport({
   ariaColumnCount,
   getCell,
   selection,
+  activeCell: controlledActiveCell,
   editing,
   onInteraction,
   renderCell,
   renderEditor,
   renderColumnHeader,
   renderRowHeader,
+  renderCornerHeader,
+  renderOverlay,
   announce = "",
-  onUnhandledKeyDown
+  scrollRef,
+  showColumnHeaders = true,
+  rowHeaderWidth: requestedRowHeaderWidth = DEFAULT_ROW_HEADER_WIDTH,
+  columnHeaderHeight: requestedColumnHeaderHeight = DEFAULT_HEADER_HEIGHT,
+  rowOverscan = 2,
+  columnOverscan = 2,
+  scale = 1,
+  resetKey,
+  retainedRowIds = [],
+  retainedColumnIds = [],
+  rootClassName,
+  rootStyle,
+  rootDataAttributes,
+  canvasClassName,
+  canvasStyle,
+  interactionEventMode = "pointer",
+  onBeforeKeyDown,
+  onUnhandledKeyDown,
+  onCellMouseEnter,
+  onCellContextMenu,
+  getColumnHeaderState,
+  getRowHeaderState,
+  onColumnHeaderMouseDown,
+  onColumnHeaderMouseEnter,
+  onColumnHeaderClick,
+  onColumnHeaderKeyDown,
+  onRowHeaderMouseDown,
+  onRowHeaderMouseEnter,
+  onRowHeaderClick,
+  onRowHeaderKeyDown,
+  onRootMouseUp,
+  onRegisterApi
 }: GridViewportProps) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const rowHeaderWidth = renderRowHeader ? ROW_HEADER_WIDTH : 0;
+  const internalRootRef = useRef<HTMLDivElement>(null);
+  const rootRef = scrollRef ?? internalRootRef;
+  const rowHeaderWidth = renderRowHeader ? requestedRowHeaderWidth : 0;
+  const headerHeight = showColumnHeaders ? requestedColumnHeaderHeight : 0;
   const getRowKey = useCallback((index: number) => rows[index].id, [rows]);
   const getColumnKey = useCallback((index: number) => columns[index].id, [columns]);
   const getRowSize = useCallback((index: number) => rows[index].height, [rows]);
@@ -51,16 +90,20 @@ export function GridViewport({
     getColumnKey,
     getRowSize,
     getColumnSize,
-    rowOverscan: 2,
-    columnOverscan: 2,
-    rowViewportInset: HEADER_HEIGHT,
-    columnViewportInset: rowHeaderWidth
+    rowOverscan,
+    columnOverscan,
+    rowViewportInset: headerHeight,
+    columnViewportInset: rowHeaderWidth,
+    scale,
+    resetKey
   });
+  const activeCell = controlledActiveCell ?? selection?.focus ?? null;
   const interaction = useGridInteraction({
     idPrefix,
     rows,
     columns,
     selection,
+    activeCell,
     editing,
     onInteraction,
     ensureCellVisible: virtualizer.ensureCellVisible,
@@ -68,20 +111,77 @@ export function GridViewport({
     getInitialRawText: (cell) => getCell(cell.rowId, cell.columnId).displayValue,
     isCellEditable: (cell) => getCell(cell.rowId, cell.columnId).editable
   });
-  const selectedBounds = useMemo(() => selectionBounds(selection, rows, columns), [columns, rows, selection]);
-  const activeCell = selection?.focus ?? null;
   const liveRegionId = gridLiveRegionDomId(idPrefix);
   const canvasWidth = rowHeaderWidth + virtualizer.totalWidth;
-  const canvasHeight = HEADER_HEIGHT + virtualizer.totalHeight;
+  const canvasHeight = headerHeight + virtualizer.totalHeight;
+  const pinnedColumnOffsets = useMemo(() => createPinnedColumnOffsets(columns), [columns]);
+  const pinnedRowOffsets = useMemo(() => createPinnedRowOffsets(rows), [rows]);
+  const rowMeasurementsById = useMemo(
+    () => new Map(virtualizer.rowMeasurements.map((measurement) => [measurement.key, measurement])),
+    [virtualizer.rowMeasurements]
+  );
+  const columnMeasurementsById = useMemo(
+    () => new Map(virtualizer.columnMeasurements.map((measurement) => [measurement.key, measurement])),
+    [virtualizer.columnMeasurements]
+  );
+  const selectedBounds = useMemo(
+    () => selectionBounds(selection, rowMeasurementsById, columnMeasurementsById),
+    [columnMeasurementsById, rowMeasurementsById, selection]
+  );
+  const renderedRows = useMemo(
+    () =>
+      collectRenderedMeasurements(
+        virtualizer.visibleRows,
+        rowMeasurementsById,
+        new Set([
+          ...retainedRowIds,
+          ...rows.filter((row) => row.pinned).map((row) => row.id),
+          ...(editing ? [editing.rowId] : [])
+        ])
+      ),
+    [editing, retainedRowIds, rowMeasurementsById, rows, virtualizer.visibleRows]
+  );
+  const renderedColumns = useMemo(
+    () =>
+      collectRenderedMeasurements(
+        virtualizer.visibleColumns,
+        columnMeasurementsById,
+        new Set([
+          ...retainedColumnIds,
+          ...columns.filter((column) => column.pinned).map((column) => column.id),
+          ...(editing ? [editing.columnId] : [])
+        ])
+      ),
+    [columnMeasurementsById, columns, editing, retainedColumnIds, virtualizer.visibleColumns]
+  );
   const activeDescendantId =
-    selection &&
-    virtualizer.visibleRows.some((measurement) => rows[measurement.index].id === selection.focus.rowId) &&
-    virtualizer.visibleColumns.some((measurement) => columns[measurement.index].id === selection.focus.columnId)
+    activeCell &&
+    renderedRows.some((measurement) => rows[measurement.index].id === activeCell.rowId) &&
+    renderedColumns.some((measurement) => columns[measurement.index].id === activeCell.columnId)
       ? interaction.activeDescendantId
       : undefined;
 
+  const ensureCellVisible = useCallback(
+    (rowId: string, columnId: string) => {
+      const row = rowMeasurementsById.get(rowId);
+      const column = columnMeasurementsById.get(columnId);
+      if (row && column) {
+        virtualizer.ensureCellVisible(row.index, column.index);
+      }
+    },
+    [columnMeasurementsById, rowMeasurementsById, virtualizer.ensureCellVisible]
+  );
+
+  useEffect(() => {
+    onRegisterApi?.({ ensureCellVisible });
+  }, [ensureCellVisible, onRegisterApi]);
+
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (isEditorEventTarget(event.target)) {
+      return;
+    }
+    onBeforeKeyDown?.(event);
+    if (event.defaultPrevented) {
       return;
     }
     interaction.onKeyDown(event);
@@ -90,8 +190,24 @@ export function GridViewport({
     }
   }
 
+  function handleCellDown(cell: GridViewportCell, event: ReactMouseEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.focus({ preventScroll: true });
+    interaction.onCellPointerDown(cell.ref, event.shiftKey);
+  }
+
+  function handleCellEnter(cell: GridViewportCell) {
+    if (onCellMouseEnter?.(cell.ref)) {
+      return;
+    }
+    interaction.onCellPointerEnter(cell.ref);
+  }
+
   return (
     <div
+      {...rootDataAttributes}
       ref={rootRef}
       role="grid"
       aria-label={ariaLabel}
@@ -100,12 +216,19 @@ export function GridViewport({
       aria-activedescendant={activeDescendantId}
       aria-describedby={liveRegionId}
       data-viewport-kernel="shared"
+      className={rootClassName}
       tabIndex={-1}
-      style={{ position: "relative", overflow: "auto" }}
+      style={{ ...rootStyle, position: "relative", overflow: "auto" }}
       onScroll={virtualizer.onScroll}
       onKeyDown={handleKeyDown}
-      onPointerUp={interaction.onPointerUp}
-      onPointerCancel={interaction.onPointerUp}
+      onPointerUp={interactionEventMode === "pointer" ? interaction.onPointerUp : undefined}
+      onPointerCancel={interactionEventMode === "pointer" ? interaction.onPointerUp : undefined}
+      onMouseUp={(event) => {
+        if (interactionEventMode === "mouse") {
+          interaction.onPointerUp();
+        }
+        onRootMouseUp?.(event);
+      }}
       onCopy={(event) => {
         if (isEditorEventTarget(event.target)) {
           return;
@@ -127,105 +250,167 @@ export function GridViewport({
     >
       <div
         data-grid-viewport-canvas="true"
-        style={{ position: "relative", width: canvasWidth, height: canvasHeight, minWidth: "100%" }}
+        className={canvasClassName}
+        style={{
+          ...canvasStyle,
+          position: "relative",
+          width: canvasWidth,
+          height: canvasHeight,
+          minWidth: "100%"
+        }}
       >
-        <div
-          role="row"
-          aria-label="Column headers"
-          aria-rowindex={1}
-          style={{ position: "sticky", top: 0, zIndex: 3, height: HEADER_HEIGHT }}
-        >
-          {renderRowHeader ? (
-            <div
-              role="columnheader"
-              aria-label="Row headers"
-              aria-colindex={1}
-              style={{ ...headerCellStyle(0, ROW_HEADER_WIDTH), position: "sticky", left: 0, zIndex: 4 }}
-            />
-          ) : null}
-          {virtualizer.visibleColumns.map((measurement) => {
-            const column = columns[measurement.index];
-            return (
+        {showColumnHeaders ? (
+          <div
+            role="row"
+            aria-label="Column headers"
+            aria-rowindex={1}
+            style={{ position: "sticky", top: 0, zIndex: 3, height: headerHeight }}
+          >
+            {renderRowHeader ? (
               <div
-                key={column.id}
                 role="columnheader"
-                aria-label={column.label}
-                aria-colindex={measurement.index + 1 + (renderRowHeader ? 1 : 0)}
-                style={headerCellStyle(rowHeaderWidth + measurement.start, measurement.size)}
+                aria-label="Row headers"
+                aria-colindex={1}
+                style={{
+                  ...headerCellStyle(0, rowHeaderWidth, headerHeight),
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 4
+                }}
               >
-                {renderColumnHeader ? renderColumnHeader(column) : column.label}
+                {renderCornerHeader?.()}
               </div>
-            );
-          })}
-        </div>
+            ) : null}
+            {renderedColumns.map((measurement) => {
+              const column = columns[measurement.index];
+              const headerState = getColumnHeaderState?.(column);
+              return (
+                <div
+                  key={column.id}
+                  role="columnheader"
+                  aria-label={column.label}
+                  aria-colindex={column.ariaColumnIndex ?? measurement.index + 1 + (renderRowHeader ? 1 : 0)}
+                  aria-selected={headerState?.ariaSelected}
+                  tabIndex={headerState?.tabIndex}
+                  className={headerState?.className}
+                  style={columnPositionStyle(
+                    headerCellStyle(rowHeaderWidth + measurement.start, measurement.size, headerHeight),
+                    column,
+                    rowHeaderWidth,
+                    pinnedColumnOffsets
+                  )}
+                  onMouseDown={(event) => onColumnHeaderMouseDown?.(column, event)}
+                  onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
+                  onClick={(event) => onColumnHeaderClick?.(column, event)}
+                  onKeyDown={(event) => onColumnHeaderKeyDown?.(column, event)}
+                >
+                  {renderColumnHeader ? renderColumnHeader(column) : column.label}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
 
-        {virtualizer.visibleRows.map((rowMeasurement) => {
+        {renderedRows.map((rowMeasurement) => {
           const row = rows[rowMeasurement.index];
+          const rowHeaderState = getRowHeaderState?.(row);
           return (
             <div
               key={row.id}
               role="row"
-              aria-label={`Row ${row.label}`}
+              aria-label={row.ariaLabel ?? `Row ${row.label}`}
               aria-rowindex={row.ariaRowIndex}
               data-row-kind={row.kind}
-              style={{
-                position: "absolute",
-                top: HEADER_HEIGHT + rowMeasurement.start,
-                left: 0,
-                width: canvasWidth,
-                height: rowMeasurement.size
-              }}
+              style={rowPositionStyle(
+                rowMeasurement,
+                row,
+                canvasWidth,
+                headerHeight,
+                pinnedRowOffsets
+              )}
             >
               {renderRowHeader ? (
                 <div
                   role="rowheader"
-                  aria-label={row.label}
+                  aria-label={row.headerAriaLabel ?? row.label}
                   aria-colindex={1}
-                  style={rowHeaderCellStyle(rowMeasurement.size)}
+                  aria-selected={rowHeaderState?.ariaSelected}
+                  tabIndex={rowHeaderState?.tabIndex}
+                  className={rowHeaderState?.className}
+                  style={rowHeaderCellStyle(rowMeasurement.size, rowHeaderWidth)}
+                  onMouseDown={(event) => onRowHeaderMouseDown?.(row, event)}
+                  onMouseEnter={(event) => onRowHeaderMouseEnter?.(row, event)}
+                  onClick={(event) => onRowHeaderClick?.(row, event)}
+                  onKeyDown={(event) => onRowHeaderKeyDown?.(row, event)}
                 >
                   {renderRowHeader(row)}
                 </div>
               ) : null}
-              {virtualizer.visibleColumns.map((columnMeasurement) => {
+              {renderedColumns.map((columnMeasurement) => {
                 const column = columns[columnMeasurement.index];
                 const cell = getCell(row.id, column.id);
                 const selected = isSelected(rowMeasurement.index, columnMeasurement.index, selectedBounds);
                 const active = sameCell(cell.ref, activeCell);
                 const context: GridViewportRenderContext = { row, column, cell, selected, active };
+                const width = spanSize(
+                  virtualizer.columnMeasurements,
+                  columnMeasurement.index,
+                  cell.columnSpan,
+                  columnMeasurement.size
+                );
+                const height = spanSize(
+                  virtualizer.rowMeasurements,
+                  rowMeasurement.index,
+                  cell.rowSpan,
+                  rowMeasurement.size
+                );
                 return (
                   <div
                     key={column.id}
                     id={gridCellDomId(idPrefix, cell.ref)}
                     role="gridcell"
                     aria-label={cell.ariaLabel}
-                    aria-colindex={columnMeasurement.index + 1 + (renderRowHeader ? 1 : 0)}
+                    aria-colindex={column.ariaColumnIndex ?? columnMeasurement.index + 1 + (renderRowHeader ? 1 : 0)}
                     aria-selected={selected}
                     aria-readonly={!cell.editable}
                     aria-invalid={cell.invalid}
                     aria-colspan={cell.columnSpan}
                     aria-rowspan={cell.rowSpan}
                     className={cell.className}
+                    title={cell.title}
                     tabIndex={active ? 0 : -1}
-                    style={cellStyle(
+                    style={cellPositionStyle(
                       rowHeaderWidth + columnMeasurement.start,
-                      columnMeasurement.size,
-                      rowMeasurement.size,
-                      cell.style
+                      width,
+                      height,
+                      cell.style,
+                      column,
+                      rowHeaderWidth,
+                      pinnedColumnOffsets
                     )}
-                    onPointerDown={(event) => {
-                      if (event.button !== 0) {
-                        return;
-                      }
-                      event.currentTarget.focus({ preventScroll: true });
-                      interaction.onCellPointerDown(cell.ref, event.shiftKey);
-                    }}
-                    onPointerEnter={() => interaction.onCellPointerEnter(cell.ref)}
+                    onPointerDown={
+                      interactionEventMode === "pointer"
+                        ? (event) => handleCellDown(cell, event)
+                        : undefined
+                    }
+                    onMouseDown={
+                      interactionEventMode === "mouse"
+                        ? (event) => handleCellDown(cell, event)
+                        : undefined
+                    }
+                    onPointerEnter={
+                      interactionEventMode === "pointer" ? () => handleCellEnter(cell) : undefined
+                    }
+                    onMouseEnter={
+                      interactionEventMode === "mouse" ? () => handleCellEnter(cell) : undefined
+                    }
                     onClick={(event) => {
                       if (event.detail === 0) {
                         interaction.onCellPointerDown(cell.ref, event.shiftKey);
                         interaction.onPointerUp();
                       }
                     }}
+                    onContextMenu={(event) => onCellContextMenu?.(cell.ref, event)}
                     onDoubleClick={() => {
                       if (cell.editable) {
                         onInteraction({ type: "edit-start", cell: cell.ref, initialRawText: cell.displayValue });
@@ -246,12 +431,14 @@ export function GridViewport({
             rows={rows}
             columns={columns}
             rowHeaderWidth={rowHeaderWidth}
+            headerHeight={headerHeight}
             getCell={getCell}
             getCellRect={virtualizer.getCellRect}
             renderEditor={renderEditor}
             onInteraction={onInteraction}
           />
         ) : null}
+        {renderOverlay?.()}
       </div>
       <div id={liveRegionId} role="status" aria-live="polite" style={visuallyHiddenStyle}>
         {announce}
@@ -265,6 +452,7 @@ function EditorOverlay({
   rows,
   columns,
   rowHeaderWidth,
+  headerHeight,
   getCell,
   getCellRect,
   renderEditor,
@@ -274,6 +462,7 @@ function EditorOverlay({
   rows: readonly GridViewportRow[];
   columns: readonly GridViewportColumn[];
   rowHeaderWidth: number;
+  headerHeight: number;
   getCell: GridViewportProps["getCell"];
   getCellRect(rowIndex: number, columnIndex: number): { top: number; left: number; width: number; height: number };
   renderEditor: GridViewportProps["renderEditor"];
@@ -292,13 +481,18 @@ function EditorOverlay({
   return (
     <div
       data-grid-editor-overlay="true"
+      className={mergeClassNames("cell", "editing-cell", cell.className)}
       style={{
+        ...cell.style,
         position: "absolute",
-        zIndex: 5,
-        top: HEADER_HEIGHT + rect.top,
+        zIndex: 8,
+        top: headerHeight + rect.top,
         left: rowHeaderWidth + rect.left,
-        width: rect.width,
-        height: rect.height
+        width: cell.style?.width ?? rect.width,
+        height: cell.style?.height ?? rect.height,
+        minWidth: undefined,
+        maxWidth: undefined,
+        minHeight: undefined
       }}
     >
       {renderEditor ? (
@@ -341,17 +535,22 @@ type SelectionBounds = { firstRow: number; lastRow: number; firstColumn: number;
 
 function selectionBounds(
   selection: TableSelection | null,
-  rows: readonly GridViewportRow[],
-  columns: readonly GridViewportColumn[]
+  rows: ReadonlyMap<string, AxisMeasurement<string>>,
+  columns: ReadonlyMap<string, AxisMeasurement<string>>
 ): SelectionBounds {
   if (!selection) {
     return null;
   }
-  const anchorRow = rows.findIndex((row) => row.id === selection.anchor.rowId);
-  const focusRow = rows.findIndex((row) => row.id === selection.focus.rowId);
-  const anchorColumn = columns.findIndex((column) => column.id === selection.anchor.columnId);
-  const focusColumn = columns.findIndex((column) => column.id === selection.focus.columnId);
-  if (anchorRow < 0 || focusRow < 0 || anchorColumn < 0 || focusColumn < 0) {
+  const anchorRow = rows.get(selection.anchor.rowId)?.index;
+  const focusRow = rows.get(selection.focus.rowId)?.index;
+  const anchorColumn = columns.get(selection.anchor.columnId)?.index;
+  const focusColumn = columns.get(selection.focus.columnId)?.index;
+  if (
+    anchorRow === undefined ||
+    focusRow === undefined ||
+    anchorColumn === undefined ||
+    focusColumn === undefined
+  ) {
     return null;
   }
   return {
@@ -376,39 +575,171 @@ function sameCell(left: TableCellRef, right: TableCellRef | null): boolean {
   return Boolean(right && left.rowId === right.rowId && left.columnId === right.columnId);
 }
 
-function headerCellStyle(left: number, width: number): CSSProperties {
+function headerCellStyle(left: number, width: number, height: number): CSSProperties {
   return {
     position: "absolute",
     top: 0,
     left,
     width,
-    height: HEADER_HEIGHT,
+    height,
     boxSizing: "border-box"
   };
 }
 
-function rowHeaderCellStyle(height: number): CSSProperties {
+function rowHeaderCellStyle(height: number, width: number): CSSProperties {
   return {
     position: "sticky",
     top: 0,
     left: 0,
     zIndex: 2,
-    width: ROW_HEADER_WIDTH,
+    width,
     height,
     boxSizing: "border-box"
   };
 }
 
-function cellStyle(left: number, width: number, height: number, style: CSSProperties | undefined): CSSProperties {
-  return {
-    ...style,
+function rowPositionStyle(
+  measurement: AxisMeasurement<string>,
+  row: GridViewportRow,
+  width: number,
+  headerHeight: number,
+  offsets: ReadonlyMap<string, number>
+): CSSProperties {
+  const base: CSSProperties = {
     position: "absolute",
-    top: 0,
-    left,
+    top: headerHeight + measurement.start,
+    left: 0,
     width,
-    height,
-    boxSizing: "border-box"
+    height: measurement.size
   };
+  if (row.pinned === "top") {
+    return { ...base, position: "sticky", top: headerHeight + (offsets.get(row.id) ?? 0), zIndex: 4 };
+  }
+  if (row.pinned === "bottom") {
+    return { ...base, position: "sticky", top: undefined, bottom: offsets.get(row.id) ?? 0, zIndex: 4 };
+  }
+  return base;
+}
+
+function columnPositionStyle(
+  base: CSSProperties,
+  column: GridViewportColumn,
+  rowHeaderWidth: number,
+  offsets: ReadonlyMap<string, number>
+): CSSProperties {
+  if (column.pinned === "left") {
+    return {
+      ...base,
+      position: "sticky",
+      left: rowHeaderWidth + (offsets.get(column.id) ?? 0),
+      zIndex: 4
+    };
+  }
+  if (column.pinned === "right") {
+    return { ...base, position: "sticky", left: undefined, right: offsets.get(column.id) ?? 0, zIndex: 4 };
+  }
+  return base;
+}
+
+function cellPositionStyle(
+  left: number,
+  width: number,
+  height: number,
+  style: CSSProperties | undefined,
+  column: GridViewportColumn,
+  rowHeaderWidth: number,
+  offsets: ReadonlyMap<string, number>
+): CSSProperties {
+  return columnPositionStyle(
+    {
+      ...style,
+      position: "absolute",
+      top: 0,
+      left,
+      width: style?.width ?? width,
+      height: style?.height ?? height,
+      boxSizing: "border-box"
+    },
+    column,
+    rowHeaderWidth,
+    offsets
+  );
+}
+
+function spanSize(
+  measurements: readonly AxisMeasurement<string>[],
+  index: number,
+  span: number | undefined,
+  fallback: number
+): number {
+  if (!span || span <= 1) {
+    return fallback;
+  }
+  const first = measurements[index];
+  const last = measurements[Math.min(measurements.length - 1, index + span - 1)];
+  return first && last ? last.end - first.start : fallback;
+}
+
+function collectRenderedMeasurements(
+  visible: readonly AxisMeasurement<string>[],
+  measurementsById: ReadonlyMap<string, AxisMeasurement<string>>,
+  retainedIds: ReadonlySet<string>
+): AxisMeasurement<string>[] {
+  const rendered = new Map<number, AxisMeasurement<string>>();
+  for (const measurement of visible) {
+    rendered.set(measurement.index, measurement);
+  }
+  for (const id of retainedIds) {
+    const measurement = measurementsById.get(id);
+    if (measurement) {
+      rendered.set(measurement.index, measurement);
+    }
+  }
+  return [...rendered.values()].sort((left, right) => left.start - right.start);
+}
+
+function createPinnedColumnOffsets(columns: readonly GridViewportColumn[]): ReadonlyMap<string, number> {
+  const offsets = new Map<string, number>();
+  let left = 0;
+  for (const column of columns) {
+    if (column.pinned === "left") {
+      offsets.set(column.id, left);
+      left += column.width;
+    }
+  }
+  let right = 0;
+  for (let index = columns.length - 1; index >= 0; index -= 1) {
+    const column = columns[index];
+    if (column.pinned === "right") {
+      offsets.set(column.id, right);
+      right += column.width;
+    }
+  }
+  return offsets;
+}
+
+function createPinnedRowOffsets(rows: readonly GridViewportRow[]): ReadonlyMap<string, number> {
+  const offsets = new Map<string, number>();
+  let top = 0;
+  for (const row of rows) {
+    if (row.pinned === "top") {
+      offsets.set(row.id, top);
+      top += row.height;
+    }
+  }
+  let bottom = 0;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row.pinned === "bottom") {
+      offsets.set(row.id, bottom);
+      bottom += row.height;
+    }
+  }
+  return offsets;
+}
+
+function mergeClassNames(...values: Array<string | undefined>): string {
+  return [...new Set(values.flatMap((value) => value?.split(/\s+/).filter(Boolean) ?? []))].join(" ");
 }
 
 function isEditorEventTarget(target: EventTarget | null): boolean {

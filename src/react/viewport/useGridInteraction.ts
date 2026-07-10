@@ -24,6 +24,7 @@ export type UseGridInteractionOptions = {
   rows: readonly GridViewportRow[];
   columns: readonly GridViewportColumn[];
   selection: TableSelection | null;
+  activeCell?: TableCellRef | null;
   editing: GridEditorState | null;
   onInteraction(interaction: GridViewportInteraction): void;
   ensureCellVisible(rowIndex: number, columnIndex: number): void;
@@ -45,6 +46,7 @@ export function useGridInteraction({
   rows,
   columns,
   selection,
+  activeCell: controlledActiveCell,
   editing,
   onInteraction,
   ensureCellVisible,
@@ -54,20 +56,26 @@ export function useGridInteraction({
 }: UseGridInteractionOptions): GridInteractionBindings {
   const rowIds = useMemo(() => rows.map((row) => row.id), [rows]);
   const columnIds = useMemo(() => columns.map((column) => column.id), [columns]);
+  const rowIndexById = useMemo(() => new Map(rowIds.map((id, index) => [id, index])), [rowIds]);
+  const columnIndexById = useMemo(() => new Map(columnIds.map((id, index) => [id, index])), [columnIds]);
   const model = useMemo<GridInteractionModel>(() => ({ rowIds, columnIds }), [columnIds, rowIds]);
   const draggingRef = useRef(false);
   const dragAnchorRef = useRef<TableCellRef | null>(null);
   const focusPendingRef = useRef(false);
   const previousEditingRef = useRef<GridEditorState | null>(editing);
-  const activeCell = resolveActiveCell(selection, rowIds, columnIds);
+  const activeCell = resolveActiveCell(
+    controlledActiveCell ?? selection?.focus ?? null,
+    rowIndexById,
+    columnIndexById
+  );
   const activeDescendantId = activeCell ? gridCellDomId(idPrefix, activeCell) : undefined;
 
   const emitSelection = useCallback(
     (nextSelection: TableSelection) => {
       focusPendingRef.current = true;
-      const rowIndex = rowIds.indexOf(nextSelection.focus.rowId);
-      const columnIndex = columnIds.indexOf(nextSelection.focus.columnId);
-      if (rowIndex >= 0 && columnIndex >= 0) {
+      const rowIndex = rowIndexById.get(nextSelection.focus.rowId);
+      const columnIndex = columnIndexById.get(nextSelection.focus.columnId);
+      if (rowIndex !== undefined && columnIndex !== undefined) {
         ensureCellVisible(rowIndex, columnIndex);
       }
       if (!document.getElementById(gridCellDomId(idPrefix, nextSelection.focus))) {
@@ -75,7 +83,7 @@ export function useGridInteraction({
       }
       onInteraction({ type: "selection-change", selection: nextSelection });
     },
-    [columnIds, ensureCellVisible, idPrefix, onInteraction, rootRef, rowIds]
+    [columnIndexById, ensureCellVisible, idPrefix, onInteraction, rootRef, rowIndexById]
   );
 
   const moveSelection = useCallback(
@@ -224,9 +232,9 @@ export function useGridInteraction({
     if (!focusPendingRef.current || !activeCell) {
       return;
     }
-    const rowIndex = rowIds.indexOf(activeCell.rowId);
-    const columnIndex = columnIds.indexOf(activeCell.columnId);
-    if (rowIndex >= 0 && columnIndex >= 0) {
+    const rowIndex = rowIndexById.get(activeCell.rowId);
+    const columnIndex = columnIndexById.get(activeCell.columnId);
+    if (rowIndex !== undefined && columnIndex !== undefined) {
       ensureCellVisible(rowIndex, columnIndex);
     }
     const activeElement = document.getElementById(gridCellDomId(idPrefix, activeCell));
@@ -256,12 +264,12 @@ export function gridLiveRegionDomId(idPrefix: string): string {
 }
 
 function resolveActiveCell(
-  selection: TableSelection | null,
-  rowIds: readonly string[],
-  columnIds: readonly string[]
+  candidate: TableCellRef | null,
+  rowIndexById: ReadonlyMap<string, number>,
+  columnIndexById: ReadonlyMap<string, number>
 ): TableCellRef | null {
-  if (selection && rowIds.includes(selection.focus.rowId) && columnIds.includes(selection.focus.columnId)) {
-    return selection.focus;
+  if (candidate && rowIndexById.has(candidate.rowId) && columnIndexById.has(candidate.columnId)) {
+    return candidate;
   }
   return null;
 }
