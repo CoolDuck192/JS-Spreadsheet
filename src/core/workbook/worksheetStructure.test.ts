@@ -124,6 +124,109 @@ function withCrossSheetTable(workbook: WorkbookModel): WorkbookModel {
   };
 }
 
+function threeColumnCalculatedWorkbook(startColumn = 0): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-calculated",
+    name: "CalculatedTable",
+    sheetId: workbook.activeSheetId,
+    range: range(0, startColumn, 3, startColumn + 2),
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      {
+        id: "column-a",
+        name: "A",
+        sheetColumn: startColumn,
+        dataType: "text",
+        totalsLabel: "Total"
+      },
+      {
+        id: "column-b",
+        name: "B",
+        sheetColumn: startColumn + 1,
+        dataType: "number",
+        totalsFunction: "sum"
+      },
+      {
+        id: "column-c",
+        name: "C",
+        sheetColumn: startColumn + 2,
+        calculatedFormula: "=A2*2"
+      }
+    ],
+    rowIds: ["row-1", "row-2", "row-3"],
+    keyColumnId: "column-b",
+    sort: [{ columnId: "column-b", direction: "asc" }],
+    filter: {
+      kind: "logical",
+      operator: "and",
+      operands: [
+        {
+          kind: "comparison",
+          columnId: "column-a",
+          operator: "eq",
+          value: { type: "string", value: "keep" }
+        },
+        { kind: "blank", columnId: "column-b", operator: "isBlank" }
+      ]
+    }
+  };
+  return { ...workbook, tables: [table] };
+}
+
+function adjacentSingleColumnTables(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const table = (id: string, column: number): StructuredTable => ({
+    id,
+    name: id === "table-left" ? "LeftTable" : "RightTable",
+    sheetId: workbook.activeSheetId,
+    range: range(0, column, 2, column),
+    headerRow: true,
+    totalsRow: false,
+    columns: [{ id: `${id}-column`, name: "Value", sheetColumn: column }],
+    rowIds: [`${id}-row-1`, `${id}-row-2`]
+  });
+  return { ...workbook, tables: [table("table-left", 0), table("table-right", 1)] };
+}
+
+function tableStartingAtRowFive(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-row-guard",
+    name: "RowGuardTable",
+    sheetId: workbook.activeSheetId,
+    range: range(4, 0, 6, 1),
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "column-label", name: "Label", sheetColumn: 0 },
+      { id: "column-total", name: "Total", sheetColumn: 1, calculatedFormula: "=A6*2" }
+    ],
+    rowIds: ["row-1", "row-2"]
+  };
+  return { ...workbook, tables: [table] };
+}
+
+function calculatedFormulaWorkbook(formula: string): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-formulas",
+    name: "FormulaTable",
+    sheetId: workbook.activeSheetId,
+    range: range(0, 0, 3, 2),
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "source-a", name: "A", sheetColumn: 0 },
+      { id: "source-b", name: "B", sheetColumn: 1 },
+      { id: "calculated", name: "Calculated", sheetColumn: 2, calculatedFormula: formula }
+    ],
+    rowIds: ["formula-row-1", "formula-row-2", "formula-row-3"]
+  };
+  return { ...workbook, tables: [table] };
+}
+
 describe("worksheet structure reducer", () => {
   beforeEach(() => {
     services.createId.mockClear();
@@ -178,7 +281,7 @@ describe("worksheet structure reducer", () => {
     expect(getCellContent(result.workbook, sheetId, "B1")).toBe("Name");
   });
 
-  it("rejects table-owned sheets until table-aware editing is implemented", () => {
+  it("rejects generic row edits inside a structured table", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;
     const table: StructuredTable = {
@@ -196,7 +299,7 @@ describe("worksheet structure reducer", () => {
     const result = reduceWorksheetStructureCommand(workbook, {
       type: "rows.insert",
       sheetId,
-      index: 0,
+      index: 1,
       count: 1
     }, services);
 
@@ -206,7 +309,7 @@ describe("worksheet structure reducer", () => {
       workbook,
       issues: [{
         code: "TABLE_PARTIAL_STRUCTURAL_EDIT",
-        message: "Structured tables require table-aware structure editing"
+        message: "Worksheet row edits cannot change a structured table body"
       }]
     });
     expect(services.createId).not.toHaveBeenCalled();
@@ -520,5 +623,303 @@ describe("worksheet structure reducer", () => {
     expect(result.status).toBe("committed");
     if (result.status !== "committed") return;
     expect(getCellContent(result.workbook, workbook.activeSheetId, "I1")).toBe("=D2+G2");
+  });
+
+  it("deletes an internal table column and preserves surviving logical identities", () => {
+    const base = threeColumnCalculatedWorkbook();
+    const workbook = {
+      ...base,
+      tables: [{
+        ...base.tables[0],
+        columns: base.tables[0].columns.map((column) =>
+          column.id === "column-c" ? { ...column, calculatedFormula: "=C2*2" } : column
+        )
+      }]
+    };
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.delete", sheetId: workbook.activeSheetId, index: 1, count: 1
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    const table = result.workbook.tables[0];
+    expect(table.range).toEqual(range(0, 0, 3, 1));
+    expect(table.columns.map((column) => [column.id, column.sheetColumn])).toEqual([
+      ["column-a", 0], ["column-c", 1]
+    ]);
+    expect(table.columns[1]).toMatchObject({
+      id: "column-c",
+      name: "C",
+      calculatedFormula: "=B2*2"
+    });
+    expect(table.rowIds).toEqual(workbook.tables[0].rowIds);
+    expect(table.sort).toEqual([]);
+    expect(table.filter).toBeUndefined();
+    expect(table.keyColumnId).toBeUndefined();
+  });
+
+  it("rejects atomically when any affected table would lose every column", () => {
+    const workbook = adjacentSingleColumnTables();
+    const deletionServices = deterministicServices();
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.delete", sheetId: workbook.activeSheetId, index: 0, count: 2
+    }, deletionServices);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      issues: [{ code: "TABLE_PARTIAL_STRUCTURAL_EDIT" }]
+    });
+    expect(result.workbook).toBe(workbook);
+    expect(deletionServices.createId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      case: "wholly before a table",
+      workbook: threeColumnCalculatedWorkbook(3),
+      index: 0,
+      count: 2,
+      expectedRange: range(0, 1, 3, 3),
+      expectedColumns: [["column-a", 1], ["column-b", 2], ["column-c", 3]]
+    },
+    {
+      case: "wholly after a table",
+      workbook: threeColumnCalculatedWorkbook(),
+      index: 5,
+      count: 1,
+      expectedRange: range(0, 0, 3, 2),
+      expectedColumns: [["column-a", 0], ["column-b", 1], ["column-c", 2]]
+    },
+    {
+      case: "entering a table from the left",
+      workbook: threeColumnCalculatedWorkbook(2),
+      index: 1,
+      count: 2,
+      expectedRange: range(0, 1, 3, 2),
+      expectedColumns: [["column-b", 1], ["column-c", 2]]
+    },
+    {
+      case: "leaving a table to the right",
+      workbook: threeColumnCalculatedWorkbook(),
+      index: 1,
+      count: 3,
+      expectedRange: range(0, 0, 3, 0),
+      expectedColumns: [["column-a", 0]]
+    }
+  ])("deletes columns $case with half-open interval projection", ({
+    workbook, index, count, expectedRange, expectedColumns
+  }) => {
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.delete", sheetId: workbook.activeSheetId, index, count
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    expect(result.workbook.tables[0].range).toEqual(expectedRange);
+    expect(result.workbook.tables[0].columns.map((column) => [column.id, column.sheetColumn]))
+      .toEqual(expectedColumns);
+    expect(result.workbook.tables[0].rowIds).toEqual(workbook.tables[0].rowIds);
+  });
+
+  it("deletes columns spanning multiple tables without disturbing surviving identities", () => {
+    const workbook = structuredWorkbook();
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.delete", sheetId: workbook.activeSheetId, index: 1, count: 3
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    expect(result.workbook.tables.map((table) => table.range)).toEqual([
+      range(0, 0, 2, 0),
+      range(0, 1, 2, 1)
+    ]);
+    expect(result.workbook.tables.map((table) => table.columns.map((column) => [column.id, column.sheetColumn])))
+      .toEqual([
+        [["sales-region", 0]],
+        [["costs-value", 1]]
+      ]);
+    expect(result.workbook.tables[0]).toMatchObject({
+      rowIds: workbook.tables[0].rowIds,
+      keyColumnId: "sales-region",
+      filter: workbook.tables[0].filter,
+      sort: []
+    });
+  });
+
+  it("deletes only removed sort entries and retains a filter whose recursive leaves survive", () => {
+    const workbook = threeColumnCalculatedWorkbook();
+    const filter: StructuredTable["filter"] = {
+      kind: "logical",
+      operator: "or",
+      operands: [
+        {
+          kind: "comparison",
+          columnId: "column-a",
+          operator: "eq",
+          value: { type: "string", value: "A" }
+        },
+        { kind: "blank", columnId: "column-c", operator: "isNotBlank" }
+      ]
+    };
+    const table = {
+      ...workbook.tables[0],
+      sort: [
+        { columnId: "column-a", direction: "asc" as const },
+        { columnId: "column-b", direction: "desc" as const },
+        { columnId: "column-c", direction: "asc" as const }
+      ],
+      filter
+    };
+    const prepared = { ...workbook, tables: [table] };
+    const result = reduceWorksheetStructureCommand(prepared, {
+      type: "columns.delete", sheetId: prepared.activeSheetId, index: 1, count: 1
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    expect(result.workbook.tables[0].sort).toEqual([
+      { columnId: "column-a", direction: "asc" },
+      { columnId: "column-c", direction: "asc" }
+    ]);
+    expect(result.workbook.tables[0].filter).toBe(filter);
+  });
+
+  it("rejects a projected table overlap before mutating worksheet planes", () => {
+    const workbook = threeColumnCalculatedWorkbook();
+    const escapedColumnTable: StructuredTable = {
+      ...workbook.tables[0],
+      columns: [workbook.tables[0].columns[0], {
+        ...workbook.tables[0].columns[2],
+        sheetColumn: 4
+      }]
+    };
+    const neighbor: StructuredTable = {
+      id: "table-neighbor",
+      name: "NeighborTable",
+      sheetId: workbook.activeSheetId,
+      range: range(0, 3, 3, 3),
+      headerRow: true,
+      totalsRow: false,
+      columns: [{ id: "neighbor-column", name: "Neighbor", sheetColumn: 3 }],
+      rowIds: ["neighbor-row-1", "neighbor-row-2", "neighbor-row-3"]
+    };
+    const prepared = { ...workbook, tables: [escapedColumnTable, neighbor] };
+    const result = reduceWorksheetStructureCommand(prepared, {
+      type: "columns.delete", sheetId: prepared.activeSheetId, index: 1, count: 1
+    }, deterministicServices());
+
+    expect(result).toMatchObject({ status: "rejected", issues: [{ code: "TABLE_RANGE_OVERLAP" }] });
+    expect(result.workbook).toBe(prepared);
+  });
+
+  it("shifts tables for generic row edits before them and rejects edits inside them", () => {
+    const workbook = tableStartingAtRowFive();
+    const before = reduceWorksheetStructureCommand(workbook, {
+      type: "rows.insert", sheetId: workbook.activeSheetId, index: 2, count: 2
+    }, deterministicServices());
+    expect(before.status).toBe("committed");
+    if (before.status !== "committed") return;
+    expect(before.workbook.tables[0].range.start.row).toBe(6);
+    expect(before.workbook.tables[0].rowIds).toEqual(workbook.tables[0].rowIds);
+    expect(before.workbook.tables[0].columns[1].calculatedFormula).toBe("=A8*2");
+
+    const inside = reduceWorksheetStructureCommand(workbook, {
+      type: "rows.delete", sheetId: workbook.activeSheetId, index: 5, count: 1
+    }, deterministicServices());
+    expect(inside).toMatchObject({
+      status: "rejected",
+      issues: [{ code: "TABLE_PARTIAL_STRUCTURAL_EDIT" }]
+    });
+    expect(inside.workbook).toBe(workbook);
+  });
+
+  it.each([
+    { case: "inserts at the table start", type: "rows.insert" as const, index: 4, count: 1, start: 5 },
+    { case: "inserts after the table", type: "rows.insert" as const, index: 7, count: 2, start: 4 },
+    { case: "deletes wholly before the table", type: "rows.delete" as const, index: 1, count: 2, start: 2 },
+    { case: "deletes wholly after the table", type: "rows.delete" as const, index: 7, count: 1, start: 4 }
+  ])("allows a generic row edit that $case", ({ type, index, count, start }) => {
+    const workbook = tableStartingAtRowFive();
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type, sheetId: workbook.activeSheetId, index, count
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    expect(result.workbook.tables[0].range).toEqual(range(start, 0, start + 2, 1));
+    expect(result.workbook.tables[0].rowIds).toEqual(workbook.tables[0].rowIds);
+  });
+
+  it.each([
+    { case: "inserts inside the table", type: "rows.insert" as const, index: 5, count: 1 },
+    { case: "deletes into the table from above", type: "rows.delete" as const, index: 3, count: 2 },
+    { case: "deletes out of the table to below", type: "rows.delete" as const, index: 6, count: 2 }
+  ])("rejects atomically when a generic row edit $case", ({ type, index, count }) => {
+    const workbook = tableStartingAtRowFive();
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type, sheetId: workbook.activeSheetId, index, count
+    }, deterministicServices());
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      issues: [{ code: "TABLE_PARTIAL_STRUCTURAL_EDIT" }]
+    });
+    expect(result.workbook).toBe(workbook);
+  });
+
+  it("rewrites canonical calculated formulas before later row regeneration", () => {
+    const workbook = calculatedFormulaWorkbook("=B2*$C$2");
+    const inserted = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.insert", sheetId: workbook.activeSheetId, index: 1, count: 1
+    }, deterministicServices());
+
+    expect(inserted.status).toBe("committed");
+    if (inserted.status !== "committed") return;
+    expect(inserted.workbook.tables[0].columns.find((column) => column.id === "calculated")?.calculatedFormula)
+      .toBe("=C2*$D$2");
+  });
+
+  it("rewrites calculated formulas in every table while leaving non-formula metadata unchanged", () => {
+    const primary = calculatedFormulaWorkbook("=B2*$C$2");
+    const withOther = addSheet(primary, "Other");
+    const otherSheetId = withOther.activeSheetId;
+    const otherTable: StructuredTable = {
+      id: "table-other-formulas",
+      name: "OtherFormulaTable",
+      sheetId: otherSheetId,
+      range: range(0, 0, 2, 1),
+      headerRow: true,
+      totalsRow: false,
+      columns: [
+        {
+          id: "other-formula",
+          name: "Formula",
+          sheetColumn: 0,
+          calculatedFormula: "=Sheet1!B2+A2"
+        },
+        {
+          id: "other-text",
+          name: "Text",
+          sheetColumn: 1,
+          calculatedFormula: "B2"
+        }
+      ],
+      rowIds: ["other-row-1", "other-row-2"]
+    };
+    const workbook = {
+      ...withOther,
+      activeSheetId: primary.activeSheetId,
+      tables: [...primary.tables, otherTable]
+    };
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.insert", sheetId: primary.activeSheetId, index: 1, count: 1
+    }, deterministicServices());
+
+    expect(result.status).toBe("committed");
+    if (result.status !== "committed") return;
+    expect(result.workbook.tables[1].columns.map((column) => column.calculatedFormula)).toEqual([
+      "=Sheet1!C2+A2",
+      "B2"
+    ]);
   });
 });

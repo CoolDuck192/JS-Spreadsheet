@@ -1,6 +1,8 @@
 import type { CellRange, StructuredTable, StructuredTableColumn, WorkbookModel } from "../../types";
 import { formatCellAddress } from "../../lib/addressing";
+import { rewriteFormulaForStructure } from "../../lib/formulaReferences";
 import { shiftSheetStructurePlanes } from "../../lib/workbook";
+import type { FilterExpression } from "../../table/core/query";
 import type { TableIssue } from "../commands/types";
 import type { IdGenerator } from "../ids";
 import {
@@ -110,37 +112,30 @@ export function reduceWorksheetStructureCommand(
       "Protected sheets cannot change worksheet structure"
     );
   }
-  if (command.type === "columns.insert") {
-    const projection = projectColumnInsertion(workbook, command, services);
-    if (Array.isArray(projection)) {
-      return {
-        status: "rejected",
-        reason: "validation",
-        workbook,
-        issues: projection
-      };
-    }
-    const committedProjection = projection as StructureProjection;
-    const shifted = shiftSheetStructurePlanes(workbook, command.sheetId, operationFor(command));
+  const projection = command.type === "columns.insert"
+    ? projectColumnInsertion(workbook, command, services)
+    : command.type === "columns.delete"
+      ? projectColumnDeletion(workbook, command)
+      : projectRowOperation(workbook, command);
+  if (Array.isArray(projection)) {
     return {
-      status: "committed",
-      workbook: applyHeaderWrites(
-        { ...shifted, tables: [...committedProjection.tables] },
-        committedProjection.headerWrites
-      )
+      status: "rejected",
+      reason: "validation",
+      workbook,
+      issues: projection
     };
   }
-  if (workbook.tables.some((table) => table.sheetId === command.sheetId)) {
-    return rejected(
-      workbook,
-      "validation",
-      "TABLE_PARTIAL_STRUCTURAL_EDIT",
-      "Structured tables require table-aware structure editing"
-    );
-  }
+  const committedProjection = projection as StructureProjection;
+  const operation = operationFor(command);
+  const shifted = shiftSheetStructurePlanes(workbook, command.sheetId, operation);
+  const withProjectedTables = rewriteCalculatedFormulaMetadata(
+    { ...shifted, tables: [...committedProjection.tables] },
+    sheet.name,
+    operation
+  );
   return {
     status: "committed",
-    workbook: shiftSheetStructurePlanes(workbook, command.sheetId, operationFor(command))
+    workbook: applyHeaderWrites(withProjectedTables, committedProjection.headerWrites)
   };
 }
 
@@ -256,6 +251,127 @@ function projectColumnInsertion(
   return { tables, headerWrites };
 }
 
+function projectColumnDeletion(
+  workbook: WorkbookModel,
+  command: Extract<WorksheetStructureCommand, { type: "columns.delete" }>
+): StructureProjection | readonly TableIssue[] {
+  const deleteStart = command.index;
+  const deleteEnd = command.index + command.count;
+  const tables: StructuredTable[] = [];
+
+  for (const table of workbook.tables) {
+    if (table.sheetId !== command.sheetId) {
+      tables.push(table);
+      continue;
+    }
+    const tableStart = table.range.start.column;
+    const tableEnd = table.range.end.column + 1;
+    if (deleteEnd <= tableStart) {
+      tables.push({
+        ...table,
+        range: shiftRangeColumns(table.range, -command.count),
+        columns: table.columns.map((column) => ({
+          ...column,
+          sheetColumn: column.sheetColumn - command.count
+        }))
+      });
+      continue;
+    }
+    if (deleteStart >= tableEnd) {
+      tables.push(table);
+      continue;
+    }
+
+    const columns = table.columns
+      .filter((column) => column.sheetColumn < deleteStart || column.sheetColumn >= deleteEnd)
+      .map((column) => ({
+        ...column,
+        sheetColumn: column.sheetColumn >= deleteEnd
+          ? column.sheetColumn - command.count
+          : column.sheetColumn
+      }));
+    if (columns.length === 0) {
+      return [structureIssue(
+        "TABLE_PARTIAL_STRUCTURAL_EDIT",
+        "Worksheet column deletion cannot remove every structured table column"
+      )];
+    }
+
+    const survivingIds = new Set(columns.map((column) => column.id));
+    const keyColumnId = table.keyColumnId && survivingIds.has(table.keyColumnId)
+      ? table.keyColumnId
+      : undefined;
+    const sort = table.sort?.filter((entry) => survivingIds.has(entry.columnId));
+    const filter = table.filter && filterUsesOnlyColumns(table.filter, survivingIds)
+      ? table.filter
+      : undefined;
+    const startColumn = Math.min(...columns.map((column) => column.sheetColumn));
+    const endColumn = Math.max(...columns.map((column) => column.sheetColumn));
+    const { keyColumnId: _key, sort: _sort, filter: _filter, ...base } = table;
+    tables.push({
+      ...base,
+      range: {
+        start: { ...table.range.start, column: startColumn },
+        end: { ...table.range.end, column: endColumn }
+      },
+      columns,
+      ...(keyColumnId === undefined ? {} : { keyColumnId }),
+      ...(sort === undefined ? {} : { sort }),
+      ...(filter === undefined ? {} : { filter })
+    });
+  }
+
+  if (tablesOverlap(tables)) {
+    return [structureIssue("TABLE_RANGE_OVERLAP", "Projected structured table ranges cannot overlap")];
+  }
+  return { tables, headerWrites: [] };
+}
+
+function projectRowOperation(
+  workbook: WorkbookModel,
+  command: Extract<WorksheetStructureCommand, { type: "rows.insert" | "rows.delete" }>
+): StructureProjection | readonly TableIssue[] {
+  const tables: StructuredTable[] = [];
+  for (const table of workbook.tables) {
+    if (table.sheetId !== command.sheetId) {
+      tables.push(table);
+      continue;
+    }
+
+    const tableStart = table.range.start.row;
+    const tableEnd = table.range.end.row;
+    if (command.type === "rows.insert") {
+      if (command.index <= tableStart) {
+        tables.push({ ...table, range: shiftRangeRows(table.range, command.count) });
+        continue;
+      }
+      if (command.index >= tableEnd + 1) {
+        tables.push(table);
+        continue;
+      }
+    } else {
+      const deleteEnd = command.index + command.count;
+      if (deleteEnd <= tableStart) {
+        tables.push({ ...table, range: shiftRangeRows(table.range, -command.count) });
+        continue;
+      }
+      if (command.index > tableEnd) {
+        tables.push(table);
+        continue;
+      }
+    }
+    return [structureIssue(
+      "TABLE_PARTIAL_STRUCTURAL_EDIT",
+      "Worksheet row edits cannot change a structured table body"
+    )];
+  }
+
+  if (tablesOverlap(tables)) {
+    return [structureIssue("TABLE_RANGE_OVERLAP", "Projected structured table ranges cannot overlap")];
+  }
+  return { tables, headerWrites: [] };
+}
+
 function planColumnInsertion(
   table: StructuredTable,
   command: Extract<WorksheetStructureCommand, { type: "columns.insert" }>,
@@ -325,12 +441,32 @@ function shiftRangeColumns(range: CellRange, count: number): CellRange {
   };
 }
 
+function shiftRangeRows(range: CellRange, count: number): CellRange {
+  return {
+    start: { ...range.start, row: range.start.row + count },
+    end: { ...range.end, row: range.end.row + count }
+  };
+}
+
 function projectedTablesOverlap(plans: readonly ColumnInsertionPlan[]): boolean {
   for (let leftIndex = 0; leftIndex < plans.length; leftIndex += 1) {
     const left = plans[leftIndex];
     for (let rightIndex = leftIndex + 1; rightIndex < plans.length; rightIndex += 1) {
       const right = plans[rightIndex];
       if (left.table.sheetId === right.table.sheetId && rangesIntersect(left.range, right.range)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function tablesOverlap(tables: readonly StructuredTable[]): boolean {
+  for (let leftIndex = 0; leftIndex < tables.length; leftIndex += 1) {
+    const left = tables[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < tables.length; rightIndex += 1) {
+      const right = tables[rightIndex];
+      if (left.sheetId === right.sheetId && rangesIntersect(left.range, right.range)) {
         return true;
       }
     }
@@ -365,6 +501,47 @@ function applyHeaderWrites(workbook: WorkbookModel, writes: readonly HeaderWrite
       return { ...sheet, cells };
     })
   };
+}
+
+function filterUsesOnlyColumns(
+  filter: FilterExpression,
+  survivingIds: ReadonlySet<string>
+): boolean {
+  if (filter.kind === "logical") {
+    return filter.operands.every((operand) => filterUsesOnlyColumns(operand, survivingIds));
+  }
+  if (filter.kind === "not") {
+    return filterUsesOnlyColumns(filter.operand, survivingIds);
+  }
+  return survivingIds.has(filter.columnId);
+}
+
+function rewriteCalculatedFormulaMetadata(
+  workbook: WorkbookModel,
+  editedSheetName: string,
+  operation: ReturnType<typeof operationFor>
+): WorkbookModel {
+  let changed = false;
+  const tables = workbook.tables.map((table) => {
+    const owningSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId);
+    if (!owningSheet) return table;
+    let tableChanged = false;
+    const columns = table.columns.map((column) => {
+      if (column.calculatedFormula === undefined) return column;
+      const calculatedFormula = rewriteFormulaForStructure(column.calculatedFormula, {
+        formulaSheetName: owningSheet.name,
+        editedSheetName,
+        ...operation
+      });
+      if (calculatedFormula === column.calculatedFormula) return column;
+      tableChanged = true;
+      return { ...column, calculatedFormula };
+    });
+    if (!tableChanged) return table;
+    changed = true;
+    return { ...table, columns };
+  });
+  return changed ? { ...workbook, tables } : workbook;
 }
 
 function structureIssue(code: WorksheetStructureIssueCode, message: string): TableIssue {

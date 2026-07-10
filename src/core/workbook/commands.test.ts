@@ -213,6 +213,52 @@ describe("WorkbookCommand", () => {
     expect(getCellContent(result.workbook, sheetId, "B1")).toBe("Name");
   });
 
+  it("keeps canonical calculated formulas through dispatched row insertion and sorting", () => {
+    const workbook = calculatedDispatchWorkbook();
+    const insertedColumn = apply(workbook, {
+      type: "columns.insert",
+      sheetId: workbook.activeSheetId,
+      index: 1,
+      count: 1
+    });
+
+    expect(insertedColumn.status).toBe("applied");
+    if (insertedColumn.status !== "applied") return;
+    expect(insertedColumn.workbook.tables[0].columns.find((column) => column.id === "column-total")?.calculatedFormula)
+      .toBe("=C2*$D$2");
+
+    const insertedRow = apply(insertedColumn.workbook, {
+      type: "table.insertRows",
+      tableId: "table-calculated-dispatch",
+      count: 1,
+      beforeRowId: "row-2"
+    });
+    expect(insertedRow.status).toBe("applied");
+    if (insertedRow.status !== "applied") return;
+    expect(["F2", "F3", "F4"].map((address) =>
+      getCellContent(insertedRow.workbook, "sheet-1", address)
+    )).toEqual([
+      "=C2*$D$2",
+      "=C3*$D$2",
+      "=C4*$D$2"
+    ]);
+
+    const sorted = apply(insertedRow.workbook, {
+      type: "table.sort",
+      tableId: "table-calculated-dispatch",
+      sorting: [{ columnId: "column-key", direction: "asc", nulls: "last" }]
+    });
+    expect(sorted.status).toBe("applied");
+    if (sorted.status !== "applied") return;
+    expect(["F2", "F3", "F4"].map((address) =>
+      getCellContent(sorted.workbook, "sheet-1", address)
+    )).toEqual([
+      "=C2*$D$2",
+      "=C3*$D$2",
+      "=C4*$D$2"
+    ]);
+  });
+
   it("clears and replaces direct formats without removing conditional formats", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
@@ -376,6 +422,43 @@ describe("WorkbookCommand", () => {
     expect(result.workbook.sheets[1].freezeTopRow).toBe(true);
   });
 });
+
+function calculatedDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-calculated-dispatch",
+    name: "CalculatedDispatchTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 0, column: 0 }, end: { row: 2, column: 4 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "column-key", name: "Key", sheetColumn: 0 },
+      { id: "column-b", name: "B", sheetColumn: 1 },
+      { id: "column-c", name: "C", sheetColumn: 2 },
+      { id: "column-d", name: "D", sheetColumn: 3 },
+      {
+        id: "column-total",
+        name: "Total",
+        sheetColumn: 4,
+        calculatedFormula: "=B2*$C$2"
+      }
+    ],
+    rowIds: ["row-1", "row-2"]
+  };
+  return {
+    ...workbook,
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A1: "Key", B1: "B", C1: "C", D1: "D", E1: "Total",
+        A2: "B", B2: 2, C2: 3, D2: 4, E2: "=B2*$C$2",
+        A3: "A", B3: 5, C3: 3, D3: 6, E3: "=B3*$C$2"
+      }
+    }]
+  };
+}
 
 function apply(workbook: ReturnType<typeof createBlankWorkbook>, command: WorkbookCommand) {
   return applyWorkbookMutation(workbook, command, {
