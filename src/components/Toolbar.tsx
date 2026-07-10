@@ -62,6 +62,7 @@ import {
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { BorderPreset, CellFormat, SelectionFormatSummary } from "../types";
 import type { AutoFunctionName } from "../lib/autoSum";
+import type { WorkbookFeatureConfiguration } from "../App";
 
 const MIXED_SELECT_VALUE = "__mixed__";
 
@@ -132,6 +133,7 @@ const RIBBON_TABS = [
 type RibbonTabId = (typeof RIBBON_TABS)[number]["id"];
 
 type ToolbarProps = {
+  features?: WorkbookFeatureConfiguration;
   canUndo: boolean;
   canRedo: boolean;
   activeFormat: CellFormat;
@@ -345,11 +347,21 @@ function WorkbookGroup(props: ToolbarProps) {
   return (
     <ToolbarGroup label="Workbook">
       <ToolbarButton label="New workbook" onClick={props.onNew} icon={<FilePlus />} />
-      <ToolbarButton label="Import CSV" onClick={props.onImport} icon={<Upload />} />
-      <ToolbarButton label="Export CSV" onClick={props.onExport} icon={<Download />} />
-      <ToolbarButton label="Import XLSX" onClick={props.onImportXlsx} icon={<Upload />} />
-      <ToolbarButton label="Export XLSX" onClick={props.onExportXlsx} icon={<Download />} />
-      <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Cloud />} />
+      {props.features?.import !== false ? (
+        <>
+          <ToolbarButton label="Import CSV" onClick={props.onImport} icon={<Upload />} />
+          <ToolbarButton label="Import XLSX" onClick={props.onImportXlsx} icon={<Upload />} />
+        </>
+      ) : null}
+      {props.features?.export !== false ? (
+        <>
+          <ToolbarButton label="Export CSV" onClick={props.onExport} icon={<Download />} />
+          <ToolbarButton label="Export XLSX" onClick={props.onExportXlsx} icon={<Download />} />
+        </>
+      ) : null}
+      {props.features?.googleSheets !== false ? (
+        <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Cloud />} />
+      ) : null}
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
     </ToolbarGroup>
   );
@@ -481,9 +493,9 @@ function InsertGroup(props: ToolbarProps) {
       <ToolbarGroup label="Tables">
         <ToolbarButton label="Pivot table" onClick={props.onPivot} icon={<TableProperties />} expanded={props.pivotPanelOpen} compact />
       </ToolbarGroup>
-      <ToolbarGroup label="Charts">
+      {props.features?.charts !== false ? <ToolbarGroup label="Charts">
         <ToolbarButton label="Chart" onClick={props.onChart} icon={<ChartColumn />} expanded={props.chartPanelOpen} compact />
-      </ToolbarGroup>
+      </ToolbarGroup> : null}
       <ToolbarGroup label="Links">
         <ToolbarButton label="Link" onClick={props.onLink} icon={<Link />} shortcut="Control+K" compact />
         <ToolbarButton label="Comment" onClick={props.onComment} icon={<MessageSquare />} compact />

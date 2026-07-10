@@ -7,8 +7,42 @@
  * headless workbook/engine/io functions for programmatic use.
  */
 
-export { default } from "./App";
-export { default as Spreadsheet } from "./App";
+export { default, Spreadsheet } from "./react/Spreadsheet";
+export type {
+  SpreadsheetCommonProps,
+  SpreadsheetErrorEvent,
+  SpreadsheetProps,
+  WorkbookChangeEvent,
+  WorkbookFeatureConfiguration,
+  WorkbookStorage,
+  WorkbookThemeToken
+} from "./react/Spreadsheet";
+export { useWorkbookSession } from "./react/useWorkbookSession";
+export type {
+  UseWorkbookSessionCommonOptions,
+  UseWorkbookSessionOptions
+} from "./react/useWorkbookSession";
+export {
+  WorkbookSessionProvider,
+  useWorkbookSessionContext
+} from "./react/WorkbookSessionContext";
+export {
+  createWorkbookSession,
+  type CreateWorkbookSessionOptions,
+  type WorkbookCommandResult,
+  type WorkbookDiagnosticEvent,
+  type WorkbookSession,
+  type WorkbookSnapshot
+} from "./core/workbook/WorkbookSession";
+export type {
+  SpreadsheetServices,
+  TokenProvider as WorkbookTokenProvider,
+  WorkbookExportArtifact,
+  WorkbookExporter,
+  WorkbookImporter,
+  WorkbookImportPayload,
+  WorkbookServiceOptions
+} from "./core/workbook/services";
 
 export type {
   CellContent,

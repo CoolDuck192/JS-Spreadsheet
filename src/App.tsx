@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties
+} from "react";
 import { ChartPanel } from "./components/ChartPanel";
 import { CellContextMenu } from "./components/CellContextMenu";
 import { ConditionalFormattingPanel } from "./components/ConditionalFormattingPanel";
@@ -53,7 +61,6 @@ import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth
 import { importWorkbookFromGoogleSheets } from "./lib/googleSheets";
 import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
-import { loadWorkbook, saveWorkbook } from "./lib/persistence";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
 import { validateCellCandidate, type ValidationCandidate } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
@@ -134,16 +141,24 @@ import {
 } from "./lib/workbook";
 import type { FormulaEngine } from "./lib/formulaEngine";
 import type { PasteRichRangeOptions, RichClipboardRange, RichPasteMode } from "./lib/workbook";
+import type {
+  WorkbookCommandResult,
+  WorkbookDiagnosticEvent,
+  WorkbookSession
+} from "./core/workbook/WorkbookSession";
+import type { WorkbookCommand } from "./core/workbook/commands";
+import type {
+  SpreadsheetServices,
+  WorkbookExportArtifact,
+  WorkbookExporter,
+  WorkbookImporter
+} from "./core/workbook/services";
+import { useWorkbookSession } from "./react/useWorkbookSession";
 
 const INITIAL_SELECTION: CellRange = {
   start: { row: 0, column: 0 },
   end: { row: 0, column: 0 }
 };
-const AUTOSAVE_DEBOUNCE_MS = 300;
-// ~100k populated cells serialize to several MB — past most browsers' localStorage
-// quota, and the JSON.stringify alone would stall every edit.
-const AUTOSAVE_CELL_LIMIT = 100_000;
-
 let googleTokenProvider: TokenProvider | null = null;
 function getGoogleTokenProvider(clientId: string): TokenProvider {
   googleTokenProvider ??= createBrowserTokenProvider(clientId);
@@ -165,9 +180,180 @@ type FormatPainterState = {
   format: CellFormat;
 };
 
-export default function App() {
-  const [history, setHistory] = useState(() => createHistory(readInitialWorkbook()));
-  const [selection, setSelection] = useState<CellRange>(INITIAL_SELECTION);
+export type WorkbookStorage = {
+  load(): WorkbookModel | null | Promise<WorkbookModel | null>;
+  save(workbook: WorkbookModel): void | Promise<void>;
+  clear?(): void | Promise<void>;
+};
+
+export type WorkbookFeatureConfiguration = Readonly<{
+  toolbar?: boolean;
+  formulaBar?: boolean;
+  sheetTabs?: boolean;
+  import?: boolean;
+  export?: boolean;
+  charts?: boolean;
+  structuredTables?: boolean;
+  googleSheets?: boolean;
+}>;
+
+export type WorkbookThemeToken =
+  | "font-family"
+  | "font-size"
+  | "surface"
+  | "surface-muted"
+  | "text"
+  | "text-muted"
+  | "border"
+  | "accent"
+  | "accent-contrast"
+  | "selection"
+  | "danger";
+
+export type WorkbookChangeEvent = Readonly<{
+  workbook: WorkbookModel;
+  revision: string;
+  previousRevision: string;
+  origin: "command" | "undo" | "redo" | "import" | "external" | "storage";
+  commandId?: string;
+}>;
+
+export type SpreadsheetErrorEvent = Readonly<{
+  code: string;
+  message: string;
+  recoverable: boolean;
+}>;
+
+export type SpreadsheetCommonProps = Readonly<{
+  className?: string;
+  style?: CSSProperties;
+  features?: WorkbookFeatureConfiguration;
+  services?: SpreadsheetServices;
+  theme?: Partial<Record<WorkbookThemeToken, string>>;
+  onDiagnostic?: (event: WorkbookDiagnosticEvent) => void;
+  onCommandResult?: (event: Readonly<{
+    command: WorkbookCommand;
+    result: WorkbookCommandResult;
+  }>) => void;
+  onWorkbookChangeEvent?: (event: WorkbookChangeEvent) => void;
+  onError?: (event: SpreadsheetErrorEvent) => void;
+}>;
+
+export type SpreadsheetProps = SpreadsheetCommonProps & (
+  | {
+      session: WorkbookSession;
+      workbook?: never;
+      defaultWorkbook?: never;
+      onWorkbookChange?: never;
+      storage?: never;
+    }
+  | {
+      workbook: WorkbookModel;
+      onWorkbookChange(workbook: WorkbookModel): void;
+      session?: never;
+      defaultWorkbook?: never;
+      storage?: WorkbookStorage | false;
+    }
+  | {
+      defaultWorkbook?: WorkbookModel;
+      session?: never;
+      workbook?: never;
+      onWorkbookChange?: never;
+      storage?: WorkbookStorage | false;
+    }
+);
+
+type SpreadsheetWorkbookProps = SpreadsheetCommonProps & {
+  session: WorkbookSession;
+  suppliedSession: boolean;
+};
+
+export function Spreadsheet(props: SpreadsheetProps) {
+  if (props.session) {
+    return <SuppliedSpreadsheet {...props} session={props.session} />;
+  }
+  return <OwnedSpreadsheet {...props} />;
+}
+
+function SuppliedSpreadsheet(
+  props: Extract<SpreadsheetProps, { session: WorkbookSession }>
+) {
+  const onCommandResultRef = useRef(props.onCommandResult);
+  onCommandResultRef.current = props.onCommandResult;
+  const session = useMemo<WorkbookSession>(() => ({
+    getSnapshot: props.session.getSnapshot,
+    getCellEvaluation: props.session.getCellEvaluation,
+    subscribe: props.session.subscribe,
+    subscribeDiagnostics: props.session.subscribeDiagnostics,
+    dispatch(commandOrEnvelope) {
+      const result = props.session.dispatch(commandOrEnvelope);
+      invokeHostCallback(onCommandResultRef.current, {
+        command: "intent" in commandOrEnvelope ? commandOrEnvelope.intent : commandOrEnvelope,
+        result
+      });
+      return result;
+    },
+    replaceWorkbook(workbook, options) {
+      const command: WorkbookCommand = {
+        type: "workbook.replace",
+        workbook,
+        history: options?.history === "preserve" ? "commit" : "reset"
+      };
+      const result = props.session.replaceWorkbook(workbook, options);
+      invokeHostCallback(onCommandResultRef.current, { command, result });
+      return result;
+    },
+    // This facade is view-local. Ownership always remains with the host.
+    destroy() {}
+  }), [props.session]);
+  return <SpreadsheetWorkbook {...props} session={session} suppliedSession />;
+}
+
+function OwnedSpreadsheet(
+  props: Extract<SpreadsheetProps, { session?: never }>
+) {
+  const session = useWorkbookSession(props.workbook !== undefined
+    ? {
+        workbook: props.workbook,
+        onWorkbookChange: props.onWorkbookChange,
+        storage: props.storage,
+        services: props.services,
+        onDiagnostic: props.onDiagnostic,
+        onCommandResult: props.onCommandResult,
+        onWorkbookChangeEvent: props.onWorkbookChangeEvent,
+        onError: props.onError
+      }
+    : {
+        defaultWorkbook: props.defaultWorkbook,
+        storage: props.storage,
+        services: props.services,
+        onDiagnostic: props.onDiagnostic,
+        onCommandResult: props.onCommandResult,
+        onWorkbookChangeEvent: props.onWorkbookChangeEvent,
+        onError: props.onError
+      });
+  return <SpreadsheetWorkbook {...props} session={session} suppliedSession={false} />;
+}
+
+function SpreadsheetWorkbook({
+  session,
+  suppliedSession,
+  className,
+  style,
+  features,
+  services,
+  theme,
+  onDiagnostic,
+  onWorkbookChangeEvent,
+  onError
+}: SpreadsheetWorkbookProps) {
+  const sessionSnapshot = useSyncExternalStore(
+    session.subscribe,
+    session.getSnapshot,
+    session.getSnapshot
+  );
+  const [history, setHistory] = useState(() => createHistory(sessionSnapshot.workbook));
+  const [selection, setSelection] = useState<CellRange>(sessionSnapshot.selection);
   const [editingCell, setEditingCell] = useState<{ address: string; value: string } | null>(null);
   const [formulaDraft, setFormulaDraft] = useState("");
   const [nameBoxDraft, setNameBoxDraft] = useState("");
@@ -212,6 +398,53 @@ export default function App() {
     gridApiRef.current = api;
   }, []);
 
+  const lastSuppliedEventSnapshot = useRef(sessionSnapshot);
+  useEffect(() => {
+    if (!suppliedSession) {
+      return;
+    }
+    return session.subscribeDiagnostics((event) => {
+      invokeHostCallback(onDiagnostic, event);
+      const previous = lastSuppliedEventSnapshot.current;
+      const next = session.getSnapshot();
+      lastSuppliedEventSnapshot.current = next;
+      if (previous.revision === next.revision || previous.workbook === next.workbook) {
+        return;
+      }
+      invokeHostCallback(onWorkbookChangeEvent, {
+        workbook: next.workbook,
+        revision: next.revision,
+        previousRevision: previous.revision,
+        origin: diagnosticOrigin(event),
+        ...(event.commandId ? { commandId: event.commandId } : {})
+      });
+    });
+  }, [onDiagnostic, onWorkbookChangeEvent, session, suppliedSession]);
+
+  const validatedServices = useRef(false);
+  useEffect(() => {
+    if (validatedServices.current) {
+      return;
+    }
+    validatedServices.current = true;
+    if (hasInvalidServiceRegistry(services?.importers) || hasInvalidServiceRegistry(services?.exporters)) {
+      invokeHostCallback(onError, {
+        code: "service.registry.invalid",
+        message: "A workbook service registry contains an invalid key",
+        recoverable: true
+      });
+    }
+  }, [onError, services]);
+
+  useEffect(() => {
+    if (history.present === sessionSnapshot.workbook) {
+      return;
+    }
+    setHistory(createHistory(sessionSnapshot.workbook));
+    setSelection(sessionSnapshot.selection);
+    setEditingCell(null);
+  }, [history.present, sessionSnapshot.revision, sessionSnapshot.selection, sessionSnapshot.workbook]);
+
   const workbook = history.present;
   const activeSheet = getActiveSheet(workbook);
   const freezeTopRow = Boolean(activeSheet.freezeTopRow);
@@ -221,28 +454,20 @@ export default function App() {
     () => getNamedRangeForSelection(workbook, activeSheet.id, selection)?.name ?? formatSelectionAddress(selection),
     [activeSheet.id, selection, workbook]
   );
-  const formulaEngineRef = useRef<FormulaEngine | null>(null);
-  // Deliberate render-phase sync: update() is an idempotent diff (same workbook →
-  // no-op), so useMemo recomputes/discards and StrictMode double-invokes are safe,
-  // and the grid must read the NEW workbook's values in the same render — an
-  // effect-based update would leave the tree stale with no re-render to fix it
-  // (the engine's identity never changes). Revisit with useSyncExternalStore when
-  // the component is extracted for embedding.
-  const formulaEngine = useMemo(() => {
-    if (formulaEngineRef.current === null) {
-      formulaEngineRef.current = createFormulaEngine(workbook);
-    } else {
-      formulaEngineRef.current.update(workbook);
-    }
-    return formulaEngineRef.current;
-  }, [workbook]);
-
-  useEffect(() => {
-    const engine = formulaEngineRef.current;
-    // Release HyperFormula resources on unmount. The engine self-revives if a
-    // StrictMode simulated remount keeps using this instance.
-    return () => engine?.destroy();
-  }, []);
+  const workbookRef = useRef(workbook);
+  workbookRef.current = workbook;
+  const formulaEngine = useMemo<FormulaEngine>(() => ({
+    getComputedValue: session.getCellEvaluation,
+    getDisplayValue(sheetId, address) {
+      return displaySessionValue(session.getCellEvaluation(sheetId, address));
+    },
+    getRawContent(sheetId, address) {
+      return getCellContent(workbookRef.current, sheetId, address);
+    },
+    update() {},
+    rebuild() {},
+    destroy() {}
+  }), [session]);
   const activeFormat = getCellFormat(workbook, activeSheet.id, activeAddress);
   // Ribbon state reflects the WHOLE selection, Excel-style: a control shows a
   // concrete value when every selected cell agrees and "mixed" otherwise.
@@ -273,29 +498,6 @@ export default function App() {
     () => summarizeSelection(activeSheet, selection, formulaEngine),
     [activeSheet, formulaEngine, selection]
   );
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      // Serializing a huge workbook costs ~1s per edit and exceeds localStorage
-      // quota anyway; skip autosave beyond the threshold instead of stalling
-      // every commit. Export to .xlsx is the durable path for datasets that big.
-      let populatedCells = 0;
-      for (const sheet of workbook.sheets) {
-        for (const address in sheet.cells) {
-          void address;
-          populatedCells += 1;
-          if (populatedCells > AUTOSAVE_CELL_LIMIT) {
-            setStatus("Workbook too large for browser autosave — use Export XLSX to save");
-            return;
-          }
-        }
-      }
-      if (!saveWorkbook(window.localStorage, workbook)) {
-        setStatus("Autosave failed — browser storage is full");
-      }
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [workbook]);
 
   useEffect(() => {
     const raw = getCellContent(workbook, activeSheet.id, activeAddress);
@@ -334,12 +536,27 @@ export default function App() {
     if (nextHistory === history) {
       return;
     }
+    const result = session.dispatch({
+      type: "workbook.replace",
+      workbook: nextWorkbook,
+      history: "commit"
+    });
+    if (result.status !== "committed") {
+      setStatus("Workbook change was rejected");
+      return;
+    }
     setHistory(nextHistory);
     setStatus(nextStatus);
   }
 
   function applyHistoryTransition(nextHistory: HistoryState, nextStatus: string) {
     if (nextHistory === history) {
+      return;
+    }
+    const result = session.dispatch({
+      type: nextStatus === "Undone" ? "history.undo" : "history.redo"
+    });
+    if (result.status !== "committed") {
       return;
     }
     setHistory(nextHistory);
@@ -422,6 +639,11 @@ export default function App() {
 
   function selectNamedRange(namedRange: NamedRange) {
     const nextWorkbook = setActiveSheet(workbook, namedRange.sheetId);
+    session.dispatch({
+      type: "workbook.replace",
+      workbook: nextWorkbook,
+      history: "commit"
+    });
     setHistory({ ...history, present: nextWorkbook });
     const normalizedTarget = normalizeRange(namedRange.range);
     setSelection(normalizedTarget);
@@ -2003,6 +2225,7 @@ export default function App() {
 
   function handleNewWorkbook() {
     const next = createBlankWorkbook();
+    session.dispatch({ type: "workbook.replace", workbook: next, history: "reset" });
     setHistory(createHistory(next));
     setPivotDrillDowns({});
     setSelection(INITIAL_SELECTION);
@@ -2017,21 +2240,33 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const rows = parseCsv(String(reader.result ?? ""));
-        setHistory((current) => commitHistory(current, replaceActiveSheetWithRows(current.present, rows)));
+      const text = String(reader.result ?? "");
+      const importer = services?.importers?.csv;
+      Promise.resolve().then(() => importer
+        ? importer.import({ kind: "text", text, fileName: file.name })
+        : replaceActiveSheetWithRows(session.getSnapshot().workbook, parseCsv(text)))
+        .then((nextWorkbook) => {
+        session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
+        setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : "CSV import failed");
-      }
+        })
+        .catch(() => reportServiceFailure("service.import.csv.failed", "CSV import failed"));
     };
     reader.readAsText(file);
   }
 
   function handleExportCsv() {
+    const exporter = services?.exporters?.csv;
+    if (exporter) {
+      Promise.resolve().then(() => exporter.export(workbook)).then((artifact) => {
+        downloadWorkbookArtifact(artifact);
+        setStatus("Exported CSV");
+      }).catch(() => reportServiceFailure("service.export.csv.failed", "CSV export failed"));
+      return;
+    }
     const csv = serializeCsv(activeSheetToRows(activeSheet));
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -2051,16 +2286,22 @@ export default function App() {
     file
       .arrayBuffer()
       .then(async (buffer) => {
-        const nextWorkbook = await importWorkbookFromXlsx(buffer);
+        const importer = services?.importers?.xlsx;
+        const nextWorkbook = importer
+          ? await importer.import({
+              kind: "bytes",
+              bytes: new Uint8Array(buffer),
+              fileName: file.name
+            })
+          : await importWorkbookFromXlsx(buffer);
+        session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
         setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Imported ${file.name}`);
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "XLSX import failed");
-      });
+      .catch(() => reportServiceFailure("service.import.xlsx.failed", "XLSX import failed"));
   }
 
   function handleImportGoogleSheet() {
@@ -2075,35 +2316,45 @@ export default function App() {
       return;
     }
 
+    let tokenProvider: TokenProvider;
+    try {
+      tokenProvider = services?.googleTokenProviderFactory?.(clientId) ?? getGoogleTokenProvider(clientId);
+    } catch {
+      reportServiceFailure("service.google.auth.failed", "Google Sheets connection failed");
+      return;
+    }
     setStatus("Connecting to Google Sheets…");
-    importWorkbookFromGoogleSheets(input, getGoogleTokenProvider(clientId))
+    importWorkbookFromGoogleSheets(input, tokenProvider)
       .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
+        session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
         setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
         setStatus(`Linked ${spreadsheetTitle}`);
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "Google Sheets import failed");
-      });
+      .catch(() => reportServiceFailure("service.google.import.failed", "Google Sheets import failed"));
   }
 
   function handleExportXlsx() {
-    exportWorkbookToXlsx(workbook)
-      .then((bytes) => {
-        const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = "spreadsheet.xlsx";
-        anchor.click();
-        URL.revokeObjectURL(url);
+    const exporter = services?.exporters?.xlsx;
+    Promise.resolve().then(async () => exporter
+      ? exporter.export(workbook)
+      : {
+          bytes: new Uint8Array(await exportWorkbookToXlsx(workbook)),
+          mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          fileName: "spreadsheet.xlsx"
+        })
+      .then((artifact) => {
+        downloadWorkbookArtifact(artifact);
         setStatus("Exported XLSX");
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "XLSX export failed");
-      });
+      .catch(() => reportServiceFailure("service.export.xlsx.failed", "XLSX export failed"));
+  }
+
+  function reportServiceFailure(code: string, message: string) {
+    setStatus(message);
+    invokeHostCallback(onError, { code, message, recoverable: true });
   }
 
   function handlePrintWorkbook() {
@@ -2237,6 +2488,9 @@ export default function App() {
   function handleFileDrop(event: React.DragEvent) {
     event.preventDefault();
     setDropTargetActive(false);
+    if (features?.import === false) {
+      return;
+    }
     const file = event.dataTransfer.files?.[0];
     if (!file) {
       return;
@@ -2252,30 +2506,44 @@ export default function App() {
     }
   }
 
+  const themedStyle = {
+    ...themeToRootStyle(theme),
+    ...style
+  } as CSSProperties;
+
   return (
-    <main
-      className="app-shell"
-      onKeyDown={handleShellKeyCommand}
-      onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
-          event.preventDefault();
-          setDropTargetActive(true);
-        }
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setDropTargetActive(false);
-        }
-      }}
-      onDrop={handleFileDrop}
+    <div
+      className={["js-spreadsheet-root", "js-spreadsheet-workbook", className]
+        .filter(Boolean)
+        .join(" ")}
+      data-js-spreadsheet-root="workbook"
+      style={themedStyle}
     >
-      {isDropTargetActive ? (
-        <div className="file-drop-overlay" aria-hidden="true">
-          Drop to import workbook
-        </div>
-      ) : null}
-      <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
+      <main
+        className="app-shell"
+        onKeyDown={handleShellKeyCommand}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes("Files")) {
+            event.preventDefault();
+            setDropTargetActive(true);
+          }
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropTargetActive(false);
+          }
+        }}
+        onDrop={handleFileDrop}
+      >
+        {isDropTargetActive ? (
+          <div className="file-drop-overlay" aria-hidden="true">
+            Drop to import workbook
+          </div>
+        ) : null}
+        <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
+        {features?.toolbar !== false ? (
         <Toolbar
+          features={features}
           canUndo={history.past.length > 0}
           canRedo={history.future.length > 0}
           onNew={handleNewWorkbook}
@@ -2474,6 +2742,9 @@ export default function App() {
           onTextColor={(color) => applyFormat({ textColor: color }, "Changed text color")}
           onFillColor={(color) => applyFormat({ backgroundColor: color }, "Changed fill color")}
         />
+        ) : null}
+        {features?.import !== false ? (
+        <>
         <input
           ref={fileInputRef}
           className="hidden-file-input"
@@ -2498,7 +2769,9 @@ export default function App() {
             event.currentTarget.value = "";
           }}
         />
-        {showFormulaBar ? (
+        </>
+        ) : null}
+        {showFormulaBar && features?.formulaBar !== false ? (
           <FormulaBar
             nameBoxValue={nameBoxDraft}
             onNameBoxChange={setNameBoxDraft}
@@ -2558,11 +2831,11 @@ export default function App() {
           onClose={() => setPivotPanelOpen(false)}
           onCreate={handleCreatePivotTable}
         />
-        <ChartPanel
+        {features?.charts !== false ? <ChartPanel
           isOpen={isChartPanelOpen}
           onClose={() => setChartPanelOpen(false)}
           onCreate={handleCreateChart}
-        />
+        /> : null}
         <DataValidationPanel
           isOpen={isValidationPanelOpen}
           onClose={() => setValidationPanelOpen(false)}
@@ -2694,13 +2967,13 @@ export default function App() {
             onLink={handleLink}
           />
         ) : null}
-        <SheetCharts
+        {features?.charts !== false ? <SheetCharts
           charts={activeSheet.charts ?? []}
           sheet={activeSheet}
           formulaEngine={formulaEngine}
           onDelete={handleDeleteChart}
-        />
-        {showSheetTabs ? (
+        /> : null}
+        {showSheetTabs && features?.sheetTabs !== false ? (
           <SheetTabs
             sheets={workbook.sheets}
             activeSheetId={activeSheet.id}
@@ -2709,6 +2982,11 @@ export default function App() {
               if (nextWorkbook === workbook) {
                 return;
               }
+              session.dispatch({
+                type: "workbook.replace",
+                workbook: nextWorkbook,
+                history: "commit"
+              });
               setHistory({ ...history, present: nextWorkbook });
               setSelection(INITIAL_SELECTION);
             }}
@@ -2727,16 +3005,13 @@ export default function App() {
           onResetZoom={handleResetZoom}
         />
       </section>
-    </main>
+      </main>
+    </div>
   );
 }
 
-function readInitialWorkbook(): WorkbookModel {
-  try {
-    return loadWorkbook(window.localStorage);
-  } catch {
-    return createBlankWorkbook();
-  }
+export default function App() {
+  return <Spreadsheet />;
 }
 
 function replaceActiveSheetWithRows(workbook: WorkbookModel, rows: string[][]): WorkbookModel {
@@ -3531,4 +3806,76 @@ function findNearestVisibleIndex(count: number, hiddenIndexes: Record<string, bo
   }
 
   return preferred;
+}
+
+const RESERVED_SERVICE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function hasInvalidServiceRegistry(
+  registry: Readonly<Record<string, WorkbookImporter | WorkbookExporter>> | undefined
+): boolean {
+  if (!registry) {
+    return false;
+  }
+  return Object.keys(registry).some((key) => !key.trim() || RESERVED_SERVICE_KEYS.has(key));
+}
+
+function themeToRootStyle(
+  theme: Partial<Record<WorkbookThemeToken, string>> | undefined
+): CSSProperties {
+  if (!theme) {
+    return {};
+  }
+  const properties: Record<string, string> = {};
+  for (const [token, value] of Object.entries(theme)) {
+    if (value !== undefined) {
+      properties[`--js-spreadsheet-${token}`] = value;
+    }
+  }
+  return properties as CSSProperties;
+}
+
+function displaySessionValue(value: ReturnType<WorkbookSession["getCellEvaluation"]>): string {
+  if (value === null) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return value.code;
+  }
+  if (typeof value === "boolean") {
+    return value ? "TRUE" : "FALSE";
+  }
+  return String(value);
+}
+
+function diagnosticOrigin(event: WorkbookDiagnosticEvent): WorkbookChangeEvent["origin"] {
+  const commandType = event.metadata.commandType;
+  if (commandType === "history.undo") {
+    return "undo";
+  }
+  if (commandType === "history.redo") {
+    return "redo";
+  }
+  return "command";
+}
+
+function invokeHostCallback<T>(callback: ((value: T) => void) | undefined, value: T): void {
+  if (!callback) {
+    return;
+  }
+  try {
+    callback(value);
+  } catch {
+    // Host callbacks are isolated from rendering and other subscribers.
+  }
+}
+
+function downloadWorkbookArtifact(artifact: WorkbookExportArtifact): void {
+  const bytes = new Uint8Array(artifact.bytes);
+  const blob = new Blob([bytes], { type: artifact.mediaType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = artifact.fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
