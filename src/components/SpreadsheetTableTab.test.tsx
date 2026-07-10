@@ -133,6 +133,25 @@ describe("SpreadsheetTableTab", () => {
     expect(props.onExport).not.toHaveBeenCalled();
   });
 
+  it("keeps the calculated formula in sync with the panel's selected column", async () => {
+    const user = userEvent.setup();
+    const props = createProps({
+      table: createTable({
+        columns: [
+          { id: "column-region", name: "Region", sheetColumn: 0, calculatedFormula: "=[@Region]" },
+          { id: "column-sales", name: "Sales", sheetColumn: 1, calculatedFormula: "=[@Sales]*2" }
+        ]
+      })
+    });
+    render(<SpreadsheetTableTab {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "Calculated column" }));
+    expect(screen.getByLabelText("Calculated column formula")).toHaveValue("=[@Sales]*2");
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Calculated column" }), "column-region");
+    expect(screen.getByLabelText("Calculated column formula")).toHaveValue("=[@Region]");
+  });
+
   it("enables contextual export only when the provider reports a wired adapter", async () => {
     const user = userEvent.setup();
     const props = createProps();

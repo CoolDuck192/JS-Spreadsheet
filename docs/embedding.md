@@ -13,6 +13,16 @@ Use the surface that matches the host application:
 The UI package is React-only. The core sessions and source contracts are
 framework-independent and do not access the DOM.
 
+## Browser support
+
+The React UI supports current evergreen Chrome/Edge, Firefox, and Safari
+releases. Host browsers must provide native CSS `@scope`, container queries,
+`:has()`, and `color-mix()` support; legacy browsers that discard scoped rules
+are not supported. This contract keeps workbook styles isolated instead of
+shipping a second, unscoped stylesheet that could leak into the host app. The
+DOM-free `js-spreadsheet/core` entrypoint is not subject to these UI/CSS
+requirements.
+
 ## Build and install
 
 The package is currently private and is not published to a registry. Build it

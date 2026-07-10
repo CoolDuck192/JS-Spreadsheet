@@ -4,7 +4,6 @@ import type { StructuredTableColumn } from "../types";
 export type CalculatedColumnPanelProps = {
   columns: readonly StructuredTableColumn[];
   activeColumnId?: string;
-  formula?: string;
   issue?: string;
   onApply(columnId: string, formula?: string): void;
   onClose?(): void;
@@ -13,7 +12,6 @@ export type CalculatedColumnPanelProps = {
 export function CalculatedColumnPanel({
   columns,
   activeColumnId,
-  formula,
   issue,
   onApply,
   onClose
@@ -22,7 +20,10 @@ export function CalculatedColumnPanel({
     ? activeColumnId
     : columns[0]?.id ?? "";
   const [columnId, setColumnId] = useState(fallbackColumnId);
-  const [formulaDraft, setFormulaDraft] = useState(formula ?? "");
+  const selectedFormula = columns.find((column) => column.id === columnId)?.calculatedFormula ?? "";
+  const [formulaDraft, setFormulaDraft] = useState(
+    columns.find((column) => column.id === fallbackColumnId)?.calculatedFormula ?? ""
+  );
   const [error, setError] = useState("");
   const formulaRef = useRef<HTMLInputElement>(null);
   const errorId = `calculated-column-error-${useId()}`;
@@ -33,9 +34,9 @@ export function CalculatedColumnPanel({
   }, [fallbackColumnId]);
 
   useEffect(() => {
-    setFormulaDraft(formula ?? "");
+    setFormulaDraft(selectedFormula);
     setError("");
-  }, [columnId, formula]);
+  }, [columnId, selectedFormula]);
 
   function applyFormula() {
     const nextFormula = formulaDraft.trim();

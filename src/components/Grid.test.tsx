@@ -50,7 +50,7 @@ describe("Grid", () => {
     };
     const { rerender } = render(<Grid {...commonProps} editingCell={{ address: "A1", value: "=S" }} />);
 
-    const formulaEditor = screen.getByRole("textbox", { name: "Cell editor A1" });
+    const formulaEditor = screen.getByRole("combobox", { name: "Cell editor A1" });
     const formulaOverlay = formulaEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]');
     expect(formulaOverlay).not.toBeNull();
     expect(within(formulaOverlay as HTMLElement).getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
@@ -67,6 +67,7 @@ describe("Grid", () => {
     );
     const validationEditor = screen.getByRole("combobox", { name: "Cell editor B1" });
     expect(validationEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]')).not.toBeNull();
+    expect(within(validationEditor).getByRole("option", { name: "(None)" })).toHaveValue("");
     expect(within(validationEditor).getByRole("option", { name: "Open" })).toBeInTheDocument();
   });
 
@@ -537,7 +538,7 @@ describe("Grid", () => {
       />
     );
 
-    expect(screen.getByRole("textbox", { name: `Cell editor ${targetAddress}` })).toHaveValue("=S");
+    expect(screen.getByRole("combobox", { name: `Cell editor ${targetAddress}` })).toHaveValue("=S");
     expect(screen.getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
   });
 

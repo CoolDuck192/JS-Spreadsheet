@@ -10,6 +10,26 @@ const columns: StructuredTableColumn[] = [
 ];
 
 describe("CalculatedColumnPanel", () => {
+  it("loads the selected column's committed formula when the dropdown changes", async () => {
+    const user = userEvent.setup();
+    const formulaColumns: StructuredTableColumn[] = [
+      { ...columns[0], calculatedFormula: "=[@Quantity]+1" },
+      { ...columns[1], calculatedFormula: "=[@Quantity]*2" }
+    ];
+
+    render(
+      <CalculatedColumnPanel
+        columns={formulaColumns}
+        activeColumnId="column-total"
+        onApply={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText("Calculated column formula")).toHaveValue("=[@Quantity]*2");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Calculated column" }), "column-quantity");
+    expect(screen.getByLabelText("Calculated column formula")).toHaveValue("=[@Quantity]+1");
+  });
+
   it("rejects a calculated-column formula without a leading equals sign", async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

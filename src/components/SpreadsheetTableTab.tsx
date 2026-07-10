@@ -126,7 +126,6 @@ export function SpreadsheetTableTab({
   const nameError = localNameError || nameIssue;
   const rangeError = localRangeError || rangeIssue;
   const selectedTotalsColumn = table.columns.find((column) => column.id === totalsColumnId);
-  const selectedCalculatedColumn = table.columns.find((column) => column.id === activeColumnId) ?? table.columns[0];
   const style = table.style ?? { theme: "TableStyleLight1", showRowStripes: true };
 
   function commitName() {
@@ -280,7 +279,6 @@ export function SpreadsheetTableTab({
         <CalculatedColumnPanel
           columns={table.columns}
           activeColumnId={activeColumnId}
-          formula={selectedCalculatedColumn?.calculatedFormula}
           issue={calculatedIssue}
           onApply={onCalculatedColumn}
           onClose={() => setOpenPanel(null)}

@@ -42,4 +42,27 @@ describe("embedded style isolation", () => {
     expect(workbookCss).toContain("@scope (.js-spreadsheet-root.js-spreadsheet-workbook)");
     expect(workbookCss).not.toMatch(/^(?:\s*)(?::root|body|html|button|input|select|\*)\s*[{,]/m);
   });
+
+  it("keeps visually hidden descriptions compatible with modern and fallback clipping", () => {
+    const workbookCss = readFileSync("src/App.css", "utf8");
+    const tableCss = readFileSync("src/styles/data-table.css", "utf8");
+
+    expect(workbookCss).toMatch(/\.visually-hidden\s*\{(?=[^}]*clip-path:\s*inset\(50%\);)(?=[^}]*clip:\s*rect\()[^}]*\}/s);
+    expect(tableCss).toMatch(/__visually-hidden\s*\{(?=[^}]*clip-path:\s*inset\(50%\);)(?=[^}]*clip:\s*rect\()[^}]*\}/s);
+    expect(workbookCss).not.toMatch(/\b(?:currentColor|optimizeLegibility)\b/);
+  });
+
+  it("gives the Quick Tools toolbar and drawer full-size neutral scrollbars", () => {
+    const css = readFileSync("src/styles/data-table.css", "utf8");
+    const baseCss = css.slice(0, css.indexOf("@container"));
+
+    expect(css).not.toMatch(/__toolbar\s*\{[^}]*scrollbar-width:\s*thin;/s);
+    expect(css).toMatch(/__toolbar::\-webkit-scrollbar\s*\{[^}]*height:\s*12px;/s);
+    expect(css).toMatch(/__toolbar::\-webkit-scrollbar-thumb\s*\{[^}]*min-width:\s*40px;/s);
+    expect(css).toMatch(/__quick-tools::\-webkit-scrollbar\s*\{[^}]*width:\s*12px;/s);
+    expect(css).toMatch(/__quick-tools::\-webkit-scrollbar-thumb\s*\{[^}]*min-height:\s*40px;/s);
+    expect(baseCss).toMatch(
+      /__quick-tools\s*\{(?=[^}]*position:\s*fixed;)(?=[^}]*max-height:\s*min\(420px, calc\(100dvh - 16px\)\);)(?=[^}]*overflow-x:\s*hidden;)(?=[^}]*overflow-y:\s*auto;)[^}]*\}/s
+    );
+  });
 });

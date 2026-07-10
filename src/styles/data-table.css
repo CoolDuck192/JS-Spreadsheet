@@ -49,7 +49,25 @@
   color: var(--js-spreadsheet-text);
   background: var(--js-spreadsheet-chrome);
   border-block-end: 1px solid var(--js-spreadsheet-border);
-  scrollbar-width: thin;
+  scrollbar-color: var(--js-spreadsheet-border-strong) var(--js-spreadsheet-chrome-strong);
+  scrollbar-width: auto;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar::-webkit-scrollbar-track {
+  background: var(--js-spreadsheet-chrome-strong);
+  border-radius: 999px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar::-webkit-scrollbar-thumb {
+  min-width: 40px;
+  background: var(--js-spreadsheet-border-strong);
+  border: 1px solid var(--js-spreadsheet-chrome-strong);
+  border-radius: 999px;
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > span {
@@ -304,6 +322,23 @@
   box-shadow: var(--js-spreadsheet-shadow);
 }
 
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools::-webkit-scrollbar-track {
+  background: var(--js-spreadsheet-chrome-strong);
+  border-radius: 999px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  background: var(--js-spreadsheet-border-strong);
+  border: 1px solid var(--js-spreadsheet-chrome-strong);
+  border-radius: 999px;
+}
+
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__column-menu > div,
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__column-menu > label {
   display: grid;
@@ -316,20 +351,26 @@
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools {
-  position: absolute;
-  inset-block-start: calc(100% + 4px);
-  inset-inline-end: 8px;
+  position: fixed;
+  inset: auto 8px 8px auto;
   z-index: 30;
   display: grid;
   grid-template-columns: repeat(2, minmax(150px, 1fr));
   gap: 8px;
   width: min(440px, calc(100cqi - 16px));
+  max-height: min(420px, calc(100dvh - 16px));
   padding: 10px;
+  overflow-x: hidden;
+  overflow-y: auto;
   color: var(--js-spreadsheet-text);
   background: var(--js-spreadsheet-surface);
   border: 1px solid var(--js-spreadsheet-border-strong);
   border-radius: 7px;
   box-shadow: var(--js-spreadsheet-shadow);
+  overscroll-behavior: contain;
+  scrollbar-color: var(--js-spreadsheet-border-strong) var(--js-spreadsheet-chrome-strong);
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools > label {
@@ -460,6 +501,7 @@
   margin: -1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }
@@ -521,12 +563,9 @@
   }
 
   .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools {
-    position: fixed;
     inset: auto 8px 8px;
     grid-template-columns: 1fr;
     width: auto;
-    max-height: 420px;
-    overflow: auto;
   }
 
   .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools > button,

@@ -47,6 +47,10 @@ describe("App", () => {
       "Jan 15, 2026, 12:00 PM"
     );
 
+    await user.click(screen.getByRole("gridcell", { name: "A4 Jan 15, 2026, 12:00 PM" }));
+    expect(screen.getByLabelText("Number format")).toHaveValue("dateTime");
+    expect(screen.getByRole("option", { name: "Date and time" })).toHaveValue("dateTime");
+
     await user.click(screen.getByRole("gridcell", { name: "A1 1250" }));
     expect(screen.getByLabelText("Formula input")).toHaveValue("1250");
 

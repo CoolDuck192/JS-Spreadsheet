@@ -137,7 +137,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
               }
             }}
           >
-            {validation.allowBlank === false ? null : <option value="" />}
+            {validation.allowBlank === false ? null : <option value="">(None)</option>}
             {validation.values.map((value) => (
               <option key={value} value={value}>
                 {value}
@@ -148,6 +148,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
           <>
             <input
               className="cell-editor"
+              role="combobox"
               aria-label={`Cell editor ${address}`}
               aria-autocomplete="list"
               aria-controls={visibleSuggestions.length > 0 ? suggestionListId : undefined}

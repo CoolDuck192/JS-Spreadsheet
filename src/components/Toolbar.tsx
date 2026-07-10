@@ -76,7 +76,8 @@ const NUMBER_FORMAT_OPTIONS = [
   { value: "number", label: "Number" },
   { value: "currency", label: "Currency" },
   { value: "percent", label: "Percent" },
-  { value: "date", label: "Date" }
+  { value: "date", label: "Date" },
+  { value: "dateTime", label: "Date and time" }
 ] as const;
 
 const FONT_FAMILY_OPTIONS = [
