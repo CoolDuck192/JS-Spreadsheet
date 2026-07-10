@@ -69,6 +69,47 @@ describe("WorkbookSession", () => {
     expect(notifications).toBe(3);
   });
 
+  it("rejects an invalid table edit batch without committing an earlier edit", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "B1", "Status");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    workbook = setCellContent(workbook, sheetId, "B2", "allowed");
+    let nextId = 0;
+    const session = createWorkbookSession({
+      workbook,
+      createId(kind) {
+        nextId += 1;
+        return `${kind}-${nextId}`;
+      }
+    });
+    expect(session.dispatch({
+      type: "table.create", sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } },
+      name: "People", headerRow: true, totalsRow: false
+    })).toMatchObject({ status: "committed" });
+    expect(session.dispatch({
+      type: "range.validation.set", sheetId,
+      range: { start: { row: 1, column: 1 }, end: { row: 1, column: 1 } },
+      rule: { type: "list", values: ["allowed"] }
+    })).toMatchObject({ status: "committed" });
+    const before = session.getSnapshot();
+    const table = before.workbook.tables[0];
+
+    expect(session.dispatch({
+      type: "table.editCells",
+      tableId: table.id,
+      edits: [
+        { rowId: table.rowIds[0], columnId: table.columns[0].id, rawText: "Changed" },
+        { rowId: table.rowIds[0], columnId: table.columns[1].id, rawText: "forbidden" }
+      ]
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot()).toBe(before);
+    expect(getCellContent(session.getSnapshot().workbook, sheetId, "A2")).toBe("Ada");
+    expect(getCellContent(session.getSnapshot().workbook, sheetId, "B2")).toBe("allowed");
+  });
+
   it("serializes two synchronous dispatches without losing the first edit", () => {
     const diagnostics: WorkbookDiagnosticEvent[] = [];
     const ids = ["command-1", "command-2"];

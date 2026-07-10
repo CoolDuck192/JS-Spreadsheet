@@ -13,7 +13,8 @@ import type {
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { formatCellAddress } from "../../lib/addressing";
 import { translateFormulaReferences } from "../../lib/formulaReferences";
-import { getCellContent, getCellReadOnly } from "../../lib/workbook";
+import { getCellContent, getCellReadOnly, setCellContent, setCellFormat } from "../../lib/workbook";
+import { parseCellInput } from "../values/parseCellInput";
 import type { FilterExpression, TableSort } from "../../table/core/query";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
 import {
@@ -148,10 +149,10 @@ export function reduceStructuredTableCommand(
       return insertStructuredTableRows(workbook, command.tableId, command, services);
     case "table.deleteRows":
       return deleteStructuredTableRows(workbook, command.tableId, command.rowIds, services);
+    case "table.editCells":
+      return editCells(workbook, command.tableId, command.edits);
     case "table.convertToRange":
       return convertToRange(workbook, command.tableId);
-    case "table.editCells":
-      return reject(workbook, "TABLE_COMMAND_UNSUPPORTED", "Structured table command is not available yet");
   }
 }
 
@@ -431,6 +432,54 @@ function setFilter(
   if (JSON.stringify(table.filter) === JSON.stringify(filter)) return { status: "unchanged", workbook };
   const { filter: _current, ...base } = table;
   return commitTable(workbook, filter === undefined ? base : { ...base, filter });
+}
+
+function editCells(
+  workbook: WorkbookModel,
+  tableId: string,
+  edits: readonly { rowId: string; columnId: string; rawText: string }[]
+): StructuredTableReduction {
+  const table = getStructuredTable(workbook, tableId);
+  if (!table) return tableNotFound(workbook);
+  if (edits.length === 0) return { status: "unchanged", workbook };
+  const body = getStructuredTableBodyRange(table);
+  if (!body) return reject(workbook, "TABLE_ROW_NOT_FOUND", "Structured table has no body rows");
+  const resolved: Array<{
+    row: number;
+    column: StructuredTableColumn;
+    address: string;
+    parsed: ReturnType<typeof parseCellInput>;
+  }> = [];
+  for (const edit of edits) {
+    const rowIndex = table.rowIds.indexOf(edit.rowId);
+    if (rowIndex < 0) return reject(workbook, "TABLE_ROW_NOT_FOUND", `Unknown table row: ${edit.rowId}`);
+    const column = table.columns.find((candidate) => candidate.id === edit.columnId);
+    if (!column) return reject(workbook, "TABLE_COLUMN_NOT_FOUND", `Unknown table column: ${edit.columnId}`);
+    if (column.calculatedFormula) {
+      return reject(workbook, "TABLE_CALCULATED_COLUMN_READ_ONLY", "Calculated table columns are read-only");
+    }
+    const row = body.start.row + rowIndex;
+    const address = formatCellAddress({ row, column: column.sheetColumn });
+    if (getCellReadOnly(workbook, table.sheetId, address)) {
+      return reject(workbook, "TABLE_PROTECTED", `Table cell ${address} is read-only`);
+    }
+    resolved.push({ row, column, address, parsed: parseCellInput(edit.rawText) });
+  }
+
+  let candidate = workbook;
+  for (const edit of resolved) {
+    candidate = setCellContent(candidate, table.sheetId, edit.address, edit.parsed.stored);
+    if (
+      edit.parsed.inferredNumberFormat
+      && candidate.sheets.find((sheet) => sheet.id === table.sheetId)?.formats[edit.address]?.numberFormat === undefined
+    ) {
+      candidate = setCellFormat(candidate, table.sheetId, {
+        start: { row: edit.row, column: edit.column.sheetColumn },
+        end: { row: edit.row, column: edit.column.sheetColumn }
+      }, { numberFormat: edit.parsed.inferredNumberFormat });
+    }
+  }
+  return { status: "committed", workbook: candidate };
 }
 
 function convertToRange(workbook: WorkbookModel, tableId: string): StructuredTableReduction {

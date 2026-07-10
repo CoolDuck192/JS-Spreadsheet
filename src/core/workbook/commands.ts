@@ -209,6 +209,20 @@ export function applyWorkbookMutation(
     if (reduction.status === "rejected") {
       return { status: "rejected", reason: "validation", issues: reduction.issues };
     }
+    if (command.type === "table.editCells" && reduction.status === "committed") {
+      const table = workbook.tables.find((candidate) => candidate.id === command.tableId);
+      const body = table ? getStructuredTableBodyRange(table) : null;
+      if (table && body) {
+        const addresses = command.edits.flatMap((edit) => {
+          const rowIndex = table.rowIds.indexOf(edit.rowId);
+          const column = table.columns.find((candidate) => candidate.id === edit.columnId);
+          return rowIndex < 0 || !column
+            ? []
+            : [formatCellAddress({ row: body.start.row + rowIndex, column: column.sheetColumn })];
+        });
+        return validatedMutation(reduction.workbook, table.sheetId, addresses, context);
+      }
+    }
     return applied(reduction.workbook);
   }
   switch (command.type) {
