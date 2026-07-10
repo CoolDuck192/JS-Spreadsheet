@@ -1,12 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GoogleSheetsError, toGoogleSheetsError } from "./googleErrors";
 import { importWorkbookFromGoogleSheets, parseSpreadsheetId } from "./googleSheets";
 import type { TokenProvider } from "./googleAuth";
 
 const SPREADSHEET_ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
 
-const stubTokenProvider: TokenProvider = {
-  getAccessToken: vi.fn().mockResolvedValue("test-token")
-};
+const getAccessToken = vi.fn<(scopes: readonly string[]) => Promise<string>>();
+const stubTokenProvider: TokenProvider = { getAccessToken };
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -34,6 +34,11 @@ describe("parseSpreadsheetId", () => {
 });
 
 describe("importWorkbookFromGoogleSheets", () => {
+  beforeEach(() => {
+    getAccessToken.mockReset();
+    getAccessToken.mockResolvedValue("test-token");
+  });
+
   it("imports sheets, values, and formulas into a workbook model", async () => {
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       void init;
@@ -70,18 +75,113 @@ describe("importWorkbookFromGoogleSheets", () => {
     expect(authHeader.Authorization).toBe("Bearer test-token");
   });
 
-  it("maps permission errors to a friendly message", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({}, 403));
-    await expect(
-      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
-    ).rejects.toThrow(/access denied/i);
-  });
-
   it("rejects invalid input before any network call", async () => {
     const fetchImpl = vi.fn();
-    await expect(
+    const error = await captureGoogleError(
       importWorkbookFromGoogleSheets("nope", stubTokenProvider, fetchImpl as unknown as typeof fetch)
-    ).rejects.toThrow(/Not a Google Sheets URL/);
+    );
+
+    expect(error.code).toBe("invalid_sheet_url");
+    expect(getAccessToken).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it.each([401, 403])("maps HTTP %s to access_denied", async (status) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: { message: "private response body" } }, status));
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
+    );
+
+    expect(error.code).toBe("access_denied");
+    expect(error.message).not.toContain("private response body");
+    expect(error.message).not.toContain("test-token");
+  });
+
+  it("distinguishes a disabled Sheets API from ordinary HTTP 403", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            status: "PERMISSION_DENIED",
+            message: "private API response body",
+            errors: [{ reason: "accessNotConfigured" }]
+          }
+        },
+        403
+      )
+    );
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
+    );
+
+    expect(error.code).toBe("api_not_enabled");
+    expect(error.message).not.toContain("private API response body");
+    expect(error.message).not.toContain("test-token");
+  });
+
+  it.each([
+    [404, "sheet_not_found"],
+    [429, "rate_limited"],
+    [500, "unknown"]
+  ] as const)("maps HTTP %s to %s", async (status, code) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: { message: "private response body" } }, status));
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
+    );
+
+    expect(error.code).toBe(code);
+    expect(error.message).not.toContain("private response body");
+    expect(error.message).not.toContain("test-token");
+  });
+
+  it("maps a rejected network request without surfacing its details", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("Bearer test-token: private network response body");
+    });
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as unknown as typeof fetch)
+    );
+
+    expect(error.code).toBe("network_failed");
+    expect(error.message).not.toContain("test-token");
+    expect(error.message).not.toContain("private network response body");
+  });
+
+  it("sanitizes untyped token provider failures", async () => {
+    getAccessToken.mockRejectedValueOnce(new Error("Bearer private-token: private OAuth response body"));
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, vi.fn() as unknown as typeof fetch)
+    );
+
+    expect(error.code).toBe("unknown");
+    expect(error.message).not.toContain("private-token");
+    expect(error.message).not.toContain("private OAuth response body");
+  });
 });
+
+describe("toGoogleSheetsError", () => {
+  it("retains typed failures and sanitizes arbitrary failures", () => {
+    const typed = new GoogleSheetsError("popup_closed", "The sign-in window was closed.", true);
+    expect(toGoogleSheetsError(typed)).toBe(typed);
+
+    const sanitized = toGoogleSheetsError(new Error("Bearer private-token: private response body"));
+    expect(sanitized).toMatchObject({ code: "unknown", recoverable: true });
+    expect(sanitized.message).not.toContain("private-token");
+    expect(sanitized.message).not.toContain("private response body");
+  });
+});
+
+async function captureGoogleError(promise: Promise<unknown>): Promise<GoogleSheetsError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(GoogleSheetsError);
+    return error as GoogleSheetsError;
+  }
+  throw new Error("Expected Google Sheets operation to reject");
+}

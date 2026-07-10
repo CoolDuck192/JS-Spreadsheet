@@ -1,6 +1,6 @@
 /**
- * Google Sheets connector: link a user's Google Sheet and import it as a
- * WorkbookModel, preserving formulas. Read path uses the Sheets API v4
+ * Google Sheets connector: import a user's Google Sheet one time as a
+ * WorkbookModel, preserving formulas. The read path uses the Sheets API v4
  * spreadsheets.get + values.batchGet with valueRenderOption=FORMULA so
  * formulas arrive as "=..." strings and flow through the same engine as
  * typed input, mirroring the xlsx import path.
@@ -8,6 +8,7 @@
 
 import type { CellContent, SheetModel, WorkbookModel } from "../types";
 import { SHEETS_READONLY_SCOPE, type TokenProvider } from "./googleAuth";
+import { GoogleSheetsError, toGoogleSheetsError } from "./googleErrors";
 
 const SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 const DEFAULT_ROW_COUNT = 100;
@@ -40,10 +41,19 @@ export async function importWorkbookFromGoogleSheets(
 ): Promise<GoogleSheetsImportResult> {
   const spreadsheetId = parseSpreadsheetId(spreadsheetIdOrUrl);
   if (!spreadsheetId) {
-    throw new Error("Not a Google Sheets URL or spreadsheet id");
+    throw new GoogleSheetsError(
+      "invalid_sheet_url",
+      "Enter a valid Google Sheets URL or spreadsheet ID.",
+      true
+    );
   }
 
-  const token = await tokenProvider.getAccessToken([SHEETS_READONLY_SCOPE]);
+  let token: string;
+  try {
+    token = await tokenProvider.getAccessToken([SHEETS_READONLY_SCOPE]);
+  } catch (error) {
+    throw toGoogleSheetsError(error);
+  }
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const metadata = await fetchJson<{
@@ -55,7 +65,11 @@ export async function importWorkbookFromGoogleSheets(
     .map((sheet) => sheet.properties?.title)
     .filter((title): title is string => Boolean(title));
   if (sheetTitles.length === 0) {
-    throw new Error("The Google Sheet has no sheets");
+    throw new GoogleSheetsError(
+      "sheet_not_found",
+      "The Google Sheet does not contain an importable worksheet.",
+      true
+    );
   }
 
   const rangesQuery = sheetTitles.map((title) => `ranges=${encodeURIComponent(quoteA1SheetName(title))}`).join("&");
@@ -91,20 +105,98 @@ export async function importWorkbookFromGoogleSheets(
 }
 
 async function fetchJson<T>(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
-  const response = await fetchImpl(url, { headers });
+  let response: Response;
+  try {
+    response = await fetchImpl(url, { headers });
+  } catch {
+    throw new GoogleSheetsError(
+      "network_failed",
+      "Google Sheets could not be reached. Check your connection and try again.",
+      true
+    );
+  }
   if (!response.ok) {
+    if (response.status === 403 && (await isSheetsApiDisabled(response))) {
+      throw new GoogleSheetsError(
+        "api_not_enabled",
+        "The Google Sheets API is not enabled for this Google OAuth project.",
+        true
+      );
+    }
     if (response.status === 401 || response.status === 403) {
-      throw new Error("Google Sheets access denied — sign in again or check the sheet's sharing settings");
+      throw new GoogleSheetsError(
+        "access_denied",
+        "Google Sheets access was denied. Sign in again or check the sheet sharing settings.",
+        true
+      );
     }
     if (response.status === 404) {
-      throw new Error("Google Sheet not found — check the URL");
+      throw new GoogleSheetsError(
+        "sheet_not_found",
+        "Google Sheet not found. Check the URL and sharing settings.",
+        true
+      );
     }
     if (response.status === 429) {
-      throw new Error("Google Sheets rate limit reached — try again in a minute");
+      throw new GoogleSheetsError(
+        "rate_limited",
+        "Google Sheets is receiving too many requests. Wait a moment and try again.",
+        true
+      );
     }
-    throw new Error(`Google Sheets request failed (${response.status})`);
+    throw new GoogleSheetsError(
+      "unknown",
+      "Google Sheets import failed. Check your connection and try again.",
+      true
+    );
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new GoogleSheetsError(
+      "network_failed",
+      "Google Sheets returned an unreadable response. Try again.",
+      true
+    );
+  }
+}
+
+const API_DISABLED_STATUSES = new Set(["SERVICE_DISABLED", "API_NOT_ENABLED"]);
+const API_DISABLED_REASONS = new Set([
+  "accessNotConfigured",
+  "apiNotEnabled",
+  "serviceDisabled"
+]);
+
+async function isSheetsApiDisabled(response: Response): Promise<boolean> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return false;
+  }
+  if (!isRecord(body) || !isRecord(body.error)) {
+    return false;
+  }
+
+  const status = body.error.status;
+  if (typeof status === "string" && API_DISABLED_STATUSES.has(status)) {
+    return true;
+  }
+  const errors = body.error.errors;
+  if (!Array.isArray(errors)) {
+    return false;
+  }
+  return errors.some(
+    (entry) =>
+      isRecord(entry) &&
+      typeof entry.reason === "string" &&
+      API_DISABLED_REASONS.has(entry.reason)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function valuesToSheetModel(id: string, name: string, values: unknown[][], isHidden: boolean): SheetModel {

@@ -30,10 +30,24 @@ export interface WorkbookExporter {
   ): WorkbookExportArtifact | Promise<WorkbookExportArtifact>;
 }
 
-/** Platform-neutral token source. Browser OAuth implementations live in src/react. */
+/** Platform-neutral token source. Browser OAuth implementations live in optional connectors. */
 export interface TokenProvider {
+  prepare?(): void | Promise<void>;
   getAccessToken(scopes: readonly string[]): Promise<string>;
 }
+
+export type GoogleClientIdStorage = Readonly<{
+  load(): string | null | Promise<string | null>;
+  save(clientId: string): void | Promise<void>;
+  clear(): void | Promise<void>;
+}>;
+
+export type GoogleSheetsServiceConfiguration = Readonly<{
+  clientId?: string;
+  tokenProvider?: TokenProvider;
+  tokenProviderFactory?: (clientId: string) => TokenProvider;
+  clientIdStorage?: GoogleClientIdStorage | false;
+}>;
 
 export type SpreadsheetServices = Readonly<{
   formulaEngineFactory?: typeof createFormulaEngine;
@@ -42,5 +56,7 @@ export type SpreadsheetServices = Readonly<{
   now?: () => number;
   createCommandId?: () => string;
   createId?: IdGenerator;
+  googleSheets?: GoogleSheetsServiceConfiguration;
+  /** @deprecated Use googleSheets.tokenProviderFactory. */
   googleTokenProviderFactory?: (clientId: string) => TokenProvider;
 }>;
