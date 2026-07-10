@@ -7,18 +7,18 @@ import type {
   CellRange,
   ConditionalFormatRule,
   DataValidationRule,
-  HistoryState,
   NamedRange,
   SheetChart,
   SheetMerge,
   SheetModel,
   SheetFilter,
   SheetProtection,
+  StructuredTable,
   WorkbookModel
 } from "../types";
+import { createRandomId, type IdGenerator } from "../core/ids";
+import type { FilterExpression } from "../table/core/query";
 import {
-  columnIndexToName,
-  columnNameToIndex,
   formatCellAddress,
   getRangeAddresses,
   normalizeRange,
@@ -30,7 +30,17 @@ import {
   clampColumnWidth,
   clampRowHeight
 } from "./sheetDimensions";
-import { translateFormulaReferences } from "./formulaReferences";
+import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
+import type { ComputedCellValue } from "./formulaEngine";
+import { compareDeterministicText } from "./filters";
+import { normalizeExcelTableNameKey, validateExcelTableName } from "../core/workbook/tableNames";
+
+export {
+  commitWorkbookHistory as commitHistory,
+  createWorkbookHistory as createHistory,
+  redoWorkbookHistory as redoHistory,
+  undoWorkbookHistory as undoHistory
+} from "../core/workbook/history";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
@@ -49,6 +59,12 @@ type StructureOperation = {
   mode: "insert" | "delete";
   index: number;
   count: number;
+};
+
+export type SortRangeOptions = {
+  direction: "asc" | "desc";
+  sortColumn?: number;
+  readValue?: (address: string) => ComputedCellValue;
 };
 
 type AutoFillSourceCell = {
@@ -132,10 +148,11 @@ export type CellMergeInfo =
 export function createBlankWorkbook(): WorkbookModel {
   const sheet = createSheet("sheet-1", "Sheet1");
   return {
-    version: 1,
+    version: 2,
     activeSheetId: sheet.id,
     sheets: [sheet],
-    namedRanges: []
+    namedRanges: [],
+    tables: []
   };
 }
 
@@ -1463,9 +1480,26 @@ export function sortRange(
   workbook: WorkbookModel,
   sheetId: string,
   range: CellRange,
+  options: SortRangeOptions
+): WorkbookModel;
+export function sortRange(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
   direction: "asc" | "desc",
   sortColumn?: number
+): WorkbookModel;
+export function sortRange(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  optionsOrDirection: SortRangeOptions | "asc" | "desc",
+  legacySortColumn?: number
 ): WorkbookModel {
+  const options: SortRangeOptions =
+    typeof optionsOrDirection === "string"
+      ? { direction: optionsOrDirection, sortColumn: legacySortColumn }
+      : optionsOrDirection;
   const normalized = normalizeRange(range);
   if (normalized.start.row === normalized.end.row) {
     return workbook;
@@ -1477,15 +1511,16 @@ export function sortRange(
       return sheet;
     }
     const keyColumn = Math.min(
-      Math.max(sortColumn ?? normalized.start.column, sortableRange.start.column),
+      Math.max(options.sortColumn ?? normalized.start.column, sortableRange.start.column),
       sortableRange.end.column
     );
 
     const rows = Array.from({ length: sortableRange.end.row - sortableRange.start.row + 1 }, (_, rowOffset) => {
       const row = sortableRange.start.row + rowOffset;
+      const keyAddress = formatCellAddress({ row, column: keyColumn });
       return {
         originalIndex: rowOffset,
-        key: sheet.cells[formatCellAddress({ row, column: keyColumn })] ?? null,
+        key: options.readValue ? options.readValue(keyAddress) : sheet.cells[keyAddress] ?? null,
         cells: Array.from({ length: sortableRange.end.column - sortableRange.start.column + 1 }, (_, columnOffset) => {
           const column = sortableRange.start.column + columnOffset;
           return sheet.cells[formatCellAddress({ row, column })] ?? null;
@@ -1510,7 +1545,7 @@ export function sortRange(
       };
     });
 
-    const sortedRows = [...rows].sort((left, right) => compareSortRows(left, right, direction));
+    const sortedRows = [...rows].sort((left, right) => compareSortRows(left, right, options.direction));
     if (sortedRows.every((row, index) => row.originalIndex === index)) {
       return sheet;
     }
@@ -1521,15 +1556,20 @@ export function sortRange(
     const comments = { ...(sheet.comments ?? {}) };
     const hyperlinks = { ...(sheet.hyperlinks ?? {}) };
     sortedRows.forEach((row, rowOffset) => {
+      const destinationRow = sortableRange.start.row + rowOffset;
+      const sourceRow = sortableRange.start.row + row.originalIndex;
       row.cells.forEach((content, columnOffset) => {
         const address = formatCellAddress({
-          row: sortableRange.start.row + rowOffset,
+          row: destinationRow,
           column: sortableRange.start.column + columnOffset
         });
         if (content === null) {
           delete cells[address];
         } else {
-          cells[address] = content;
+          cells[address] =
+            typeof content === "string" && content.startsWith("=")
+              ? translateFormulaReferences(content, { rowOffset: destinationRow - sourceRow, columnOffset: 0 })
+              : content;
         }
 
         const nextFormat = row.formats[columnOffset];
@@ -1679,7 +1719,11 @@ export function renameSheet(workbook: WorkbookModel, sheetId: string, name: stri
   });
 }
 
-export function duplicateSheet(workbook: WorkbookModel, sheetId: string): WorkbookModel {
+export function duplicateSheet(
+  workbook: WorkbookModel,
+  sheetId: string,
+  createId: IdGenerator = createRandomId
+): WorkbookModel {
   const source = getSheet(workbook, sheetId);
   const copy: SheetModel = {
     ...source,
@@ -1703,11 +1747,76 @@ export function duplicateSheet(workbook: WorkbookModel, sheetId: string): Workbo
     protection: cloneSheetProtection(getSheetProtection(source))
   };
 
+  const sourceTables = workbook.tables.filter((table) => table.sheetId === sheetId);
+  const usedNames = new Set(workbook.tables.map((table) => normalizeExcelTableNameKey(table.name)));
+  const copiedTables = sourceTables.map((table) => duplicateStructuredTable(table, copy.id, createId, usedNames));
+
   return {
     ...workbook,
     activeSheetId: copy.id,
-    sheets: [...workbook.sheets, copy]
+    sheets: [...workbook.sheets, copy],
+    tables: [...workbook.tables, ...copiedTables]
   };
+}
+
+function duplicateStructuredTable(
+  table: StructuredTable,
+  sheetId: string,
+  createId: IdGenerator,
+  usedNames: Set<string>
+): StructuredTable {
+  const columnIdMap = new Map<string, string>();
+  const columns = table.columns.map((column) => {
+    const id = createId("table-column");
+    columnIdMap.set(column.id, id);
+    return { ...column, id };
+  });
+  const name = nextDuplicatedTableName(table.name, usedNames);
+  return {
+    ...table,
+    id: createId("table"),
+    name,
+    sheetId,
+    range: cloneRange(table.range),
+    columns,
+    rowIds: table.rowIds.map(() => createId("table-row")),
+    ...(table.keyColumnId === undefined
+      ? {}
+      : { keyColumnId: columnIdMap.get(table.keyColumnId) }),
+    ...(table.style === undefined ? {} : { style: { ...table.style } }),
+    ...(table.sort === undefined
+      ? {}
+      : { sort: table.sort.map((sort) => ({ ...sort, columnId: columnIdMap.get(sort.columnId) ?? sort.columnId })) }),
+    ...(table.filter === undefined
+      ? {}
+      : { filter: remapTableFilter(table.filter, columnIdMap) })
+  };
+}
+
+function nextDuplicatedTableName(sourceName: string, usedNames: Set<string>): string {
+  const normalizedSourceName = sourceName.normalize("NFKC");
+  for (let index = 1; ; index += 1) {
+    const suffix = index === 1 ? "_Copy" : `_Copy_${index}`;
+    const name = `${[...normalizedSourceName].slice(0, 255 - suffix.length).join("")}${suffix}`;
+    const validation = validateExcelTableName(name);
+    if (validation.valid && !usedNames.has(validation.normalizedKey)) {
+      usedNames.add(validation.normalizedKey);
+      return name;
+    }
+  }
+}
+
+function remapTableFilter(
+  filter: FilterExpression,
+  columnIdMap: ReadonlyMap<string, string>
+): FilterExpression {
+  if (filter.kind === "logical") {
+    return { ...filter, operands: filter.operands.map((operand) => remapTableFilter(operand, columnIdMap)) };
+  }
+  if (filter.kind === "not") {
+    return { kind: "not", operand: remapTableFilter(filter.operand, columnIdMap) };
+  }
+  return { ...filter, columnId: columnIdMap.get(filter.columnId) ?? filter.columnId };
 }
 
 export function deleteSheet(workbook: WorkbookModel, sheetId: string): WorkbookModel {
@@ -1724,7 +1833,8 @@ export function deleteSheet(workbook: WorkbookModel, sheetId: string): WorkbookM
     ...workbook,
     activeSheetId: workbook.activeSheetId === sheetId ? firstVisibleSheetId(sheets) ?? sheets[0].id : workbook.activeSheetId,
     sheets,
-    namedRanges: (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId).map(cloneNamedRange)
+    namedRanges: (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId).map(cloneNamedRange),
+    tables: workbook.tables.filter((table) => table.sheetId !== sheetId)
   };
 }
 
@@ -1758,59 +1868,6 @@ export function setActiveSheet(workbook: WorkbookModel, sheetId: string): Workbo
     return workbook;
   }
   return { ...workbook, activeSheetId: sheetId };
-}
-
-// Each history entry pins a workbook snapshot. Snapshots share unchanged sheets
-// and cell values structurally, but the edited sheet's cells record (its keys) is
-// a fresh copy per edit — on a 100k-cell sheet that is megabytes per entry, so an
-// unbounded past grows without limit. 100 undo steps matches Excel's default.
-const MAX_UNDO_HISTORY = 100;
-
-export function createHistory(initial: WorkbookModel): HistoryState {
-  return {
-    past: [],
-    present: initial,
-    future: []
-  };
-}
-
-export function commitHistory(history: HistoryState, present: WorkbookModel): HistoryState {
-  if (history.present === present) {
-    return history;
-  }
-
-  const past = [...history.past, history.present];
-  return {
-    past: past.length > MAX_UNDO_HISTORY ? past.slice(past.length - MAX_UNDO_HISTORY) : past,
-    present,
-    future: []
-  };
-}
-
-export function undoHistory(history: HistoryState): HistoryState {
-  const previous = history.past.at(-1);
-  if (!previous) {
-    return history;
-  }
-
-  return {
-    past: history.past.slice(0, -1),
-    present: previous,
-    future: [history.present, ...history.future]
-  };
-}
-
-export function redoHistory(history: HistoryState): HistoryState {
-  const next = history.future[0];
-  if (!next) {
-    return history;
-  }
-
-  return {
-    past: [...history.past, history.present],
-    present: next,
-    future: history.future.slice(1)
-  };
 }
 
 function createSheet(id: string, name: string): SheetModel {
@@ -1903,9 +1960,8 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
         continue;
       }
 
-      const nextContent = shiftFormulaReferences(content, normalizedOperation);
-      if (nextContent !== null) {
-        nextCells[formatCellAddress(nextCoord)] = nextContent;
+      if (content !== null) {
+        nextCells[formatCellAddress(nextCoord)] = content;
       }
     }
 
@@ -2025,7 +2081,9 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     };
   });
 
-  const nextNamedRanges = (nextWorkbook.namedRanges ?? []).flatMap((namedRange) => {
+  const rewrittenWorkbook = rewriteWorkbookFormulasForStructure(nextWorkbook, sourceSheet.name, normalizedOperation);
+
+  const nextNamedRanges = (rewrittenWorkbook.namedRanges ?? []).flatMap((namedRange) => {
     if (namedRange.sheetId !== sheetId) {
       return [cloneNamedRange(namedRange)];
     }
@@ -2034,7 +2092,43 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     return shiftedRange ? [{ ...cloneNamedRange(namedRange), range: shiftedRange }] : [];
   });
 
-  return { ...nextWorkbook, namedRanges: nextNamedRanges };
+  return { ...rewrittenWorkbook, namedRanges: nextNamedRanges };
+}
+
+function rewriteWorkbookFormulasForStructure(
+  workbook: WorkbookModel,
+  editedSheetName: string,
+  operation: StructureOperation
+): WorkbookModel {
+  let workbookChanged = false;
+  const sheets = workbook.sheets.map((sheet) => {
+    let sheetChanged = false;
+    const cells = { ...sheet.cells };
+
+    for (const [address, content] of Object.entries(sheet.cells)) {
+      if (typeof content !== "string" || !content.startsWith("=")) {
+        continue;
+      }
+      const nextContent = rewriteFormulaForStructure(content, {
+        formulaSheetName: sheet.name,
+        editedSheetName,
+        ...operation
+      });
+      if (nextContent === content) {
+        continue;
+      }
+      cells[address] = nextContent;
+      sheetChanged = true;
+    }
+
+    if (!sheetChanged) {
+      return sheet;
+    }
+    workbookChanged = true;
+    return { ...sheet, cells };
+  });
+
+  return workbookChanged ? { ...workbook, sheets } : workbook;
 }
 
 function shiftRange(range: CellRange, operation: StructureOperation): CellRange | null {
@@ -2365,44 +2459,6 @@ function wrapSeriesIndex(index: number, count: number): number {
 }
 
 function shiftCoord(coord: { row: number; column: number }, operation: StructureOperation) {
-  const end = operation.index + operation.count;
-  if (operation.axis === "row") {
-    if (operation.mode === "insert") {
-      return { ...coord, row: coord.row >= operation.index ? coord.row + operation.count : coord.row };
-    }
-    if (coord.row >= operation.index && coord.row < end) {
-      return null;
-    }
-    return { ...coord, row: coord.row >= end ? coord.row - operation.count : coord.row };
-  }
-
-  if (operation.mode === "insert") {
-    return { ...coord, column: coord.column >= operation.index ? coord.column + operation.count : coord.column };
-  }
-  if (coord.column >= operation.index && coord.column < end) {
-    return null;
-  }
-  return { ...coord, column: coord.column >= end ? coord.column - operation.count : coord.column };
-}
-
-function shiftFormulaReferences(content: CellContent, operation: StructureOperation): CellContent {
-  if (typeof content !== "string" || !content.startsWith("=")) {
-    return content;
-  }
-
-  return content.replace(/(\$?)([A-Z]+)(\$?)(\d+)/g, (_match, columnLock: string, columnName: string, rowLock: string, rowName: string) => {
-    const nextCoord = shiftReferenceCoord(
-      { row: Number(rowName) - 1, column: columnNameToIndex(columnName) },
-      operation
-    );
-    if (!nextCoord) {
-      return "#REF!";
-    }
-    return `${columnLock}${columnIndexToName(nextCoord.column)}${rowLock}${nextCoord.row + 1}`;
-  });
-}
-
-function shiftReferenceCoord(coord: { row: number; column: number }, operation: StructureOperation) {
   const end = operation.index + operation.count;
   if (operation.axis === "row") {
     if (operation.mode === "insert") {
@@ -2880,8 +2936,8 @@ function duplicateRowKey(cells: CellContent[]): string {
 }
 
 function compareSortRows(
-  left: { key: CellContent; originalIndex: number },
-  right: { key: CellContent; originalIndex: number },
+  left: { key: ComputedCellValue; originalIndex: number },
+  right: { key: ComputedCellValue; originalIndex: number },
   direction: "asc" | "desc"
 ): number {
   const leftBlank = left.key === null || left.key === "";
@@ -2896,17 +2952,44 @@ function compareSortRows(
     return -1;
   }
 
-  const leftNumber = Number(left.key);
-  const rightNumber = Number(right.key);
+  const leftError = isSortError(left.key);
+  const rightError = isSortError(right.key);
+  if (leftError && rightError) {
+    return left.originalIndex - right.originalIndex;
+  }
+  if (leftError) {
+    return 1;
+  }
+  if (rightError) {
+    return -1;
+  }
+
+  const leftNumber = sortNumericValue(left.key);
+  const rightNumber = sortNumericValue(right.key);
   const comparison =
-    Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+    leftNumber !== null && rightNumber !== null
       ? leftNumber - rightNumber
-      : String(left.key).localeCompare(String(right.key), undefined, { numeric: true, sensitivity: "base" });
+      : compareDeterministicText(String(left.key), String(right.key));
 
   if (comparison === 0) {
     return left.originalIndex - right.originalIndex;
   }
   return direction === "asc" ? comparison : comparison * -1;
+}
+
+function sortNumericValue(value: ComputedCellValue): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSortError(value: ComputedCellValue): value is { kind: "error"; code: string } {
+  return typeof value === "object" && value !== null && "kind" in value && value.kind === "error";
 }
 
 function normalizeAddress(address: string): string {

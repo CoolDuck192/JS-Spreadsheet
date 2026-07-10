@@ -1,55 +1,59 @@
-:root {
-  --accent: #22795d;
-  --accent-strong: #17634a;
-  --accent-soft: #eaf7f2;
-  --border: #cbd5e1;
-  --border-strong: #94a3b8;
-  --chrome: #f8fafc;
-  --chrome-strong: #eef3f7;
-  --text: #172033;
-  --muted: #5f6e82;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  color: var(--text);
-  background: #e8edf3;
+.js-spreadsheet-root.js-spreadsheet-workbook {
+  --js-spreadsheet-accent: #22795d;
+  --js-spreadsheet-accent-strong: #17634a;
+  --js-spreadsheet-accent-soft: #eaf7f2;
+  --js-spreadsheet-border: #cbd5e1;
+  --js-spreadsheet-border-strong: #94a3b8;
+  --js-spreadsheet-chrome: #f8fafc;
+  --js-spreadsheet-chrome-strong: #eef3f7;
+  --js-spreadsheet-text: #172033;
+  --js-spreadsheet-muted: #5f6e82;
+
+  font-family: var(
+    --js-spreadsheet-font-family,
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif
+  );
+  font-size: var(--js-spreadsheet-font-size, 14px);
+  color: var(--js-spreadsheet-text);
+  background: var(--js-spreadsheet-surface);
   font-synthesis: none;
-  text-rendering: optimizeLegibility;
+  text-rendering: optimizelegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  position: relative;
+  width: 100%;
+  min-height: 420px;
+  height: 100%;
 }
 
-* {
+.js-spreadsheet-root.js-spreadsheet-workbook,
+.js-spreadsheet-root.js-spreadsheet-workbook * {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-button,
-input,
-select {
+.js-spreadsheet-root.js-spreadsheet-workbook button,
+.js-spreadsheet-root.js-spreadsheet-workbook input,
+.js-spreadsheet-root.js-spreadsheet-workbook select {
   font: inherit;
 }
 
-button {
+.js-spreadsheet-root.js-spreadsheet-workbook button {
   color: inherit;
 }
 
+@scope (.js-spreadsheet-root.js-spreadsheet-workbook) {
 .app-shell {
-  min-height: 100vh;
-  padding: 12px;
+  min-height: 420px;
+  height: 100%;
+  padding: 0;
 }
 
 .spreadsheet-surface {
   position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  height: calc(100vh - 24px);
-  border: 1px solid var(--border-strong);
+  height: 100%;
+  border: 1px solid var(--js-spreadsheet-border-strong);
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
@@ -61,8 +65,8 @@ button {
   grid-template-rows: auto auto;
   gap: 6px;
   padding: 6px 12px 10px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(#fbfdff, var(--chrome));
+  border-bottom: 1px solid var(--js-spreadsheet-border);
+  background: linear-gradient(#fbfdff, var(--js-spreadsheet-chrome));
   overflow: visible;
 }
 
@@ -104,14 +108,14 @@ button {
 .ribbon-tab:hover,
 .ribbon-tab:focus-visible {
   background: rgba(226, 232, 240, 0.66);
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
 .active-ribbon-tab {
   border-color: rgba(148, 163, 184, 0.4);
   background: rgba(255, 255, 255, 0.94);
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
 }
 
 .ribbon-panel {
@@ -134,7 +138,7 @@ button {
   min-width: 0;
   padding: 0 8px 0 1px;
   font-weight: 800;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
   white-space: nowrap;
 }
 
@@ -152,7 +156,7 @@ button {
   border: 1px solid rgba(34, 121, 93, 0.35);
   border-radius: 6px;
   background: #e7f6f0;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 11px;
 }
 
@@ -214,7 +218,7 @@ button {
 .toolbar-button:hover:not(:disabled),
 .toolbar-button:focus-visible:not(:disabled) {
   background: #e9f4ef;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -229,7 +233,7 @@ button {
 .active-toolbar-button {
   border-color: rgba(34, 121, 93, 0.4);
   background: #dff3eb;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   /* A pressed toggle reads as pushed-in, not merely hovered. */
   box-shadow: inset 0 1px 2px rgba(23, 99, 74, 0.18);
 }
@@ -252,7 +256,7 @@ button {
   width: 12px;
   height: 2px;
   border-radius: 1px;
-  background: var(--accent);
+  background: var(--js-spreadsheet-accent);
 }
 
 .toolbar-button:disabled {
@@ -366,7 +370,7 @@ button {
 .split-button-toggle:focus-visible:not(:disabled),
 .split-button-toggle[aria-expanded="true"] {
   background: #e9f4ef;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -525,7 +529,7 @@ button {
   border-radius: 6px;
   background: #fff;
   padding: 0 24px 0 8px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -568,7 +572,7 @@ button {
   align-items: center;
   min-height: 40px;
   padding: 6px 9px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--js-spreadsheet-border);
   background: #fff;
 }
 
@@ -597,7 +601,7 @@ button {
 }
 
 .formula-bar input:focus {
-  border-color: var(--accent);
+  border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
@@ -678,7 +682,7 @@ button {
 }
 
 .formula-suggestions strong {
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 800;
 }
@@ -715,15 +719,15 @@ button {
   margin: 0;
   padding: 6px 9px;
   border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--js-spreadsheet-accent-soft);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .pivot-panel .pivot-panel-hint {
   margin: 0;
-  color: var(--muted);
+  color: var(--js-spreadsheet-muted);
   font-size: 11.5px;
   text-wrap: pretty;
 }
@@ -873,7 +877,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .find-panel-header {
@@ -881,7 +885,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .filter-panel-header {
@@ -889,7 +893,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .validation-panel-header {
@@ -897,7 +901,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .conditional-panel-header {
@@ -905,7 +909,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .chart-panel-header {
@@ -913,7 +917,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .function-library-panel-header {
@@ -921,7 +925,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .named-ranges-panel-header {
@@ -929,7 +933,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .go-to-panel-header {
@@ -937,7 +941,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .formula-audit-panel-header {
@@ -945,7 +949,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
 }
 
 .pivot-panel-header button {
@@ -1265,12 +1269,12 @@ button {
 .chart-panel input:focus,
 .chart-panel select:focus,
 .function-library-panel input:focus {
-  border-color: var(--accent);
+  border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
 .go-to-panel input:focus {
-  border-color: var(--accent);
+  border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
@@ -1309,7 +1313,7 @@ button {
 
 .named-range-item strong {
   display: block;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1385,7 +1389,7 @@ button {
 
 .go-to-item strong {
   display: block;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1439,7 +1443,7 @@ button {
 }
 
 .formula-audit-target strong {
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-weight: 900;
 }
 
@@ -1486,7 +1490,7 @@ button {
 
 .formula-audit-item strong {
   display: block;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1541,7 +1545,7 @@ button {
 
 .function-library-item strong {
   display: block;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
@@ -1900,16 +1904,16 @@ button {
 .validation-panel-actions .primary-panel-button,
 .conditional-panel-actions .primary-panel-button,
 .chart-panel-actions .primary-panel-button {
-  border-color: var(--accent-strong);
-  background: var(--accent);
+  border-color: var(--js-spreadsheet-accent-strong);
+  background: var(--js-spreadsheet-accent);
   color: #fff;
 }
 
 .primary-panel-button {
   height: 34px;
-  border: 1px solid var(--accent-strong);
+  border: 1px solid var(--js-spreadsheet-accent-strong);
   border-radius: 5px;
-  background: var(--accent);
+  background: var(--js-spreadsheet-accent);
   color: #fff;
   font-weight: 800;
   cursor: pointer;
@@ -1917,7 +1921,7 @@ button {
 }
 
 .primary-panel-button:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--js-spreadsheet-accent-strong);
 }
 
 .primary-panel-button:active:not(:disabled) {
@@ -1951,7 +1955,7 @@ button {
   display: grid;
   width: max-content;
   min-width: 100%;
-  zoom: var(--sheet-zoom, 1);
+  zoom: var(--js-spreadsheet-sheet-zoom, 1);
   /* Uniform digit widths keep live-updating numbers from shifting cell text. */
   font-variant-numeric: tabular-nums;
 }
@@ -1995,7 +1999,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--chrome-strong);
+  background: var(--js-spreadsheet-chrome-strong);
   color: #52617a;
   font-size: 12px;
   font-weight: 600;
@@ -2038,7 +2042,7 @@ button {
 
 .corner-cell:hover::after,
 .corner-cell[aria-pressed="true"]::after {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--js-spreadsheet-accent);
 }
 
 .column-header {
@@ -2065,20 +2069,20 @@ button {
    data, mirroring Excel's highlighted headers for any selection. */
 .column-header--hit {
   background: #e4f1ea;
-  color: var(--accent-strong);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  color: var(--js-spreadsheet-accent-strong);
+  box-shadow: inset 0 -2px 0 var(--js-spreadsheet-accent);
 }
 
 .row-header--hit {
   background: #e4f1ea;
-  color: var(--accent-strong);
-  box-shadow: inset -2px 0 0 var(--accent);
+  color: var(--js-spreadsheet-accent-strong);
+  box-shadow: inset -2px 0 0 var(--js-spreadsheet-accent);
 }
 
 .corner-cell[aria-pressed="true"],
 .selected-header {
   background: #d8eee2;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   box-shadow: inset 0 0 0 1px rgba(34, 121, 93, 0.34);
 }
 
@@ -2295,7 +2299,7 @@ button {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--js-spreadsheet-accent);
   pointer-events: none;
 }
 
@@ -2305,7 +2309,7 @@ button {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
-  border: 2px dashed var(--accent);
+  border: 2px dashed var(--js-spreadsheet-accent);
   pointer-events: none;
 }
 
@@ -2329,7 +2333,7 @@ button {
   padding: 0;
   border: 1px solid #fff;
   border-radius: 1px;
-  background: var(--accent-strong);
+  background: var(--js-spreadsheet-accent-strong);
   cursor: crosshair;
   /* Centered on the selection's bottom-right corner, straddling it like Excel. */
   transform: translate(-50%, -50%);
@@ -2355,6 +2359,21 @@ button {
 .auto-filter-header-cell > span,
 .auto-filter-header-cell > a {
   padding-right: 20px;
+}
+
+/* GridViewport now owns the semantic cell box. Keep source-specific popovers
+   visible outside that box while their trigger cells remain virtualized. */
+.auto-filter-header-cell,
+.validation-list-cell {
+  overflow: visible;
+}
+
+.auto-filter-header-cell:has(.auto-filter-menu) {
+  z-index: 10;
+}
+
+.validation-list-cell:has(.validation-dropdown) {
+  z-index: 9;
 }
 
 .auto-filter-menu-open {
@@ -2385,7 +2404,7 @@ button {
 .filtered-header-cell .auto-filter-toggle {
   border-color: rgba(34, 121, 93, 0.5);
   background: #fff;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -2428,7 +2447,7 @@ button {
 .auto-filter-menu button:focus-visible,
 .auto-filter-menu button[aria-checked="true"] {
   background: #eaf7f2;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -2470,7 +2489,7 @@ button {
   border: 1px solid rgba(34, 121, 93, 0.28);
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.88);
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   padding: 0;
   cursor: pointer;
   transform: translateY(-50%);
@@ -2523,7 +2542,7 @@ button {
 .validation-dropdown button:focus-visible,
 .validation-dropdown button[aria-selected="true"] {
   background: #eaf7f2;
-  color: var(--accent-strong);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -2649,7 +2668,7 @@ button {
 
 .frozen-top-row-cell {
   position: sticky;
-  top: var(--column-header-height, 28px);
+  top: var(--js-spreadsheet-column-header-height, 28px);
   z-index: 4;
   background: #fff;
   box-shadow: inset 0 -1px 0 #b7c4d2;
@@ -2657,7 +2676,7 @@ button {
 
 .frozen-first-column-cell {
   position: sticky;
-  left: var(--row-header-width, 48px);
+  left: var(--js-spreadsheet-row-header-width, 48px);
   z-index: 4;
   background: #fff;
   box-shadow: inset -1px 0 0 #b7c4d2;
@@ -2672,16 +2691,16 @@ button {
    passes underneath them; restore a per-cell accent ring there instead. */
 .selected-cell.frozen-top-row-cell {
   background: #e9f4ee;
-  box-shadow: inset 0 0 0 2px var(--accent), inset 0 -1px 0 #b7c4d2;
+  box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset 0 -1px 0 #b7c4d2;
 }
 
 .selected-cell.frozen-first-column-cell {
   background: #e9f4ee;
-  box-shadow: inset 0 0 0 2px var(--accent), inset -1px 0 0 #b7c4d2;
+  box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset -1px 0 0 #b7c4d2;
 }
 
 .selected-cell.frozen-top-row-cell.frozen-first-column-cell {
-  box-shadow: inset 0 0 0 2px var(--accent), inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
+  box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
 }
 
 /* The active cell stays white even inside frozen panes (higher specificity so
@@ -2714,7 +2733,7 @@ button {
 .cell-editor {
   width: 100%;
   height: 100%;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--js-spreadsheet-accent);
   padding: 0 5px;
   background: #fff;
   outline: none;
@@ -2798,7 +2817,7 @@ button {
 
 .sheet-chart-header strong {
   overflow: hidden;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
   font-size: 13px;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -2806,7 +2825,7 @@ button {
 }
 
 .sheet-chart-header small {
-  color: var(--muted);
+  color: var(--js-spreadsheet-muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -2895,7 +2914,7 @@ button {
   place-items: center;
   border: 1px dashed #c6d1dc;
   border-radius: 6px;
-  color: var(--muted);
+  color: var(--js-spreadsheet-muted);
   font-size: 12px;
   font-weight: 800;
 }
@@ -2906,8 +2925,8 @@ button {
   gap: 4px;
   min-height: 38px;
   padding: 5px 8px;
-  border-top: 1px solid var(--border);
-  background: var(--chrome);
+  border-top: 1px solid var(--js-spreadsheet-border);
+  background: var(--js-spreadsheet-chrome);
   overflow-x: auto;
 }
 
@@ -2929,10 +2948,10 @@ button {
 }
 
 .active-sheet-tab {
-  border-color: var(--accent);
+  border-color: var(--js-spreadsheet-accent);
   border-top-color: transparent;
-  color: var(--accent-strong);
-  background: var(--accent-soft);
+  color: var(--js-spreadsheet-accent-strong);
+  background: var(--js-spreadsheet-accent-soft);
 }
 
 .add-sheet-tab {
@@ -2949,7 +2968,7 @@ button {
   padding: 4px 10px;
   border-top: 1px solid #d4dde7;
   background: #f9fbfc;
-  color: var(--muted);
+  color: var(--js-spreadsheet-muted);
   font-size: 12px;
   /* Live counts/sums update constantly; keep digits from jittering the layout. */
   font-variant-numeric: tabular-nums;
@@ -2974,7 +2993,7 @@ button {
   border: 1px solid #c9d4df;
   border-radius: 4px;
   background: #fff;
-  color: var(--text);
+  color: var(--js-spreadsheet-text);
   font-size: 11px;
   font-weight: 800;
   cursor: pointer;
@@ -2982,8 +3001,8 @@ button {
 
 .status-zoom button:hover,
 .status-zoom button:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent-strong);
+  border-color: var(--js-spreadsheet-accent);
+  color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
@@ -3171,13 +3190,8 @@ button {
 }
 
 @media print {
-  :root,
-  body {
+  :scope {
     background: #fff;
-  }
-
-  body {
-    min-width: 0;
   }
 
   .app-shell {
@@ -3228,8 +3242,246 @@ button {
     position: static;
   }
 }
+}
 
-.file-drop-overlay {
+/* Workbook structured tables are intentionally root-scoped so embedding the
+   spreadsheet cannot leak ribbon, field, or cell styles into the host page. */
+.js-spreadsheet-root.js-spreadsheet-workbook .ribbon-tab--contextual {
+  border-top-color: color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 52%, transparent);
+  color: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent-strong));
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .ribbon-tab--contextual[aria-selected="true"] {
+  background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-accent-soft));
+  box-shadow: inset 0 2px 0 var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .spreadsheet-table-tab {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px 14px;
+  flex: 1 1 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+  padding: 1px 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-tab-fields,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-style-options,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions {
+  display: flex;
+  align-items: end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-tab-fields,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-style-options {
+  padding-right: 12px;
+  border-right: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field {
+  display: grid;
+  gap: 3px;
+  min-width: 104px;
+  color: var(--js-spreadsheet-text-muted, var(--js-spreadsheet-muted));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > input,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > select {
+  width: 132px;
+  min-height: 30px;
+  border: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
+  border-radius: 5px;
+  background: var(--js-spreadsheet-surface, #fff);
+  padding: 4px 7px;
+  color: var(--js-spreadsheet-text, var(--js-spreadsheet-text));
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > input:focus-visible,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > select:focus-visible,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:focus-visible {
+  border-color: var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
+  outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 24%, transparent);
+  outline-offset: 1px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  color: var(--js-spreadsheet-text, var(--js-spreadsheet-text));
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button {
+  min-height: 30px;
+  border: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
+  border-radius: 5px;
+  background: var(--js-spreadsheet-surface, #fff);
+  padding: 4px 8px;
+  color: var(--js-spreadsheet-text, var(--js-spreadsheet-text));
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:hover:not(:disabled) {
+  border-color: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent));
+  background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-accent-soft));
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-popover {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(116px, max-content));
+  align-items: end;
+  gap: 7px;
+  flex: 1 1 100%;
+  max-width: 100%;
+  border: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
+  border-radius: 6px;
+  background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-chrome));
+  padding: 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field-error,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary {
+  margin: 0;
+  color: var(--js-spreadsheet-danger, #b42318);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary {
+  flex: 1 1 100%;
+  border-left: 3px solid var(--js-spreadsheet-danger, #b42318);
+  background: color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 8%, transparent);
+  padding: 5px 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary > p {
+  margin: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--header {
+  background: var(--js-spreadsheet-surface-muted, #e7f3ee);
+  color: var(--js-spreadsheet-text, var(--js-spreadsheet-text));
+  font-weight: 750;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--body.structured-table-cell--striped,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--body[data-striped="true"] {
+  background: color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 7%, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--totals {
+  border-top: 2px solid var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
+  background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-chrome));
+  font-weight: 750;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell[data-structured-table-style^="TableStyleMedium"].structured-table-cell--header,
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell[data-structured-table-style^="TableStyleDark"].structured-table-cell--header {
+  background: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent));
+  color: var(--js-spreadsheet-accent-contrast, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-filter-affordance {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  color: currentcolor;
+  opacity: 0.72;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-filter-affordance > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view {
+  position: absolute;
+  inset: 76px 14px 42px;
+  z-index: 45;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  border-radius: 10px;
+  background: var(--js-spreadsheet-surface, #fff);
+  box-shadow: 0 18px 48px rgb(16 24 40 / 18%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  background: var(--js-spreadsheet-surface-muted, #f7f8fa);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header h2,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header p {
+  margin: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__header p {
+  color: var(--js-spreadsheet-text-muted, #667085);
+  font-size: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__issue {
+  border-bottom: 1px solid var(--js-spreadsheet-border, #d0d5dd);
+  padding: 8px 12px;
+  color: var(--js-spreadsheet-danger, #b42318);
+  background: color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 7%, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-workbook-table-view__table {
+  min-height: 0;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .file-drop-overlay {
   position: fixed;
   inset: 0;
   z-index: 60;

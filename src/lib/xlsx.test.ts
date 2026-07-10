@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { strFromU8, unzipSync } from "fflate";
+import type { WorkbookModel } from "../types";
 import {
   addSheet,
   addConditionalFormatRule,
@@ -38,15 +40,13 @@ import {
   setRowHeight,
   setCellBorders
 } from "./workbook";
-import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
+import { exportStructuredTableToXlsx, exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
 
 describe("xlsx", () => {
-  it("round-trips sheets, values, formulas, comments, hyperlinks, merges, and dimensions", async () => {
+  it("round-trips sheets, text, formulas, comments, hyperlinks, merges, and dimensions", async () => {
     let workbook = createBlankWorkbook();
     const firstSheetId = workbook.activeSheetId;
     workbook = setCellContent(workbook, firstSheetId, "A1", "Project");
-    workbook = setCellContent(workbook, firstSheetId, "B2", 42);
-    workbook = setCellContent(workbook, firstSheetId, "C3", true);
     workbook = setCellContent(workbook, firstSheetId, "D4", "=SUM(B2:B2)");
     workbook = setCellFormat(
       workbook,
@@ -77,8 +77,6 @@ describe("xlsx", () => {
 
     expect(imported.sheets.map((sheet) => sheet.name)).toEqual(["Sheet1", "Forecast"]);
     expect(getCellContent(imported, importedFirstSheetId, "A1")).toBe("Project");
-    expect(getCellContent(imported, importedFirstSheetId, "B2")).toBe(42);
-    expect(getCellContent(imported, importedFirstSheetId, "C3")).toBe(true);
     expect(getCellContent(imported, importedFirstSheetId, "D4")).toBe("=SUM(B2:B2)");
     expect(getCellFormat(imported, importedFirstSheetId, "A1")).toMatchObject({ wrapText: true });
     expect(getCellComment(imported, importedFirstSheetId, "A1")).toBe("Imported note");
@@ -93,6 +91,99 @@ describe("xlsx", () => {
     expect(isColumnHidden(imported, importedFirstSheetId, 3)).toBe(true);
     expect(isRowHidden(imported, importedFirstSheetId, 4)).toBe(true);
     expect(getCellContent(imported, importedSecondSheetId, "A1")).toBe("Second sheet");
+  });
+
+  it("preserves native model number and boolean types through XLSX", async () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 42.5);
+    workbook = setCellContent(workbook, sheetId, "A2", -7);
+    workbook = setCellContent(workbook, sheetId, "B1", true);
+    workbook = setCellContent(workbook, sheetId, "B2", false);
+
+    const data = await exportWorkbookToXlsx(workbook);
+    const imported = await importWorkbookFromXlsx(data);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(["A1", "A2", "B1", "B2"].map((address) => getCellContent(imported, importedSheetId, address))).toEqual([
+      42.5,
+      -7,
+      true,
+      false
+    ]);
+  });
+
+  it("imports and re-exports native XLSX dates as typed serials with matching formats", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const nativeWorkbook = new ExcelJS.Workbook();
+    const nativeSheet = nativeWorkbook.addWorksheet("Dates");
+    nativeSheet.getCell("A1").value = new Date(Date.UTC(2026, 0, 15));
+    nativeSheet.getCell("A1").numFmt = "mm-dd-yy";
+    nativeSheet.getCell("A2").value = new Date(Date.UTC(2026, 0, 15, 12));
+    nativeSheet.getCell("A2").numFmt = "m/d/yy h:mm";
+
+    const nativeData = await nativeWorkbook.xlsx.writeBuffer();
+    const imported = await importWorkbookFromXlsx(nativeData as ArrayBuffer);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellContent(imported, importedSheetId, "A1")).toBe(46037);
+    expect(getCellContent(imported, importedSheetId, "A2")).toBe(46037.5);
+    expect(getCellFormat(imported, importedSheetId, "A1")).toMatchObject({ numberFormat: "date" });
+    expect(getCellFormat(imported, importedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
+
+    const exportedData = await exportWorkbookToXlsx(imported);
+    const nativeReadback = new ExcelJS.Workbook();
+    await nativeReadback.xlsx.load(exportedData as Parameters<typeof nativeReadback.xlsx.load>[0]);
+    const nativeReadbackSheet = nativeReadback.getWorksheet("Dates");
+    const nativeDate = nativeReadbackSheet?.getCell("A1");
+    const nativeDateTime = nativeReadbackSheet?.getCell("A2");
+
+    expect(nativeDate?.value).toBeInstanceOf(Date);
+    expect((nativeDate?.value as Date).toISOString()).toBe("2026-01-15T00:00:00.000Z");
+    expect(nativeDate?.numFmt).toBe("mmm d, yyyy");
+    expect(nativeDateTime?.value).toBeInstanceOf(Date);
+    expect((nativeDateTime?.value as Date).toISOString()).toBe("2026-01-15T12:00:00.000Z");
+    expect(nativeDateTime?.numFmt).toBe("mmm d, yyyy h:mm AM/PM");
+
+    const reimported = await importWorkbookFromXlsx(exportedData);
+    const reimportedSheetId = reimported.sheets[0].id;
+
+    expect(getCellContent(reimported, reimportedSheetId, "A1")).toBe(46037);
+    expect(getCellContent(reimported, reimportedSheetId, "A2")).toBe(46037.5);
+    expect(getCellFormat(reimported, reimportedSheetId, "A1")).toMatchObject({ numberFormat: "date" });
+    expect(getCellFormat(reimported, reimportedSheetId, "A2")).toMatchObject({ numberFormat: "dateTime" });
+  });
+
+  it("classifies temporal number formats from actual tokens instead of literals and colors", async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const nativeWorkbook = new ExcelJS.Workbook();
+    const nativeSheet = nativeWorkbook.addWorksheet("Formats");
+    const formats = {
+      A1: "[Red]0.00",
+      A2: "h:mm",
+      A3: '0.00 "days"',
+      A4: "0.00\\d",
+      A5: "[$USD-409]#,##0.00"
+    } as const;
+
+    for (const [address, numFmt] of Object.entries(formats)) {
+      nativeSheet.getCell(address).value = address === "A2" ? 0.5 : 12.5;
+      nativeSheet.getCell(address).numFmt = numFmt;
+    }
+
+    const nativeData = await nativeWorkbook.xlsx.writeBuffer();
+    const imported = await importWorkbookFromXlsx(nativeData as ArrayBuffer);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(getCellContent(imported, importedSheetId, "A1")).toBe(12.5);
+    expect(getCellFormat(imported, importedSheetId, "A1").numberFormat).toBeUndefined();
+    expect(getCellContent(imported, importedSheetId, "A2")).toBe(0.5);
+    expect(getCellFormat(imported, importedSheetId, "A2").numberFormat).toBe("dateTime");
+    expect(["A3", "A4", "A5"].map((address) => getCellFormat(imported, importedSheetId, address).numberFormat)).toEqual([
+      undefined,
+      undefined,
+      undefined
+    ]);
   });
 
   it("round-trips the active sheet through XLSX", async () => {
@@ -538,6 +629,166 @@ describe("xlsx", () => {
       freezeTopRow: true,
       freezeFirstColumn: true
     });
+  });
+});
+
+describe("native structured table XLSX", () => {
+  function nativeTableWorkbook(): WorkbookModel {
+    const base = createBlankWorkbook();
+    const sheet = base.sheets[0];
+    return {
+      ...base,
+      sheets: [{
+        ...sheet,
+        name: "Sales",
+        cells: {
+          A1: "Label", B1: "Standard", C1: "Custom Value", D1: "Custom Formula",
+          A2: "East", B2: 2, C2: 5, D2: "=B2*C2",
+          A3: "West", B3: 4, C3: 3, D3: "=B3*C3",
+          A4: "Grand Total", B4: "=SUM(B2:B3)", C4: 99, D4: "=SUM(D2:D3)"
+        }
+      }],
+      tables: [{
+        id: "private-table-id",
+        name: "SalesTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 3, column: 3 } },
+        headerRow: true,
+        totalsRow: true,
+        columns: [
+          { id: "private-label", name: "Label", sheetColumn: 0, totalsLabel: "Grand Total" },
+          { id: "private-standard", name: "Standard", sheetColumn: 1, totalsFunction: "sum" },
+          { id: "private-custom-value", name: "Custom Value", sheetColumn: 2 },
+          { id: "private-custom-formula", name: "Custom Formula", sheetColumn: 3, calculatedFormula: "=B2*C2" }
+        ],
+        rowIds: ["private-row-one", "private-row-two"],
+        keyColumnId: "private-label",
+        style: { theme: "TableStyleLight9", showRowStripes: true },
+        filter: {
+          kind: "set",
+          columnId: "private-label",
+          operator: "in",
+          values: [{ type: "string", value: "East" }]
+        }
+      }]
+    };
+  }
+
+  it("exports actual Excel tables plus the OOXML metadata ExcelJS drops", async () => {
+    const workbook = nativeTableWorkbook();
+    const data = await exportWorkbookToXlsx(workbook);
+    const ExcelJS = (await import("exceljs")).default;
+    const native = new ExcelJS.Workbook();
+    await native.xlsx.load(data as Parameters<typeof native.xlsx.load>[0]);
+    const worksheet = native.getWorksheet("Sales")!;
+
+    expect(worksheet.getTables()).toHaveLength(1);
+    expect(worksheet.getTable("SalesTable").name).toBe("SalesTable");
+    expect(worksheet.getCell("B4").formula).toBe("SUM(B2:B3)");
+    expect(worksheet.getCell("D4").formula).toBe("SUM(D2:D3)");
+    expect(worksheet.getCell("C4").value).toBe(99);
+
+    const entries = unzipSync(new Uint8Array(data));
+    const xml = strFromU8(entries["xl/tables/table1.xml"]);
+    expect(Object.keys(entries)).toContain("xl/worksheets/_rels/sheet1.xml.rels");
+    expect(xml).toContain('totalsRowLabel="Grand Total"');
+    expect(xml).toContain('totalsRowFunction="sum"');
+    expect(xml).toContain('totalsRowFunction="custom"');
+    expect(xml).toContain("<totalsRowFormula>");
+    expect(xml).toContain("<calculatedColumnFormula>");
+    expect(xml).toContain('<filter val="East"/>');
+    expect(xml).toContain('name="TableStyleLight9"');
+    for (const privateId of [
+      workbook.tables[0].id,
+      workbook.tables[0].sheetId,
+      workbook.tables[0].keyColumnId,
+      ...workbook.tables[0].columns.map((column) => column.id),
+      ...workbook.tables[0].rowIds
+    ]) {
+      expect(xml).not.toContain(privateId);
+    }
+  });
+
+  it("preserves standard, custom formula, custom value, label, calculation, and filter semantics", async () => {
+    const first = await importWorkbookFromXlsx(await exportWorkbookToXlsx(nativeTableWorkbook()));
+    const persisted = JSON.parse(JSON.stringify(first)) as WorkbookModel;
+    const second = await importWorkbookFromXlsx(await exportWorkbookToXlsx(persisted));
+    const table = second.tables[0];
+    const sheet = second.sheets[0];
+
+    expect(table.columns.find((column) => column.name === "Label")?.totalsLabel).toBe("Grand Total");
+    expect(table.columns.find((column) => column.name === "Standard")?.totalsFunction).toBe("sum");
+    expect(table.columns.find((column) => column.name === "Custom Formula")?.calculatedFormula).toBe("=B2*C2");
+    expect(sheet.cells.D4).toBe("=SUM(D2:D3)");
+    expect(sheet.cells.C4).toBe(99);
+    expect(table.filter).toMatchObject({ kind: "set", operator: "in" });
+  });
+
+  it("imports table-column formula metadata even when ExcelJS cannot parse its native column position", async () => {
+    const workbook = nativeTableWorkbook();
+    const sheet = workbook.sheets[0];
+    const adjusted: WorkbookModel = {
+      ...workbook,
+      sheets: [{
+        ...sheet,
+        cells: { ...sheet.cells, B2: "=C2*2", B3: "=C3*2" }
+      }],
+      tables: [{
+        ...workbook.tables[0],
+        columns: workbook.tables[0].columns.map((column) =>
+          column.name === "Standard" ? { ...column, calculatedFormula: "=C2*2" } : column
+        )
+      }]
+    };
+
+    const imported = await importWorkbookFromXlsx(await exportWorkbookToXlsx(adjusted));
+    expect(imported.tables[0].columns.find((column) => column.name === "Standard")?.calculatedFormula).toBe(
+      "=C2*2"
+    );
+    expect(imported.sheets[0].cells.B3).toBe("=C3*2");
+  });
+
+  it("creates a narrow native table artifact and rejects external dependencies", async () => {
+    const workbook = nativeTableWorkbook();
+    const bytes = await exportStructuredTableToXlsx(workbook, workbook.tables[0].id);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(bytes.byteLength).toBeGreaterThan(0);
+
+    const external: WorkbookModel = {
+      ...workbook,
+      sheets: [{
+        ...workbook.sheets[0],
+        cells: { ...workbook.sheets[0].cells, D2: "=Z99" }
+      }]
+    };
+    await expect(exportStructuredTableToXlsx(external, external.tables[0].id)).rejects.toMatchObject({
+      code: "TABLE_EXPORT_EXTERNAL_DEPENDENCY"
+    });
+    const named: WorkbookModel = {
+      ...workbook,
+      namedRanges: [{
+        name: "TaxRate",
+        sheetId: workbook.sheets[0].id,
+        range: { start: { row: 20, column: 20 }, end: { row: 20, column: 20 } }
+      }],
+      sheets: [{
+        ...workbook.sheets[0],
+        cells: { ...workbook.sheets[0].cells, D2: "=TaxRate*B2" }
+      }]
+    };
+    await expect(exportStructuredTableToXlsx(named, named.tables[0].id)).rejects.toMatchObject({
+      code: "TABLE_EXPORT_EXTERNAL_DEPENDENCY"
+    });
+    const otherTableReference: WorkbookModel = {
+      ...workbook,
+      sheets: [{
+        ...workbook.sheets[0],
+        cells: { ...workbook.sheets[0].cells, D2: "=OtherTable[@Amount]" }
+      }]
+    };
+    await expect(
+      exportStructuredTableToXlsx(otherTableReference, otherTableReference.tables[0].id)
+    ).rejects.toMatchObject({ code: "TABLE_EXPORT_EXTERNAL_DEPENDENCY" });
   });
 });
 

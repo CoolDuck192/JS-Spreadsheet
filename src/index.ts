@@ -7,8 +7,83 @@
  * headless workbook/engine/io functions for programmatic use.
  */
 
-export { default } from "./App";
-export { default as Spreadsheet } from "./App";
+export { default, Spreadsheet } from "./react/Spreadsheet";
+export type {
+  SpreadsheetCommonProps,
+  SpreadsheetErrorEvent,
+  SpreadsheetProps,
+  WorkbookChangeEvent,
+  WorkbookFeatureConfiguration,
+  WorkbookStorage,
+  WorkbookThemeToken
+} from "./react/Spreadsheet";
+export { useWorkbookSession } from "./react/useWorkbookSession";
+export type {
+  UseWorkbookSessionCommonOptions,
+  UseWorkbookSessionOptions
+} from "./react/useWorkbookSession";
+export {
+  WorkbookSessionProvider,
+  useWorkbookSessionContext
+} from "./react/WorkbookSessionContext";
+export { DataTable } from "./react/DataTable";
+export { WorkbookTableView } from "./react/workbook/WorkbookTableView";
+export type { WorkbookTableViewProps } from "./react/workbook/WorkbookTableView";
+export { useTableSession } from "./react/useTableSession";
+export { useTableSnapshot } from "./react/useTableSnapshot";
+export {
+  TableSessionProvider,
+  useTableSessionContext
+} from "./react/TableSessionContext";
+export type {
+  CellEditorProps,
+  CellRenderContext,
+  ColumnDef,
+  DataTableHandle,
+  DataTablePresentationProps,
+  DataTableProps,
+  HeaderRenderContext
+} from "./react/tableTypes";
+export {
+  RecordTableSession,
+  createLocalRecordTableSession
+} from "./table/local/RecordTableSession";
+export { createWorkbookTableSession } from "./table/workbook/WorkbookTableSession";
+export type {
+  WorkbookTableRow,
+  WorkbookTableSession
+} from "./table/workbook/WorkbookTableSession";
+export type {
+  LocalRecordSource,
+  LocalRecordTableSessionOptions,
+  RecordFormulaService
+} from "./table/local/RecordTableSession";
+export type {
+  ExportArtifact,
+  ExportOptions,
+  TableIntent,
+  TableSelection,
+  TableSession,
+  TableViewSnapshot,
+  TableViewState
+} from "./table/core/types";
+export {
+  createWorkbookSession,
+  type CreateWorkbookSessionOptions,
+  type WorkbookCommandResult,
+  type WorkbookDiagnosticEvent,
+  type WorkbookSession,
+  type WorkbookSnapshot
+} from "./core/workbook/WorkbookSession";
+export type {
+  SpreadsheetServices,
+  TokenProvider as WorkbookTokenProvider,
+  WorkbookExportArtifact,
+  WorkbookExporter,
+  WorkbookImporter,
+  WorkbookImportPayload,
+  WorkbookServiceOptions
+} from "./core/workbook/services";
 
 export type {
   CellContent,

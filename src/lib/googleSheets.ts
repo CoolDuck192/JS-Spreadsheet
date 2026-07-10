@@ -81,10 +81,11 @@ export async function importWorkbookFromGoogleSheets(
   return {
     spreadsheetTitle: metadata.properties?.title ?? "Google Sheet",
     workbook: {
-      version: 1,
+      version: 2,
       activeSheetId: activeSheet.id,
       sheets,
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     }
   };
 }

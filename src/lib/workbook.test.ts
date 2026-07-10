@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CellRange } from "../types";
+import { createFormulaEngine } from "./formulaEngine";
 import {
   addSheetChart,
   addSheet,
@@ -92,7 +93,8 @@ describe("workbook", () => {
   it("creates a blank workbook with one sheet", () => {
     const workbook = createBlankWorkbook();
 
-    expect(workbook.version).toBe(1);
+    expect(workbook.version).toBe(2);
+    expect(workbook.tables).toEqual([]);
     expect(workbook.sheets).toHaveLength(1);
     expect(getActiveSheet(workbook).name).toBe("Sheet1");
     expect(getActiveSheet(workbook).rowCount).toBe(100);
@@ -233,6 +235,42 @@ describe("workbook", () => {
     expect(getCellComment(sorted, sheetId, "A2")).toBe("Delta note");
     expect(getCellHyperlink(sorted, sheetId, "A2")).toBe("https://example.com/delta");
     expect(getCellValidation(sorted, sheetId, "B2")).toEqual({ type: "number", min: 1, max: 10 });
+  });
+
+  it("sorts by a pre-sort evaluated snapshot and translates moved relative formulas", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", 20);
+    workbook = setCellContent(workbook, sheetId, "B1", "=A1");
+    workbook = setCellContent(workbook, sheetId, "A2", 10);
+    workbook = setCellContent(workbook, sheetId, "B2", "=A2");
+    const beforeSort = createFormulaEngine(workbook);
+
+    const sorted = sortRange(workbook, sheetId, range("A1", "B2"), {
+      direction: "asc",
+      sortColumn: 1,
+      readValue: (address) => beforeSort.getComputedValue(sheetId, address)
+    });
+    const afterSort = createFormulaEngine(sorted);
+
+    expect(getCellContent(sorted, sheetId, "A1")).toBe(10);
+    expect(getCellContent(sorted, sheetId, "B1")).toBe("=A1");
+    expect(afterSort.getComputedValue(sheetId, "B1")).toBe(10);
+    expect(getCellContent(sorted, sheetId, "A2")).toBe(20);
+    expect(getCellContent(sorted, sheetId, "B2")).toBe("=A2");
+    expect(afterSort.getComputedValue(sheetId, "B2")).toBe(20);
+  });
+
+  it("orders text deterministically without the runtime's default locale", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "ä");
+    workbook = setCellContent(workbook, sheetId, "A2", "z");
+
+    const sorted = sortRange(workbook, sheetId, range("A1", "A2"), "asc");
+
+    expect(getCellContent(sorted, sheetId, "A1")).toBe("z");
+    expect(getCellContent(sorted, sheetId, "A2")).toBe("ä");
   });
 
   it("removes duplicate rows from a selected range and shifts row metadata", () => {
@@ -429,6 +467,48 @@ describe("workbook", () => {
     expect(getCellContent(deleted, sheetId, "B1")).toBe("10");
     expect(getCellContent(deleted, sheetId, "C1")).toBe("=B1*2");
     expect(getCellFormat(deleted, sheetId, "B1")).toEqual({ backgroundColor: "#eaf7f2" });
+  });
+
+  it("does not rewrite LOG10, scientific notation, or quoted A1-like text during row insertion", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "B1", '=LOG10(A1)+1E5+Q1_TOTAL+"A1 ""B2"""');
+
+    const inserted = insertRows(workbook, sheetId, 0);
+
+    expect(getCellContent(inserted, sheetId, "B2")).toBe('=LOG10(A2)+1E5+Q1_TOTAL+"A1 ""B2"""');
+  });
+
+  it("updates formulas on other sheets that reference the structurally edited sheet", () => {
+    let workbook = createBlankWorkbook();
+    const dataSheetId = workbook.activeSheetId;
+    workbook = renameSheet(workbook, dataSheetId, "Director's Plan");
+    workbook = addSheet(workbook, "Summary");
+    const summarySheetId = workbook.activeSheetId;
+
+    workbook = setCellContent(workbook, dataSheetId, "A2", "10");
+    workbook = setCellContent(workbook, dataSheetId, "C1", "=A2+Summary!A2");
+    workbook = setCellContent(
+      workbook,
+      summarySheetId,
+      "B2",
+      "=SUM('Director''s Plan'!$A$2:$A$4)+A2"
+    );
+    workbook = setCellFormat(workbook, summarySheetId, range("B2"), { bold: true });
+    workbook = setCellComment(workbook, summarySheetId, "B2", "Keep this metadata in place");
+
+    const inserted = insertRows(workbook, dataSheetId, 1);
+
+    expect(getCellContent(inserted, dataSheetId, "A2")).toBeNull();
+    expect(getCellContent(inserted, dataSheetId, "A3")).toBe("10");
+    expect(getCellContent(inserted, dataSheetId, "C1")).toBe("=A3+Summary!A2");
+    expect(getCellContent(inserted, summarySheetId, "B2")).toBe(
+      "=SUM('Director''s Plan'!$A$3:$A$5)+A2"
+    );
+    expect(getCellContent(inserted, summarySheetId, "B3")).toBeNull();
+    expect(getCellFormat(inserted, summarySheetId, "B2")).toEqual({ bold: true });
+    expect(getCellComment(inserted, summarySheetId, "B2")).toBe("Keep this metadata in place");
+    expect(getCellComment(inserted, summarySheetId, "B3")).toBeNull();
   });
 
   it("stores, clamps, and shifts row heights and column widths", () => {
@@ -854,6 +934,30 @@ describe("workbook", () => {
 
     history = redoHistory(history);
     expect(getCellContent(history.present, history.present.activeSheetId, "A1")).toBe("20");
+  });
+
+  it("never retains more than 100 undo snapshots", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    let history = createHistory(initial);
+    let maximumDepth = 0;
+
+    for (let value = 1; value <= 105; value += 1) {
+      history = commitHistory(history, setCellContent(history.present, sheetId, "A1", value));
+      maximumDepth = Math.max(maximumDepth, history.past.length);
+    }
+
+    expect({
+      maximumDepth,
+      retainedDepth: history.past.length,
+      oldestRetainedValue: getCellContent(history.past[0], sheetId, "A1"),
+      newestRetainedValue: getCellContent(history.past.at(-1)!, sheetId, "A1")
+    }).toEqual({
+      maximumDepth: 100,
+      retainedDepth: 100,
+      oldestRetainedValue: 5,
+      newestRetainedValue: 104
+    });
   });
 
   it("applies text and color formatting to a range", () => {

@@ -1,10 +1,182 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { createRef } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { Grid } from "./Grid";
+import { formatCellAddress } from "../lib/addressing";
 import { createFormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
 
 describe("Grid", () => {
+  it("renders the spreadsheet through the shared viewport kernel", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute(
+      "data-viewport-kernel",
+      "shared"
+    );
+  });
+
+  it("keeps formula suggestions and validation choices inside the active editor overlay", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const formulaEngine = createFormulaEngine(workbook);
+    const commonProps = {
+      sheet,
+      formulaEngine,
+      selection: { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      getCellFormat: () => undefined,
+      onSelectionChange: () => undefined,
+      onStartEdit: () => undefined,
+      onEditValueChange: () => undefined,
+      onCommitEdit: () => undefined,
+      onCancelEdit: () => undefined,
+      onPasteText: () => undefined,
+      onKeyCommand: () => undefined
+    };
+    const { rerender } = render(<Grid {...commonProps} editingCell={{ address: "A1", value: "=S" }} />);
+
+    const formulaEditor = screen.getByRole("combobox", { name: "Cell editor A1" });
+    const formulaOverlay = formulaEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]');
+    expect(formulaOverlay).not.toBeNull();
+    expect(within(formulaOverlay as HTMLElement).getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
+
+    rerender(
+      <Grid
+        {...commonProps}
+        selection={{ start: { row: 0, column: 1 }, end: { row: 0, column: 1 } }}
+        editingCell={{ address: "B1", value: "Open" }}
+        getCellValidation={(address) =>
+          address === "B1" ? { type: "list", values: ["Open", "Closed"] } : undefined
+        }
+      />
+    );
+    const validationEditor = screen.getByRole("combobox", { name: "Cell editor B1" });
+    expect(validationEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]')).not.toBeNull();
+    expect(within(validationEditor).getByRole("option", { name: "(None)" })).toHaveValue("");
+    expect(within(validationEditor).getByRole("option", { name: "Open" })).toBeInTheDocument();
+  });
+
+  it("keeps AutoFilter menus and cell context interactions source-specific", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 2,
+      cells: { A1: "Region", A2: "West", A3: "East", B1: "Amount" },
+      autoFilterRange: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } }
+    };
+    const workbook: WorkbookModel = { version: 2, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [], tables: [] };
+    const contexts: Array<{ address: string; row: number; column: number }> = [];
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onCellContextMenu={({ address, row, column }) => contexts.push({ address, row, column })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    expect(screen.getByRole("menu", { name: "AutoFilter menu for Region" })).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByRole("gridcell", { name: "B1 Amount" }), { clientX: 40, clientY: 60 });
+    expect(contexts).toEqual([{ address: "B1", row: 0, column: 1 }]);
+  });
+
+  it("preserves merged-cell spans and selection geometry in a virtual window", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 20,
+      columnCount: 20,
+      cells: { A1: "Merged report" },
+      merges: [
+        {
+          id: "merge-a1-c2",
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 2 } }
+        }
+      ]
+    };
+    const workbook: WorkbookModel = { version: 2, activeSheetId: sheet.id, sheets: [sheet], namedRanges: [], tables: [] };
+    const { container } = render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 1, column: 1 }, end: { row: 1, column: 1 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const merged = screen.getByRole("gridcell", { name: "A1 Merged report" });
+    expect(merged).toHaveAttribute("aria-colspan", "3");
+    expect(merged).toHaveAttribute("aria-rowspan", "2");
+    expect(container.querySelector(".selection-outline")).toHaveStyle({
+      top: "28px",
+      left: "48px",
+      width: "288px",
+      height: "56px"
+    });
+  });
+
+  it("preserves frozen row and column selection styling", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 1, column: 1 } }}
+        editingCell={null}
+        freezeTopRow
+        freezeFirstColumn
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveClass(
+      "selected-cell",
+      "frozen-top-row-cell",
+      "frozen-first-column-cell"
+    );
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("selected-cell", "frozen-top-row-cell");
+    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveClass("selected-cell", "frozen-first-column-cell");
+  });
+
   it("selects full columns, rows, and the sheet from headers", () => {
     const sheet: SheetModel = {
       id: "sheet-1",
@@ -25,10 +197,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const selections: CellRange[] = [];
 
@@ -87,10 +260,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -143,10 +317,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const selection: CellRange = {
       start: { row: 0, column: 0 },
@@ -183,6 +358,305 @@ describe("Grid", () => {
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(1600);
   });
 
+  it("renders bounded row and column windows for a 100,000 by 10,000 sheet", () => {
+    const target = { row: 5_000, column: 5_000 };
+    const targetAddress = formatCellAddress(target);
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 100_000,
+      columnCount: 10_000,
+      cells: { [targetAddress]: "Two-axis target" }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: target, end: target }}
+        editingCell={null}
+        showHeaders={false}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 480 },
+      scrollTop: { configurable: true, writable: true, value: target.row * 28 },
+      scrollLeft: { configurable: true, writable: true, value: target.column * 96 }
+    });
+
+    fireEvent.scroll(grid);
+
+    expect(screen.getByRole("gridcell", { name: `${targetAddress} Two-axis target` })).toBeInTheDocument();
+    expect(screen.getAllByRole("gridcell").length).toBeLessThan(600);
+  });
+
+  it("bounds a 10,000-column sheet while scrolling horizontally and retaining the frozen first column", () => {
+    const distantColumn = 5_000;
+    const hiddenColumn = distantColumn + 1;
+    const distantAddress = formatCellAddress({ row: 0, column: distantColumn });
+    const hiddenAddress = formatCellAddress({ row: 0, column: hiddenColumn });
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 1,
+      columnCount: 10_000,
+      cells: {
+        A1: "Frozen",
+        [distantAddress]: "Distant",
+        [hiddenAddress]: "Hidden"
+      },
+      hiddenColumns: { [String(hiddenColumn)]: true }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: distantColumn }, end: { row: 0, column: distantColumn } }}
+        editingCell={null}
+        freezeFirstColumn
+        showHeaders={false}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientWidth: { configurable: true, value: 480 },
+      scrollLeft: { configurable: true, writable: true, value: distantColumn * 96 }
+    });
+    fireEvent.scroll(grid);
+
+    expect(screen.getByRole("gridcell", { name: "A1 Frozen" })).toHaveClass("frozen-first-column-cell");
+    expect(screen.getByRole("gridcell", { name: `${distantAddress} Distant` })).toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: `${hiddenAddress} Hidden` })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("gridcell").length).toBeLessThan(20);
+  });
+
+  it("keeps selection and editor geometry correct after two-axis scrolling", () => {
+    const targetRow = 120;
+    const targetColumn = 120;
+    const targetAddress = formatCellAddress({ row: targetRow, column: targetColumn });
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 500,
+      columnCount: 200,
+      cells: { [targetAddress]: "=S" },
+      columnWidths: { "0": 120, "2": 140 },
+      hiddenColumns: { "1": true }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+    const scrollRef = createRef<HTMLDivElement>();
+    const selection = {
+      start: { row: targetRow, column: targetColumn },
+      end: { row: targetRow, column: targetColumn }
+    };
+    const { container, rerender } = render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={selection}
+        editingCell={null}
+        scrollRef={scrollRef}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 480 },
+      scrollTop: { configurable: true, writable: true, value: targetRow * 28 },
+      scrollLeft: { configurable: true, writable: true, value: 11_000 }
+    });
+    fireEvent.scroll(grid);
+
+    const expectedLeft = 48 + 120 + 140 + (targetColumn - 3) * 96;
+    expect(container.querySelector(".selection-outline")).toHaveStyle({
+      top: `${28 + targetRow * 28}px`,
+      left: `${expectedLeft}px`,
+      width: "96px",
+      height: "28px"
+    });
+
+    rerender(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={selection}
+        editingCell={{ address: targetAddress, value: "=S" }}
+        scrollRef={scrollRef}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("combobox", { name: `Cell editor ${targetAddress}` })).toHaveValue("=S");
+    expect(screen.getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
+  });
+
+  it("retains a merge anchor whose merged range reaches into the horizontal window", () => {
+    const anchorColumn = 80;
+    const visibleColumn = 103;
+    const anchorAddress = formatCellAddress({ row: 0, column: anchorColumn });
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 1,
+      columnCount: 200,
+      cells: { [anchorAddress]: "Wide merge" },
+      merges: [
+        {
+          id: "wide-merge",
+          range: {
+            start: { row: 0, column: anchorColumn },
+            end: { row: 0, column: visibleColumn }
+          }
+        }
+      ]
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: visibleColumn }, end: { row: 0, column: visibleColumn } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientWidth: { configurable: true, value: 480 },
+      scrollLeft: { configurable: true, writable: true, value: visibleColumn * 96 }
+    });
+    fireEvent.scroll(grid);
+
+    expect(screen.getByRole("gridcell", { name: `${anchorAddress} Wide merge` })).toHaveClass("merged-cell");
+    expect(screen.getAllByRole("gridcell").length).toBeLessThan(40);
+  });
+
+  it("ensureCellVisible reaches a distant row and column using full measurements", () => {
+    const targetRow = 150;
+    const targetColumn = 150;
+    const targetAddress = formatCellAddress({ row: targetRow, column: targetColumn });
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 200,
+      columnCount: 200,
+      cells: { [targetAddress]: "Ensure target" },
+      columnWidths: { [String(targetColumn)]: 160 },
+      rowHeights: { [String(targetRow)]: 60 },
+      hiddenColumns: { "1": true }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+    const scrollRef = createRef<HTMLDivElement>();
+    let scrollApi: { ensureCellVisible(row: number, column: number): void } | null = null;
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        scrollRef={scrollRef}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onRegisterScrollApi={(api) => {
+          scrollApi = api;
+        }}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 480 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+      scrollLeft: { configurable: true, writable: true, value: 0 }
+    });
+
+    scrollApi!.ensureCellVisible(targetRow, targetColumn);
+
+    const targetStart = (targetColumn - 1) * 96;
+    expect(grid.scrollTop).toBe(targetRow * 28 + 60 + 28 - 280);
+    expect(grid.scrollLeft).toBe(targetStart + 160 + 48 - 480);
+    fireEvent.scroll(grid);
+    expect(screen.getByRole("gridcell", { name: `${targetAddress} Ensure target` })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: `Column ${formatCellAddress({ row: 0, column: targetColumn }).replace(/1$/, "")}` })).toBeInTheDocument();
+  });
+
   it("marks frozen top-row and first-column cells for sticky pane styling", () => {
     const sheet: SheetModel = {
       id: "sheet-1",
@@ -207,10 +681,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -260,10 +735,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     let resizedColumn: { column: number; width: number } | null = null;
     let resizedRow: { row: number; height: number } | null = null;
@@ -470,7 +946,308 @@ describe("Grid", () => {
     expect(columnAutoFits).toEqual([0]);
     expect(rowAutoFits).toEqual([0]);
   });
+
+  it("uses validation candidates consistently for formula badges", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 1,
+      cells: {
+        A1: "=5+5",
+        A2: "=5+6",
+        A3: '="Open"'
+      },
+      validations: {
+        A1: { type: "number", min: 1, max: 10 },
+        A2: { type: "number", min: 1, max: 10 },
+        A3: { type: "list", values: ["Open", "Closed"] }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        getCellValidation={(address) => sheet.validations[address]}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 11" })).toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 Open" })).toHaveClass("invalid-validation-cell");
+  });
+
+  it("collects AutoFilter choices only while open and searches the full capped distinct set", () => {
+    const cells: SheetModel["cells"] = { A1: "Region" };
+    for (let index = 1; index <= 201; index += 1) {
+      cells[`A${index + 1}`] = `Value ${String(index).padStart(3, "0")}`;
+    }
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 202,
+      columnCount: 1,
+      cells,
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 201, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+    const formulaEngine = createFormulaEngine(workbook);
+    const displayValueSpy = vi.spyOn(formulaEngine, "getDisplayValue");
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={formulaEngine}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(displayValueSpy).not.toHaveBeenCalledWith(sheet.id, "A202");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    const menu = screen.getByRole("menu", { name: "AutoFilter menu for Region" });
+
+    expect(displayValueSpy).toHaveBeenCalledWith(sheet.id, "A202");
+    const scansAfterOpen = displayValueSpy.mock.calls.filter(([, address]) => address === "A202").length;
+    expect(scansAfterOpen).toBe(1);
+    expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(200);
+    expect(within(menu).getByRole("status")).toHaveTextContent("Showing 200 of 201 values");
+    expect(within(menu).queryByRole("menuitemcheckbox", { name: "Value 201" })).not.toBeInTheDocument();
+
+    fireEvent.change(within(menu).getByRole("searchbox", { name: "Search Region filter values" }), {
+      target: { value: "Value 201" }
+    });
+
+    expect(within(menu).getAllByRole("menuitemcheckbox")).toHaveLength(1);
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Value 201" })).toBeInTheDocument();
+    expect(within(menu).getByRole("status")).toHaveTextContent("Showing 1 of 1 matching values (201 total)");
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Value 201" }));
+    expect(displayValueSpy.mock.calls.filter(([, address]) => address === "A202")).toHaveLength(scansAfterOpen);
+  });
+
+  it("keeps blank, formula-empty, and zero AutoFilter choices distinct", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 4,
+      columnCount: 1,
+      cells: { A1: "Value", A3: '=""', A4: 0 },
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 3, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+    const appliedValues: string[][] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onAutoFilterColumn={(_column, values) => appliedValues.push(values)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Value" }));
+    const menu = screen.getByRole("menu", { name: "AutoFilter menu for Value" });
+
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Blank" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "Empty result" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemcheckbox", { name: "0" })).toBeInTheDocument();
+
+    fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Blank" }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Apply selected values" }));
+
+    expect(appliedValues).toEqual([[BLANK_FILTER_VALUE]]);
+  });
+
+  it("orders AutoFilter choices deterministically without the runtime's default locale", () => {
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 3,
+      columnCount: 1,
+      cells: { A1: "Value", A2: "ä", A3: "z" },
+      autoFilterRange: {
+        start: { row: 0, column: 0 },
+        end: { row: 2, column: 0 }
+      }
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: [],
+      tables: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open AutoFilter menu for Value" }));
+    expect(
+      within(screen.getByRole("menu", { name: "AutoFilter menu for Value" }))
+        .getAllByRole("menuitemcheckbox")
+        .map((choice) => choice.textContent)
+    ).toEqual(["z", "ä"]);
+  });
+
+  it("projects structured-table roles, stable ids, styles, and header filter affordances onto cells", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.cells = { A1: "Region", A2: "West", A3: "Total" };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        getStructuredTableCell={(address) => {
+          if (address === "A1") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              role: "header",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          if (address === "A2") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              rowId: "row-west",
+              role: "body",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          if (address === "A3") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              role: "totals",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          return null;
+        }}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const header = screen.getByRole("gridcell", { name: "A1 Region" });
+    const body = screen.getByRole("gridcell", { name: "A2 West" });
+    const totals = screen.getByRole("gridcell", { name: "A3 Total" });
+    expect(header).toHaveClass("structured-table-cell", "structured-table-cell--header");
+    expect(header).toHaveAttribute("data-structured-table-id", "table-sales");
+    expect(header).toHaveAttribute("data-structured-table-style", "TableStyleMedium2");
+    expect(within(header).getByTestId("structured-table-filter-affordance")).toBeInTheDocument();
+    expect(body).toHaveClass("structured-table-cell--body", "structured-table-cell--striped");
+    expect(body).toHaveAttribute("data-structured-table-row-id", "row-west");
+    expect(totals).toHaveClass("structured-table-cell--totals");
+  });
+
+  it("combines structured-table visibility with legacy filtering and explicit hidden rows without mutating the sheet", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.cells = { A1: "Region", A2: "West", A3: "East", A4: "North" };
+    sheet.hiddenRows = { "3": true };
+    const hiddenRowsBefore = { ...sheet.hiddenRows };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        isStructuredTableRowVisible={(row) => row !== 2}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A2 West" })).toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A3 East" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A4 North" })).not.toBeInTheDocument();
+    expect(sheet.hiddenRows).toEqual(hiddenRowsBefore);
+  });
 });
+
+const BLANK_FILTER_VALUE = "\u0000js-spreadsheet:blank";
 
 function createFixtureSheet(): { sheet: SheetModel; workbook: WorkbookModel } {
   const sheet: SheetModel = {
@@ -492,10 +1269,11 @@ function createFixtureSheet(): { sheet: SheetModel; workbook: WorkbookModel } {
     protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
   };
   const workbook: WorkbookModel = {
-    version: 1,
+    version: 2,
     activeSheetId: sheet.id,
     sheets: [sheet],
-    namedRanges: []
+    namedRanges: [],
+    tables: []
   };
   return { sheet, workbook };
 }

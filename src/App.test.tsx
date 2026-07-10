@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { Spreadsheet } from "./App";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 
@@ -28,6 +29,83 @@ describe("App", () => {
 
     await user.click(screen.getByRole("gridcell", { name: "A3 30" }));
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
+  });
+
+  it("stores typed grid input as number, boolean, date, and date-time values", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "1.25e3");
+    await editCell(user, "A2", "FALSE");
+    await editCell(user, "A3", "2026-01-15");
+    await editCell(user, "A4", "2026-01-15T12:00:00Z");
+
+    expect(screen.getByRole("gridcell", { name: "A1 1250" })).toHaveTextContent("1250");
+    expect(screen.getByRole("gridcell", { name: "A2 FALSE" })).toHaveTextContent("FALSE");
+    expect(screen.getByRole("gridcell", { name: "A3 Jan 15, 2026" })).toHaveTextContent("Jan 15, 2026");
+    expect(screen.getByRole("gridcell", { name: "A4 Jan 15, 2026, 12:00 PM" })).toHaveTextContent(
+      "Jan 15, 2026, 12:00 PM"
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A4 Jan 15, 2026, 12:00 PM" }));
+    expect(screen.getByLabelText("Number format")).toHaveValue("dateTime");
+    expect(screen.getByRole("option", { name: "Date and time" })).toHaveValue("dateTime");
+
+    await user.click(screen.getByRole("gridcell", { name: "A1 1250" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("1250");
+
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("javascript-spreadsheet-workbook") ?? "null") as ReturnType<
+        typeof createBlankWorkbook
+      > | null;
+      expect(saved).not.toBeNull();
+      const sheetId = saved?.activeSheetId ?? "";
+      expect(["A1", "A2", "A3", "A4"].map((address) => getCellContent(saved!, sheetId, address))).toEqual([
+        1250,
+        false,
+        46037,
+        46037.5
+      ]);
+      expect(saved?.sheets[0].formats).toMatchObject({
+        A3: { numberFormat: "date" },
+        A4: { numberFormat: "dateTime" }
+      });
+    });
+  });
+
+  it("parses typed formula-bar input through the same commit path", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const formulaInput = screen.getByLabelText("Formula input");
+    await user.click(formulaInput);
+    await user.type(formulaInput, "1.25e3{Enter}");
+
+    expect(screen.getByRole("gridcell", { name: "A1 1250" })).toHaveTextContent("1250");
+    expect(formulaInput).toHaveValue("1250");
+  });
+
+  it("retains both synchronous workbook commits in one React batch", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const bold = screen.getByRole("button", { name: "Bold" });
+    const italic = screen.getByRole("button", { name: "Italic" });
+
+    act(() => {
+      fireEvent.click(bold);
+      fireEvent.click(italic);
+    });
+
+    expect(bold).toHaveAttribute("aria-pressed", "true");
+    expect(italic).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(bold).toHaveAttribute("aria-pressed", "true");
+    expect(italic).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(bold).toHaveAttribute("aria-pressed", "false");
+    expect(italic).toHaveAttribute("aria-pressed", "false");
   });
 
   it("adds and renames sheets", async () => {
@@ -617,6 +695,57 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B2 bottom-right" })).toHaveTextContent("bottom-right");
   });
 
+  it("rejects a plain multi-cell paste whose formula is invalid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "5");
+    await applyNumberValidation(user, "B1", { max: 10 });
+    await user.click(screen.getByRole("gridcell", { name: "A1 5" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "20\t=A1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
+  it("accepts a plain multi-cell paste whose formula becomes valid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "20");
+    await applyNumberValidation(user, "B1", { max: 10 });
+    await user.click(screen.getByRole("gridcell", { name: "A1 20" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "5\t=A1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+  });
+
+  it("evaluates every validated formula in one engine for a plain paste transaction", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "B1", { max: 100 });
+    await applyNumberValidation(user, "C1", { max: 100 });
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "5\t=A1\t=A1+1" }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "C1 6" })).toBeInTheDocument();
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("pastes an internally copied range with formatting and adjusted formulas", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -639,6 +768,61 @@ describe("App", () => {
     await user.click(pastedCell);
     expect(screen.getByLabelText("Formula input")).toHaveValue("=B1");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Pasted cells with formatting");
+  });
+
+  it("rejects a rich paste whose translated formula is invalid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "5");
+    await editCell(user, "C1", "20");
+    await editCell(user, "D1", "=C1");
+    await applyNumberValidation(user, "D1", { max: 10 });
+    selectRange("C1 20", "D1 20");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1 5" }));
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
+  it("accepts a rich paste whose translated formula becomes valid in the final candidate workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "20");
+    await editCell(user, "C1", "5");
+    await editCell(user, "D1", "=C1");
+    await applyNumberValidation(user, "D1", { max: 10 });
+    selectRange("C1 5", "D1 5");
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1 20" }));
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 5" })).toBeInTheDocument();
+    await user.click(screen.getByRole("gridcell", { name: "B1 5" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("=A1");
+  });
+
+  it("does not build a candidate engine for a rich formula paste without validation rules", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "C1", "=1+1");
+    await user.click(screen.getByRole("gridcell", { name: "C1 2" }));
+    fireEvent.keyDown(screen.getByRole("grid", { name: "Spreadsheet grid" }), { key: "c", ctrlKey: true });
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+    await user.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 2" })).toBeInTheDocument();
+    expect(buildSpy).not.toHaveBeenCalled();
   });
 
   it("cuts and pastes a rich selection as a move", async () => {
@@ -690,6 +874,16 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "A1 Move me" })).toHaveTextContent("Move me");
     expect(screen.getByRole("gridcell", { name: "B1" })).toHaveTextContent("");
     expect(screen.getByLabelText("Status")).toHaveTextContent("A1 is read-only");
+
+    await user.click(screen.getByRole("button", { name: "Protect sheet" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: {
+        getData: () => "Move me"
+      }
+    });
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "B1 Move me" })).toHaveTextContent("Move me");
   });
 
   it("pastes copied values without formulas or source formatting", async () => {
@@ -795,6 +989,170 @@ describe("App", () => {
     expect(within(toolbar).getByRole("button", { name: "Pivot table" })).toBeInTheDocument();
   });
 
+  it("creates a structured table from the Insert ribbon and converts it back without changing values", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(<Spreadsheet storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "Region\tSales\nWest\t10\nEast\t8" }
+    });
+    selectRange("A1 Region", "B3 8");
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    await openRibbonTab(user, "Insert");
+    await user.click(screen.getByRole("button", { name: "Table" }));
+
+    expect(screen.getByRole("tab", { name: "Table" })).toBeInTheDocument();
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        type: "transaction",
+        commands: expect.arrayContaining([expect.objectContaining({ type: "table.create" })])
+      }),
+      result: expect.objectContaining({ status: "committed" })
+    }));
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Convert to range" }));
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "A1 Region" })).toHaveTextContent("Region");
+    expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "B3 8" })).toHaveTextContent("8");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "table.convertToRange" }),
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("uses the active cell's table when a large selection intersects two tables", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    selectRange("D1 Department", "A1 Region");
+
+    await openRibbonTab(user, "Table");
+    expect(screen.getByLabelText("Table name")).toHaveValue("CostsTable");
+  });
+
+  it("dispatches table metadata edits through the workbook session and announces rejected drafts", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} onCommandResult={onCommandResult} />);
+
+    await openRibbonTab(user, "Table");
+    const name = screen.getByLabelText("Table name");
+    await user.clear(name);
+    await user.type(name, "RevenueTable{Enter}");
+
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: { type: "table.rename", tableId: "table-sales", name: "RevenueTable" },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+
+    await user.clear(screen.getByLabelText("Table name"));
+    await user.type(screen.getByLabelText("Table name"), "CostsTable{Enter}");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Table names must be unique");
+    expect(screen.getByLabelText("Table name")).toHaveFocus();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Table names must be unique");
+  });
+
+  it("downloads the contextual table as a native XLSX artifact and revokes its URL", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:table-xlsx");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const originalCreateElement = document.createElement.bind(document);
+    const anchors: HTMLAnchorElement[] = [];
+    vi.spyOn(document, "createElement").mockImplementation((tagName) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "a") {
+        vi.spyOn(element, "click").mockImplementation(() => undefined);
+        anchors.push(element as HTMLAnchorElement);
+      }
+      return element;
+    });
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    const exportButton = screen.getByRole("button", { name: "Export table" });
+    expect(exportButton).toBeEnabled();
+    await user.click(exportButton);
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const imported = await importWorkbookFromXlsx(await blob.arrayBuffer());
+    expect(imported.tables).toHaveLength(1);
+    expect(imported.tables[0].name).toBe("SalesTable");
+    expect(anchors[0].download).toBe("SalesTable.xlsx");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:table-xlsx");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Exported SalesTable");
+  });
+
+  it("revokes the contextual table URL and reports a download failure when the click throws", async () => {
+    const user = userEvent.setup();
+    const onError = vi.fn();
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:table-failure");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tagName) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "a") {
+        vi.spyOn(element, "click").mockImplementation(() => {
+          throw new Error("blocked download");
+        });
+      }
+      return element;
+    });
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} onError={onError} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Export table" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent("Table export failed"));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:table-failure");
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      code: "service.export.table.failed",
+      message: "Table export failed",
+      recoverable: true
+    }));
+  });
+
+  it("includes the contextual Table tab in ribbon keyboard navigation and restores Home when it disappears", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    const homeTab = screen.getByRole("tab", { name: "Home" });
+    homeTab.focus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "Table" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Table" })).toHaveFocus();
+
+    await user.click(screen.getByRole("gridcell", { name: "H10" }));
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
+  });
+
+  it("opens a live adaptive table and returns the stable cell selection to the spreadsheet", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Open table view" }));
+    expect(screen.getByRole("dialog", { name: "Workbook table table-sales" })).toBeInTheDocument();
+
+    const tableCell = screen.getByRole("gridcell", { name: "sales-west Sales" });
+    expect(tableCell).toHaveTextContent("10");
+    await user.click(tableCell);
+    await user.click(screen.getByRole("button", { name: "Open in Spreadsheet" }));
+
+    expect(screen.queryByRole("dialog", { name: "Workbook table table-sales" })).not.toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("opens saved workbooks with stale active sheet ids", () => {
     localStorage.setItem(
       "javascript-spreadsheet-workbook",
@@ -818,6 +1176,23 @@ describe("App", () => {
 
     expect(screen.getByRole("tab", { name: "Recovered" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("gridcell", { name: "A1 still here" })).toBeInTheDocument();
+  });
+
+  it("resets workbook history and stale cut state when creating a new workbook", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "discard me");
+    await user.click(screen.getByRole("gridcell", { name: "A1 discard me" }));
+    await user.keyboard("{Control>}x{/Control}");
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "New workbook" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveTextContent("");
+    await openRibbonTab(user, "Home");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Paste" })).toBeDisabled();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("New workbook");
   });
 
   it("imports CSV data and resets the file picker", async () => {
@@ -1009,6 +1384,24 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
+  it("rejects an invalid proposed formula from the formula bar without publishing it", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "A1", { max: 10 });
+    const formulaInput = screen.getByLabelText("Formula input");
+    await user.click(formulaInput);
+    await user.type(formulaInput, "=5+5{Enter}");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+
+    await user.clear(formulaInput);
+    await user.type(formulaInput, "=5+6{Enter}");
+
+    expect(formulaInput).toHaveValue("=5+6");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+  });
+
   it("commits cell editor edits as a single undoable action", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1040,6 +1433,40 @@ describe("App", () => {
     await user.click(screen.getByRole("gridcell", { name: "B2 20" }));
     expect(screen.getByLabelText("Formula input")).toHaveValue("=A2");
   });
+
+  it.each(["Fill Down", "Fill Right", "AutoFill"] as const)(
+    "rejects a translated formula from %s when the final destination violates validation",
+    async (operation) => {
+      const user = userEvent.setup();
+      render(<App />);
+      const destination = await setupFormulaFill(user, operation, 20);
+      const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+      await runFormulaFill(user, operation);
+
+      expect(screen.getByRole("gridcell", { name: destination.address })).toHaveTextContent("");
+      expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number less than or equal to 10");
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(["Fill Down", "Fill Right", "AutoFill"] as const)(
+    "commits a translated formula from %s when the complete candidate is valid",
+    async (operation) => {
+      const user = userEvent.setup();
+      render(<App />);
+      const destination = await setupFormulaFill(user, operation, 8);
+      const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+      await runFormulaFill(user, operation);
+
+      const filledCell = screen.getByRole("gridcell", { name: `${destination.address} 8` });
+      expect(filledCell).toBeInTheDocument();
+      await user.click(filledCell);
+      expect(screen.getByLabelText("Formula input")).toHaveValue(destination.formula);
+      expect(buildSpy).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("resets the scroll position of the grid view", async () => {
     const user = userEvent.setup();
@@ -1236,6 +1663,23 @@ describe("App", () => {
     expect(screen.getByLabelText("Name box")).toHaveValue("C1");
   });
 
+  it("returns focus to the spreadsheet grid after commit and cancel", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1" }));
+    await user.type(screen.getByLabelText("Cell editor A1"), "saved{Enter}");
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    expect(grid).toContainElement(document.activeElement as HTMLElement);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "B1" }));
+    await user.type(screen.getByLabelText("Cell editor B1"), "discarded");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Cell editor B1")).not.toBeInTheDocument();
+    expect(grid).toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("selects the data region, then the whole sheet, with Ctrl+A", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1390,6 +1834,28 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B1 4" })).toHaveTextContent("4");
   });
 
+  it("sorts formula rows by evaluated values and keeps moved formulas relative", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: {
+        getData: () => "=B1\t20\n=B2\t10"
+      }
+    });
+    selectRange("A1 20", "B2 10");
+
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "B1 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "A2 20" })).toHaveTextContent("20");
+    expect(screen.getByRole("gridcell", { name: "B2 20" })).toHaveTextContent("20");
+    await user.click(screen.getByRole("gridcell", { name: "A1 10" }));
+    expect(screen.getByLabelText("Formula input")).toHaveValue("=B1");
+  });
+
   it("filters table data from an AutoFilter header menu", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1423,6 +1889,26 @@ describe("App", () => {
     expect(screen.queryByRole("gridcell", { name: "A4 North" })).not.toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "A5 West" })).toHaveTextContent("West");
     expect(screen.queryByRole("menu", { name: "AutoFilter menu for Region" })).not.toBeInTheDocument();
+  });
+
+  it("filters zero without treating blanks or formula-empty results as zero", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await editCell(user, "A1", "Value");
+    await editCell(user, "A2", "0");
+    await editCell(user, "A4", '=""');
+    selectRange("A1 Value", "A4");
+
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await user.selectOptions(screen.getByLabelText("Filter operator"), "equals");
+    await user.type(screen.getByLabelText("Filter value"), "0");
+    await user.click(screen.getByRole("button", { name: "Apply filter" }));
+
+    expect(screen.getByRole("gridcell", { name: "A1 Value" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "A2 0" })).toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A3" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A4" })).not.toBeInTheDocument();
   });
 
   it("inserts and deletes selected rows and columns from the toolbar", async () => {
@@ -2143,21 +2629,20 @@ describe("App", () => {
     expect(screen.getByLabelText("Number format")).toHaveValue("general");
   });
 
-  it("auto-formats a typed date in a cell explicitly reset to General", async () => {
+  it("infers a date format only when number format is absent and preserves explicit General", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await editCell(user, "B1", "2026-07-08");
-    const expected = screen.getByRole("gridcell", { name: addressNamePattern("B1") }).textContent;
-    // Sanity: the auto-applied date format rendered a date, not a raw serial.
-    expect(expected).not.toMatch(/^\d+$/);
+    expect(screen.getByRole("gridcell", { name: "B1 Jul 8, 2026" })).toHaveTextContent("Jul 8, 2026");
 
     await user.click(screen.getByRole("gridcell", { name: addressNamePattern("A1") }));
     await user.selectOptions(screen.getByLabelText("Number format"), "currency");
     await user.selectOptions(screen.getByLabelText("Number format"), "general");
     await editCell(user, "A1", "2026-07-08");
 
-    expect(screen.getByRole("gridcell", { name: addressNamePattern("A1") }).textContent).toBe(expected);
+    expect(screen.getByRole("gridcell", { name: "A1 46211" })).toHaveTextContent("46211");
+    expect(screen.getByLabelText("Number format")).toHaveValue("general");
   });
 
   it("marks panel-launching toolbar buttons as expanded while their panel is open", async () => {
@@ -2240,8 +2725,74 @@ describe("App", () => {
     await user.dblClick(screen.getByRole("gridcell", { name: "B1" }));
     await user.type(screen.getByLabelText("Cell editor B1"), "20{Enter}");
 
-    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("invalid-validation-cell");
+    expect(screen.getByLabelText("Cell editor B1")).toHaveValue("20");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number between 1 and 10");
+  });
+
+  it("does not build candidate engines while a validated formula draft is being typed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await applyNumberValidation(user, "A1", { max: 10 });
+    await editCell(user, "A1", "=5+5");
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1 10" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+    const destroySpy = vi.spyOn(HyperFormula.prototype, "destroy");
+
+    await user.clear(editor);
+    await user.type(editor, "=4+6");
+
+    expect(buildSpy).not.toHaveBeenCalled();
+
+    await user.keyboard("{Enter}");
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+    expect(destroySpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+  });
+
+  it("does not build a candidate engine for a formula without a validation rule", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const buildSpy = vi.spyOn(HyperFormula, "buildFromSheets");
+
+    await editCell(user, "A1", "=1+1");
+
+    expect(screen.getByRole("gridcell", { name: "A1 2" })).toBeInTheDocument();
+    expect(buildSpy).not.toHaveBeenCalled();
+  });
+
+  it("validates the proposed formula result without publishing a rejected candidate", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    await user.click(screen.getByRole("button", { name: "Data validation" }));
+    await user.selectOptions(screen.getByLabelText("Validation type"), "number");
+    await user.clear(screen.getByLabelText("Minimum"));
+    await user.type(screen.getByLabelText("Minimum"), "1");
+    await user.clear(screen.getByLabelText("Maximum"));
+    await user.type(screen.getByLabelText("Maximum"), "10");
+    await user.click(screen.getByRole("button", { name: "Apply validation" }));
+
+    await editCell(user, "A1", "=5+5");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
+    await editCell(user, "B1", "=A1*2");
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "A1 10" }));
+    const editor = screen.getByLabelText("Cell editor A1");
+    await user.clear(editor);
+    await user.type(editor, "=5+6{Enter}");
+
+    expect(editor).toHaveValue("=5+6");
+    expect(screen.getByRole("gridcell", { name: /^A1(?:\s|$)/ })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Enter a number between 1 and 10");
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
   });
 
   it("applies text-length data validation to selected cells", async () => {
@@ -2675,6 +3226,121 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "C3 7" })).toHaveTextContent("7");
   });
 });
+
+function structuredTableWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  return {
+    ...workbook,
+    sheets: [{
+      ...sheet,
+      cells: {
+        ...sheet.cells,
+        A1: "Region",
+        B1: "Sales",
+        A2: "West",
+        B2: 10,
+        A3: "East",
+        B3: 8,
+        D1: "Department",
+        E1: "Cost",
+        D2: "Operations",
+        E2: 5,
+        D3: "Technology",
+        E3: 7
+      }
+    }],
+    tables: [
+      {
+        id: "table-sales",
+        name: "SalesTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "sales-region", name: "Region", sheetColumn: 0 },
+          { id: "sales-value", name: "Sales", sheetColumn: 1 }
+        ],
+        rowIds: ["sales-west", "sales-east"],
+        style: { theme: "TableStyleLight1", showRowStripes: true }
+      },
+      {
+        id: "table-costs",
+        name: "CostsTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 3 }, end: { row: 2, column: 4 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "cost-department", name: "Department", sheetColumn: 3 },
+          { id: "cost-value", name: "Cost", sheetColumn: 4 }
+        ],
+        rowIds: ["cost-operations", "cost-technology"],
+        style: { theme: "TableStyleMedium2", showRowStripes: true }
+      }
+    ]
+  };
+}
+
+type FormulaFillOperation = "Fill Down" | "Fill Right" | "AutoFill";
+
+async function applyNumberValidation(
+  user: ReturnType<typeof userEvent.setup>,
+  address: string,
+  bounds: { min?: number; max?: number }
+) {
+  await user.click(screen.getByRole("gridcell", { name: addressNamePattern(address) }));
+  await user.click(screen.getByRole("button", { name: "Data validation" }));
+  await user.selectOptions(screen.getByLabelText("Validation type"), "number");
+  await user.clear(screen.getByLabelText("Minimum"));
+  await user.clear(screen.getByLabelText("Maximum"));
+  if (bounds.min !== undefined) {
+    await user.type(screen.getByLabelText("Minimum"), String(bounds.min));
+  }
+  if (bounds.max !== undefined) {
+    await user.type(screen.getByLabelText("Maximum"), String(bounds.max));
+  }
+  await user.click(screen.getByRole("button", { name: "Apply validation" }));
+}
+
+async function setupFormulaFill(
+  user: ReturnType<typeof userEvent.setup>,
+  operation: FormulaFillOperation,
+  translatedValue: number
+): Promise<{ address: string; formula: string }> {
+  if (operation === "Fill Right") {
+    await editCell(user, "A2", "5");
+    await editCell(user, "B2", String(translatedValue));
+    await editCell(user, "B1", "=A2");
+    await applyNumberValidation(user, "C1", { max: 10 });
+    return { address: "C1", formula: "=B2" };
+  }
+
+  await editCell(user, "A1", "5");
+  await editCell(user, "A2", String(translatedValue));
+  await editCell(user, "B1", "=A1");
+  await applyNumberValidation(user, operation === "AutoFill" ? "B1" : "B2", { max: 10 });
+  return { address: "B2", formula: "=A2" };
+}
+
+async function runFormulaFill(user: ReturnType<typeof userEvent.setup>, operation: FormulaFillOperation) {
+  if (operation === "Fill Down") {
+    selectRange("B1 5", "B2");
+    await user.click(screen.getByRole("button", { name: "Fill down" }));
+    return;
+  }
+  if (operation === "Fill Right") {
+    selectRange("B1 5", "C1");
+    await user.click(screen.getByRole("button", { name: "Fill right" }));
+    return;
+  }
+
+  await user.click(screen.getByRole("gridcell", { name: "B1 5" }));
+  fireEvent.mouseDown(screen.getByRole("button", { name: "AutoFill selection" }));
+  fireEvent.mouseEnter(screen.getByRole("gridcell", { name: "B2" }));
+  fireEvent.mouseUp(screen.getByRole("grid", { name: "Spreadsheet grid" }));
+}
 
 async function editCell(user: ReturnType<typeof userEvent.setup>, address: string, value: string) {
   await user.dblClick(screen.getByRole("gridcell", { name: addressNamePattern(address) }));

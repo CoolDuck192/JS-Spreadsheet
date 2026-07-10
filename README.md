@@ -5,6 +5,9 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 ## Features
 
 - Excel-like grid with row and column headers.
+- Embeddable React `DataTable` for local records, host-authoritative remote APIs,
+  and live structured workbook tables, with typed columns, virtualization,
+  editing, query tools, conflict handling, undo, and CSV/XLSX export.
 - Cell editing, formula bar, keyboard navigation, keyboard shortcuts for common formatting/link/filter actions, range selection, row/column/sheet header selection, merged cells, protected sheets, read-only cells, plain external paste plus internal cut/copy/paste with formulas, formatting, validation, comments, hyperlinks, paste values, paste formats, and transpose paste, fill-down, fill-right, AutoFill handle number/date/month/weekday series and formula extension with copied formatting/validation, undo, redo, clear all/contents/formats/conditional formats/hyperlinks/validation, toolbar and context-menu row/column insert/delete, manual and auto-fit row/column sizing, row/column hide and unhide, sheet tab hide and restore, freeze panes, reset view, worksheet gridline/header/formula-bar/formula-text/sheet-tab visibility, worksheet zoom controls, and print-ready worksheet output.
 - Data workflow tools for AutoSum and quick Sum/Average/Count/Min/Max formula insertion, formula auditing for same-sheet precedents/dependents with jump navigation, Go To navigation for references and named ranges, named ranges from the name box with a manager for selecting/deleting names, cell comments with context-menu clearing, cell hyperlinks, find/replace, remove duplicates, selected-range filtering, header AutoFilter menus with unique-value filtering and sort actions, header-aware AutoFilter table sorting A-Z or Z-A, and live selection summaries for count, sum, average, min, and max.
 - HyperFormula-powered formulas, including supported Excel-style functions such as `SUM`, `AVERAGE`, `IF`, references, ranges, and formula errors.
@@ -36,36 +39,44 @@ git clone https://github.com/CoolDuck192/JS-Spreadsheet.git
 cd JS-Spreadsheet
 ```
 
-Install dependencies:
+Activate the pinned Node.js version and install dependencies. If `nvm` is not
+available, the fallback downloads a portable Node binary and puts it first on
+`PATH` for pnpm, Vite, and Playwright:
 
 ```bash
-corepack enable
-pnpm install    # corepack downloads the pinned pnpm 11.7.0 automatically
+if command -v nvm >/dev/null 2>&1; then
+  nvm install
+  nvm use
+else
+  NODE22_BIN="$(npm exec --yes --package=node@22.13.1 -- node -p 'process.execPath')"
+  export PATH="$(dirname "$NODE22_BIN"):$PATH"
+  hash -r
+fi
+corepack --version
+corepack pnpm install --frozen-lockfile
 ```
 
 Start the local dev server:
 
 ```bash
-pnpm run dev
+corepack pnpm run dev
 ```
 
-The dev server defaults to:
+The dev server binds all interfaces. Open the `Network` URL that Vite reports,
+or use the machine IP and port directly:
 
 ```text
-http://127.0.0.1:5173
+http://<machine-ip>:5173
 ```
 
-To reach it from another machine on your network, bind all interfaces:
-
-```bash
-pnpm exec vite --host 0.0.0.0
-```
+When handing off a manually started server, report the machine IP and port, not
+only a `127.0.0.1` URL.
 
 Build and preview a production bundle:
 
 ```bash
-pnpm run build
-pnpm exec vite preview --host 0.0.0.0   # serves the build on port 4173
+corepack pnpm run build
+corepack pnpm run preview   # serves the build on all interfaces, port 4173
 ```
 
 > **Testing with large datasets?** Use the production preview. The dev server
@@ -76,14 +87,14 @@ pnpm exec vite preview --host 0.0.0.0   # serves the build on port 4173
 Run the test suite:
 
 ```bash
-pnpm test
+corepack pnpm test
 ```
 
 Run browser end-to-end tests:
 
 ```bash
-pnpm exec playwright install
-pnpm run test:e2e
+corepack pnpm exec playwright install
+corepack pnpm run test:e2e
 ```
 
 ## Project Docs
@@ -121,7 +132,11 @@ Embedders can supply their own token source instead by implementing the `TokenPr
 
 ## Embedding
 
-`src/index.ts` exports the app as a library: the default export is the `<Spreadsheet />` component, alongside headless workbook, engine, xlsx, pivot, and Google Sheets functions. A dedicated Vite library build target is on the roadmap. See [docs/embedding.md](docs/embedding.md) for how to consume the repo as a source dependency.
+Build the typed library with `corepack pnpm run build:lib`. React hosts use
+`js-spreadsheet/react` (or the root alias), framework-independent code uses
+`js-spreadsheet/core`, and both UI surfaces use `js-spreadsheet/styles.css`.
+See [docs/embedding.md](docs/embedding.md) for local rows, remote APIs, workbook
+tables, package entrypoints, lifecycle rules, and XLSX identity behavior.
 
 ## License
 

@@ -1,4 +1,5 @@
 import type { CellFormat } from "../types";
+import { excelSerialToDate, parseExcelTemporalInput } from "../core/values/excelDate";
 
 const NUMBER_FORMATTER = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2
@@ -19,15 +20,40 @@ const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
   timeZone: "UTC"
 });
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC"
+});
+const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC"
+});
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export function formatDisplayValue(value: string, format: CellFormat | undefined): string {
   if (!value || !format?.numberFormat || format.numberFormat === "general" || value.startsWith("#")) {
     return value;
   }
 
-  if (format.numberFormat === "date") {
-    const date = parseDateValue(value);
-    return date ? DATE_FORMATTER.format(date) : value;
+  if (format.numberFormat === "date" || format.numberFormat === "dateTime") {
+    const serial = parseDateSerial(value);
+    if (serial !== null && serial >= 60 && serial < 61) {
+      if (format.numberFormat === "date") {
+        return "Feb 29, 1900";
+      }
+      const time = new Date(Date.UTC(1970, 0, 1) + (serial - 60) * MILLISECONDS_PER_DAY);
+      return `Feb 29, 1900, ${TIME_FORMATTER.format(time)}`;
+    }
+    const date = serial === null ? null : excelSerialToDate(serial);
+    if (!date) {
+      return value;
+    }
+    return format.numberFormat === "date" ? DATE_FORMATTER.format(date) : DATE_TIME_FORMATTER.format(date);
   }
 
   const number = parseNumberValue(value);
@@ -77,26 +103,17 @@ function parseNumberValue(value: string): number | null {
   return isPercent ? signed / 100 : signed;
 }
 
-function parseDateValue(value: string): Date | null {
+function parseDateSerial(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
 
   const serial = parseNumberValue(trimmed);
-  if (serial !== null && serial > 0) {
-    const excelEpoch = Date.UTC(1899, 11, 30);
-    return new Date(excelEpoch + serial * 24 * 60 * 60 * 1000);
+  if (serial !== null && serial >= 0) {
+    return serial;
   }
 
-  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (isoMatch) {
-    return new Date(Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3])));
-  }
-
-  const parsed = Date.parse(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return new Date(parsed);
+  const temporal = parseExcelTemporalInput(trimmed);
+  return temporal?.serial ?? null;
 }

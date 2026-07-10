@@ -1,3 +1,6 @@
+import type { TableDataType } from "./table/core/types";
+import type { FilterExpression, TableSort } from "./table/core/query";
+
 export type CellContent = string | number | boolean | null;
 
 export type CellCoord = {
@@ -32,7 +35,7 @@ export type CellFormat = {
   fontSize?: number;
   textColor?: string;
   backgroundColor?: string;
-  numberFormat?: "general" | "number" | "currency" | "percent" | "date";
+  numberFormat?: "general" | "number" | "currency" | "percent" | "date" | "dateTime";
   horizontalAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle" | "bottom";
   wrapText?: boolean;
@@ -146,6 +149,50 @@ export type NamedRange = {
   range: CellRange;
 };
 
+export type TableAggregate =
+  | "none"
+  | "sum"
+  | "average"
+  | "count"
+  | "countNumbers"
+  | "min"
+  | "max"
+  | "standardDeviation"
+  | "variance";
+
+export type TableStyle = {
+  theme: string;
+  showFirstColumn?: boolean;
+  showLastColumn?: boolean;
+  showRowStripes?: boolean;
+  showColumnStripes?: boolean;
+};
+
+export type StructuredTableColumn = {
+  id: string;
+  name: string;
+  sheetColumn: number;
+  dataType?: TableDataType;
+  calculatedFormula?: string;
+  totalsFunction?: TableAggregate;
+  totalsLabel?: string;
+};
+
+export type StructuredTable = {
+  id: string;
+  name: string;
+  sheetId: string;
+  range: CellRange;
+  headerRow: boolean;
+  totalsRow: boolean;
+  columns: readonly StructuredTableColumn[];
+  rowIds: readonly string[];
+  keyColumnId?: string;
+  style?: TableStyle;
+  sort?: readonly TableSort[];
+  filter?: FilterExpression;
+};
+
 export type SheetModel = {
   id: string;
   name: string;
@@ -173,16 +220,27 @@ export type SheetModel = {
 };
 
 export type WorkbookModel = {
-  version: 1;
+  version: 2;
   activeSheetId: string;
   sheets: SheetModel[];
   namedRanges: NamedRange[];
+  tables: StructuredTable[];
 };
 
 export type Selection = CellRange;
 
-export type HistoryState = {
+export type WorkbookHistoryLimits = Readonly<{
+  maxEntries: number;
+  maxWeight: number;
+}>;
+
+export type WorkbookHistory = {
   past: WorkbookModel[];
   present: WorkbookModel;
   future: WorkbookModel[];
+  /** Absent on histories created by releases before weighted retention. */
+  limits?: WorkbookHistoryLimits;
 };
+
+/** @deprecated Import `WorkbookHistory` from `core/workbook/history` for new code. */
+export type HistoryState = WorkbookHistory;

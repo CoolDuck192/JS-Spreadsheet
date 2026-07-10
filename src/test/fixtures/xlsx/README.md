@@ -1,0 +1,38 @@
+# Native structured-table XLSX fixtures
+
+## Generated SalesTable fixture
+
+`generated-sales-structured-table.xlsx` is deterministic generated coverage. Regenerate it from the repository root with:
+
+```bash
+corepack pnpm exec node scripts/create-sales-table-fixture.mjs
+```
+
+- Generator library: ExcelJS 4.4.0, followed by a narrow `fflate` + `@xmldom/xmldom` OOXML supplement.
+- Fixed workbook and ZIP timestamp: `2026-01-01T00:00:00.000Z`.
+- SHA-256: `de21e2d3e1e024e7bedabdd33a08edc106c4f6a819f42b9a57705e4152bbe5f2`.
+- Worksheet/table/range: `Sales` / `SalesTable` / `A1:F6`.
+- Headers: `Order ID`, `Order Date`, `Region`, `Units`, `Unit Price`, `Amount`.
+- Body matrix:
+
+| Order ID | Order Date | Region | Units | Unit Price | Amount |
+| --- | --- | --- | ---: | ---: | ---: |
+| SO-1001 | 2026-01-15 | East | 2 | 12.5 | 25 |
+| SO-1002 | 2026-01-16 | West | 10 | 3 | 30 |
+| SO-1003 | 2026-02-01 | North | 1 | 100 | 100 |
+| SO-1004 | 2026-02-05 | East | 4 | 7.5 | 30 |
+
+The Amount cells contain expanded formulas, the table XML contains the calculated-column formula, the totals row sums Amount, and the active Region filter includes East and West (filtering out SO-1003).
+
+## Pinned Microsoft Excel compatibility fixture
+
+`exceljs-issue-1669.xlsx` is independently authored compatibility coverage downloaded from ExcelJS's immutable source revision:
+
+- URL: `https://raw.githubusercontent.com/exceljs/exceljs/5bed18b45e824f409b08456b59b87430ded023ab/spec/integration/data/test-issue-1669.xlsx`
+- Pinned commit: `5bed18b45e824f409b08456b59b87430ded023ab`
+- SHA-256: `e01c5be103274ae596e9d72ef26b873b87c647269ec1411f1e53ea2b93c25761`
+- Embedded application metadata: `Application=Microsoft Excel`, `AppVersion=16.0300`.
+- Upstream license: ExcelJS MIT license.
+- Purpose: native custom-filter and multi-value-filter import/export compatibility for two tables.
+
+The pinned workbook is untrusted binary test data. Tests validate its archive before parsing and never execute content from it.

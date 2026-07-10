@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties
+} from "react";
 import { ChartPanel } from "./components/ChartPanel";
 import { CellContextMenu } from "./components/CellContextMenu";
 import { ConditionalFormattingPanel } from "./components/ConditionalFormattingPanel";
@@ -22,9 +30,9 @@ import type {
   CellCoord,
   CellFormat,
   CellRange,
+  ConditionalFormatRule,
   DataValidationRule,
   FilterOperator,
-  HistoryState,
   MixedFormatValue,
   SelectionFormatSummary,
   SheetChartType,
@@ -47,46 +55,18 @@ import { createChartData } from "./lib/charts";
 import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
-import { createFormulaEngine } from "./lib/formulaEngine";
 import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth";
 import { importWorkbookFromGoogleSheets } from "./lib/googleSheets";
 import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
-import { loadWorkbook, saveWorkbook } from "./lib/persistence";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
-import { validateCellValue } from "./lib/validation";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import {
-  addSheet,
-  addSheetChart,
-  addConditionalFormatRule,
-  autoFillRange,
   isHorizontalAutoFill,
   isVerticalAutoFill,
-  clearCellComments,
-  clearDirectCellFormats,
-  clearCellFormats,
-  clearCellHyperlinks,
-  addSheetFilter,
-  clearRangeAll,
-  clearRange,
-  clearConditionalFormatRules,
-  clearHiddenRowsAndColumns,
-  clearSheetFilter,
-  clearSheetFilters,
-  commitHistory,
   copyRange,
   copyRichRange,
   createBlankWorkbook,
-  createHistory,
-  defineNamedRange,
-  deleteSheetChart,
-  deleteSheet,
-  deleteColumns,
-  deleteRows,
-  duplicateSheet,
-  fillDown,
-  fillRight,
   getActiveSheet,
   getCellComment,
   getCellConditionalFormatRules,
@@ -94,60 +74,37 @@ import {
   getCellFormat,
   getCellHyperlink,
   getCellReadOnly,
-  getCellValidation,
   getNamedRangeForSelection,
-  insertColumns,
-  insertRows,
-  isValidNamedRangeName,
-  mergeCells,
-  moveRichRange,
-  moveSheet,
-  pasteMatrix,
-  pasteRichRange,
-  previewRichPaste,
-  redoHistory,
-  removeConditionalFormatRule,
-  removeDuplicateRows,
-  removeNamedRange,
-  renameSheet,
-  setActiveSheet,
-  setCellContent,
-  setCellComment,
-  setColumnWidth,
-  setCellBorders,
-  setCellFormat,
-  setCellHyperlink,
-  setCellValidation,
-  setColumnsHidden,
-  setRangeReadOnly,
-  setSheetFreezePanes,
-  setSheetHidden,
-  setSheetProtection,
-  setSheetTabColor,
-  setRowsHidden,
-  setRowHeight,
-  sortRange,
-  unhideAllSheets,
-  unmergeCells,
-  undoHistory
+  isValidNamedRangeName
 } from "./lib/workbook";
 import type { FormulaEngine } from "./lib/formulaEngine";
-import type { PasteRichRangeOptions, RichClipboardRange, RichPasteMode } from "./lib/workbook";
+import type { RichClipboardRange, RichPasteMode } from "./lib/workbook";
+import type {
+  WorkbookCommandResult,
+  WorkbookDiagnosticEvent,
+  WorkbookSession
+} from "./core/workbook/WorkbookSession";
+import type { WorkbookCommand } from "./core/workbook/commands";
+import type { TableIssue } from "./core/commands/types";
+import {
+  getStructuredTableAtCell,
+  getStructuredTableBodyRange,
+  getStructuredTableForSelection
+} from "./core/workbook/structuredTables";
+import { isStructuredTableRowVisible as isWorkbookStructuredTableRowVisible } from "./core/workbook/structuredTableFilter";
+import type {
+  SpreadsheetServices,
+  WorkbookExportArtifact,
+  WorkbookExporter,
+  WorkbookImporter
+} from "./core/workbook/services";
+import { useWorkbookSession } from "./react/useWorkbookSession";
+import { WorkbookTableView } from "./react/workbook/WorkbookTableView";
 
 const INITIAL_SELECTION: CellRange = {
   start: { row: 0, column: 0 },
   end: { row: 0, column: 0 }
 };
-const AUTOSAVE_DEBOUNCE_MS = 300;
-// ~100k populated cells serialize to several MB — past most browsers' localStorage
-// quota, and the JSON.stringify alone would stall every edit.
-const AUTOSAVE_CELL_LIMIT = 100_000;
-
-let googleTokenProvider: TokenProvider | null = null;
-function getGoogleTokenProvider(clientId: string): TokenProvider {
-  googleTokenProvider ??= createBrowserTokenProvider(clientId);
-  return googleTokenProvider;
-}
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 25;
@@ -164,9 +121,179 @@ type FormatPainterState = {
   format: CellFormat;
 };
 
-export default function App() {
-  const [history, setHistory] = useState(() => createHistory(readInitialWorkbook()));
-  const [selection, setSelection] = useState<CellRange>(INITIAL_SELECTION);
+export type WorkbookStorage = {
+  load(): WorkbookModel | null | Promise<WorkbookModel | null>;
+  save(workbook: WorkbookModel): void | Promise<void>;
+  clear?(): void | Promise<void>;
+};
+
+export type WorkbookFeatureConfiguration = Readonly<{
+  toolbar?: boolean;
+  formulaBar?: boolean;
+  sheetTabs?: boolean;
+  import?: boolean;
+  export?: boolean;
+  charts?: boolean;
+  structuredTables?: boolean;
+  googleSheets?: boolean;
+}>;
+
+export type WorkbookThemeToken =
+  | "font-family"
+  | "font-size"
+  | "surface"
+  | "surface-muted"
+  | "text"
+  | "text-muted"
+  | "border"
+  | "accent"
+  | "accent-contrast"
+  | "selection"
+  | "danger";
+
+export type WorkbookChangeEvent = Readonly<{
+  workbook: WorkbookModel;
+  revision: string;
+  previousRevision: string;
+  origin: "command" | "undo" | "redo" | "import" | "external" | "storage";
+  commandId?: string;
+}>;
+
+export type SpreadsheetErrorEvent = Readonly<{
+  code: string;
+  message: string;
+  recoverable: boolean;
+}>;
+
+export type SpreadsheetCommonProps = Readonly<{
+  className?: string;
+  style?: CSSProperties;
+  features?: WorkbookFeatureConfiguration;
+  services?: SpreadsheetServices;
+  theme?: Partial<Record<WorkbookThemeToken, string>>;
+  onDiagnostic?: (event: WorkbookDiagnosticEvent) => void;
+  onCommandResult?: (event: Readonly<{
+    command: WorkbookCommand;
+    result: WorkbookCommandResult;
+  }>) => void;
+  onWorkbookChangeEvent?: (event: WorkbookChangeEvent) => void;
+  onError?: (event: SpreadsheetErrorEvent) => void;
+}>;
+
+export type SpreadsheetProps = SpreadsheetCommonProps & (
+  | {
+      session: WorkbookSession;
+      workbook?: never;
+      defaultWorkbook?: never;
+      onWorkbookChange?: never;
+      storage?: never;
+    }
+  | {
+      workbook: WorkbookModel;
+      onWorkbookChange(workbook: WorkbookModel): void;
+      session?: never;
+      defaultWorkbook?: never;
+      storage?: WorkbookStorage | false;
+    }
+  | {
+      defaultWorkbook?: WorkbookModel;
+      session?: never;
+      workbook?: never;
+      onWorkbookChange?: never;
+      storage?: WorkbookStorage | false;
+    }
+);
+
+type SpreadsheetWorkbookProps = SpreadsheetCommonProps & {
+  session: WorkbookSession;
+  suppliedSession: boolean;
+};
+
+export function Spreadsheet(props: SpreadsheetProps) {
+  if (props.session) {
+    return <SuppliedSpreadsheet {...props} session={props.session} />;
+  }
+  return <OwnedSpreadsheet {...props} />;
+}
+
+function SuppliedSpreadsheet(
+  props: Extract<SpreadsheetProps, { session: WorkbookSession }>
+) {
+  const onCommandResultRef = useRef(props.onCommandResult);
+  onCommandResultRef.current = props.onCommandResult;
+  const session = useMemo<WorkbookSession>(() => ({
+    getSnapshot: props.session.getSnapshot,
+    getCellEvaluation: props.session.getCellEvaluation,
+    subscribe: props.session.subscribe,
+    subscribeDiagnostics: props.session.subscribeDiagnostics,
+    dispatch(commandOrEnvelope) {
+      const result = props.session.dispatch(commandOrEnvelope);
+      invokeHostCallback(onCommandResultRef.current, {
+        command: "intent" in commandOrEnvelope ? commandOrEnvelope.intent : commandOrEnvelope,
+        result
+      });
+      return result;
+    },
+    replaceWorkbook(workbook, options) {
+      const command: WorkbookCommand = {
+        type: "workbook.replace",
+        workbook,
+        history: options?.history === "preserve" ? "commit" : "reset"
+      };
+      const result = props.session.replaceWorkbook(workbook, options);
+      invokeHostCallback(onCommandResultRef.current, { command, result });
+      return result;
+    },
+    table: props.session.table,
+    // This facade is view-local. Ownership always remains with the host.
+    destroy() {}
+  }), [props.session]);
+  return <SpreadsheetWorkbook {...props} session={session} suppliedSession />;
+}
+
+function OwnedSpreadsheet(
+  props: Extract<SpreadsheetProps, { session?: never }>
+) {
+  const session = useWorkbookSession(props.workbook !== undefined
+    ? {
+        workbook: props.workbook,
+        onWorkbookChange: props.onWorkbookChange,
+        storage: props.storage,
+        services: props.services,
+        onDiagnostic: props.onDiagnostic,
+        onCommandResult: props.onCommandResult,
+        onWorkbookChangeEvent: props.onWorkbookChangeEvent,
+        onError: props.onError
+      }
+    : {
+        defaultWorkbook: props.defaultWorkbook,
+        storage: props.storage,
+        services: props.services,
+        onDiagnostic: props.onDiagnostic,
+        onCommandResult: props.onCommandResult,
+        onWorkbookChangeEvent: props.onWorkbookChangeEvent,
+        onError: props.onError
+      });
+  return <SpreadsheetWorkbook {...props} session={session} suppliedSession={false} />;
+}
+
+function SpreadsheetWorkbook({
+  session,
+  suppliedSession,
+  className,
+  style,
+  features,
+  services,
+  theme,
+  onDiagnostic,
+  onWorkbookChangeEvent,
+  onError
+}: SpreadsheetWorkbookProps) {
+  const sessionSnapshot = useSyncExternalStore(
+    session.subscribe,
+    session.getSnapshot,
+    session.getSnapshot
+  );
   const [editingCell, setEditingCell] = useState<{ address: string; value: string } | null>(null);
   const [formulaDraft, setFormulaDraft] = useState("");
   const [nameBoxDraft, setNameBoxDraft] = useState("");
@@ -181,6 +308,11 @@ export default function App() {
   const [isNamedRangesOpen, setNamedRangesOpen] = useState(false);
   const [isGoToPanelOpen, setGoToPanelOpen] = useState(false);
   const [isFormulaAuditOpen, setFormulaAuditOpen] = useState(false);
+  const [tableCommandIssues, setTableCommandIssues] = useState<{
+    tableId?: string;
+    issues: readonly TableIssue[];
+  }>({ issues: [] });
+  const [openTableId, setOpenTableId] = useState<string | null>(null);
   const [goToDraft, setGoToDraft] = useState("");
   const [findDraft, setFindDraft] = useState("");
   const [replaceDraft, setReplaceDraft] = useState("");
@@ -206,12 +338,91 @@ export default function App() {
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const gridApiRef = useRef<GridScrollApi | null>(null);
+  const gridEditCommitInProgressRef = useRef(false);
+  const googleTokenProviderRef = useRef<{
+    factory: (clientId: string) => TokenProvider;
+    clientId: string;
+    provider: TokenProvider;
+  } | null>(null);
   const registerGridScrollApi = useCallback((api: GridScrollApi) => {
     gridApiRef.current = api;
   }, []);
 
-  const workbook = history.present;
+  function getComponentGoogleTokenProvider(clientId: string): TokenProvider {
+    const factory = services?.googleTokenProviderFactory ?? createBrowserTokenProvider;
+    const cached = googleTokenProviderRef.current;
+    if (cached?.factory === factory && cached.clientId === clientId) {
+      return cached.provider;
+    }
+
+    const provider = factory(clientId);
+    googleTokenProviderRef.current = { factory, clientId, provider };
+    return provider;
+  }
+
+  const lastSuppliedEventSnapshot = useRef(sessionSnapshot);
+  useEffect(() => {
+    if (!suppliedSession) {
+      return;
+    }
+    return session.subscribeDiagnostics((event) => {
+      invokeHostCallback(onDiagnostic, event);
+      const previous = lastSuppliedEventSnapshot.current;
+      const next = session.getSnapshot();
+      lastSuppliedEventSnapshot.current = next;
+      if (previous.revision === next.revision || previous.workbook === next.workbook) {
+        return;
+      }
+      invokeHostCallback(onWorkbookChangeEvent, {
+        workbook: next.workbook,
+        revision: next.revision,
+        previousRevision: previous.revision,
+        origin: diagnosticOrigin(event),
+        ...(event.commandId ? { commandId: event.commandId } : {})
+      });
+    });
+  }, [onDiagnostic, onWorkbookChangeEvent, session, suppliedSession]);
+
+  const validatedServices = useRef(false);
+  useEffect(() => {
+    if (validatedServices.current) {
+      return;
+    }
+    validatedServices.current = true;
+    if (hasInvalidServiceRegistry(services?.importers) || hasInvalidServiceRegistry(services?.exporters)) {
+      invokeHostCallback(onError, {
+        code: "service.registry.invalid",
+        message: "A workbook service registry contains an invalid key",
+        recoverable: true
+      });
+    }
+  }, [onError, services]);
+
+  const workbook = sessionSnapshot.workbook;
+  const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
+  const activeTable = features?.structuredTables === false
+    ? null
+    : getStructuredTableForSelection(workbook, activeSheet.id, selection);
+  const activeTableColumnId = activeTable?.columns.find(
+    (column) => column.sheetColumn === selection.start.column
+  )?.id;
+  const activeTableExportReason = useMemo(
+    () => activeTable
+      ? session.table(activeTable.id).getSnapshot().operationStates.export.reason
+      : undefined,
+    [activeTable?.id, session]
+  );
+  const getStructuredTableCell = useCallback(
+    (address: string) => projectStructuredTableCell(workbook, activeSheet.id, address),
+    [activeSheet.id, workbook]
+  );
+  const isStructuredTableRowVisible = useCallback(
+    (row: number) => workbook.tables
+      .filter((table) => table.sheetId === activeSheet.id)
+      .every((table) => isWorkbookStructuredTableRowVisible(workbook, table, row, session.getCellEvaluation)),
+    [activeSheet.id, session.getCellEvaluation, workbook]
+  );
   const freezeTopRow = Boolean(activeSheet.freezeTopRow);
   const freezeFirstColumn = Boolean(activeSheet.freezeFirstColumn);
   const activeAddress = formatCellAddress(selection.start);
@@ -219,28 +430,20 @@ export default function App() {
     () => getNamedRangeForSelection(workbook, activeSheet.id, selection)?.name ?? formatSelectionAddress(selection),
     [activeSheet.id, selection, workbook]
   );
-  const formulaEngineRef = useRef<FormulaEngine | null>(null);
-  // Deliberate render-phase sync: update() is an idempotent diff (same workbook →
-  // no-op), so useMemo recomputes/discards and StrictMode double-invokes are safe,
-  // and the grid must read the NEW workbook's values in the same render — an
-  // effect-based update would leave the tree stale with no re-render to fix it
-  // (the engine's identity never changes). Revisit with useSyncExternalStore when
-  // the component is extracted for embedding.
-  const formulaEngine = useMemo(() => {
-    if (formulaEngineRef.current === null) {
-      formulaEngineRef.current = createFormulaEngine(workbook);
-    } else {
-      formulaEngineRef.current.update(workbook);
-    }
-    return formulaEngineRef.current;
-  }, [workbook]);
-
-  useEffect(() => {
-    const engine = formulaEngineRef.current;
-    // Release HyperFormula resources on unmount. The engine self-revives if a
-    // StrictMode simulated remount keeps using this instance.
-    return () => engine?.destroy();
-  }, []);
+  const workbookRef = useRef(workbook);
+  workbookRef.current = workbook;
+  const formulaEngine = useMemo<FormulaEngine>(() => ({
+    getComputedValue: session.getCellEvaluation,
+    getDisplayValue(sheetId, address) {
+      return displaySessionValue(session.getCellEvaluation(sheetId, address));
+    },
+    getRawContent(sheetId, address) {
+      return getCellContent(workbookRef.current, sheetId, address);
+    },
+    update() {},
+    rebuild() {},
+    destroy() {}
+  }), [session]);
   const activeFormat = getCellFormat(workbook, activeSheet.id, activeAddress);
   // Ribbon state reflects the WHOLE selection, Excel-style: a control shows a
   // concrete value when every selected cell agrees and "mixed" otherwise.
@@ -271,29 +474,6 @@ export default function App() {
     () => summarizeSelection(activeSheet, selection, formulaEngine),
     [activeSheet, formulaEngine, selection]
   );
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      // Serializing a huge workbook costs ~1s per edit and exceeds localStorage
-      // quota anyway; skip autosave beyond the threshold instead of stalling
-      // every commit. Export to .xlsx is the durable path for datasets that big.
-      let populatedCells = 0;
-      for (const sheet of workbook.sheets) {
-        for (const address in sheet.cells) {
-          void address;
-          populatedCells += 1;
-          if (populatedCells > AUTOSAVE_CELL_LIMIT) {
-            setStatus("Workbook too large for browser autosave — use Export XLSX to save");
-            return;
-          }
-        }
-      }
-      if (!saveWorkbook(window.localStorage, workbook)) {
-        setStatus("Autosave failed — browser storage is full");
-      }
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [workbook]);
 
   useEffect(() => {
     const raw = getCellContent(workbook, activeSheet.id, activeAddress);
@@ -327,21 +507,33 @@ export default function App() {
     };
   }, [cellContextMenu]);
 
-  function commitWorkbook(nextWorkbook: WorkbookModel, nextStatus = "Saved") {
-    const nextHistory = commitHistory(history, nextWorkbook);
-    if (nextHistory === history) {
-      return;
+  function dispatchCommand(command: WorkbookCommand, nextStatus?: string): WorkbookCommandResult {
+    const result = session.dispatch(command);
+    if (result.status === "committed") {
+      if (result.changed && nextStatus) {
+        setStatus(nextStatus);
+      }
+      return result;
     }
-    setHistory(nextHistory);
-    setStatus(nextStatus);
+    if (result.status === "conflict") {
+      setStatus(`Workbook changed; retry from revision ${result.revision}`);
+      return result;
+    }
+    if (result.status === "pending") {
+      setStatus(`Workbook operation ${result.operationId} is pending`);
+      return result;
+    }
+    const issue = result.issues?.[0];
+    setStatus(
+      issue?.code === "permission.readOnly" && issue.address
+        ? `${issue.address} is read-only`
+        : issue?.message ?? "Workbook change was rejected"
+    );
+    return result;
   }
 
-  function applyHistoryTransition(nextHistory: HistoryState, nextStatus: string) {
-    if (nextHistory === history) {
-      return;
-    }
-    setHistory(nextHistory);
-    setStatus(nextStatus);
+  function setSelection(nextSelection: CellRange): WorkbookCommandResult {
+    return dispatchCommand({ type: "selection.set", selection: nextSelection });
   }
 
   function closeFloatingPanels() {
@@ -357,23 +549,13 @@ export default function App() {
     setFormulaAuditOpen(false);
   }
 
-  function commitCell(address: string, value: CellContent): boolean {
-    if (!ensureEditableAddress(address)) {
-      return false;
-    }
-    if (!validateCellCommit(address, value)) {
-      return false;
-    }
-    let nextWorkbook = setCellContent(workbook, activeSheet.id, address, value);
-    // Excel behavior: typing a date into an unformatted cell applies a date format,
-    // so the engine's date serial renders as a date instead of a raw number.
-    // An explicit "general" counts as unformatted, like everywhere else.
-    if (typeof value === "string" && isDateLikeEntry(value) && !effectiveNumberFormat(getCellFormat(workbook, activeSheet.id, address))) {
-      const coord = parseCellAddress(address);
-      nextWorkbook = setCellFormat(nextWorkbook, activeSheet.id, { start: coord, end: coord }, { numberFormat: "date" });
-    }
-    commitWorkbook(nextWorkbook);
-    return true;
+  function commitCell(address: string, raw: string): boolean {
+    return dispatchCommand({
+      type: "cell.set",
+      sheetId: activeSheet.id,
+      address,
+      input: raw
+    }, "Saved").status === "committed";
   }
 
   function commitFormulaBar() {
@@ -402,9 +584,11 @@ export default function App() {
       return;
     }
 
-    const nextWorkbook = defineNamedRange(workbook, activeSheet.id, nextName, selection);
     const rangeLabel = formatSelectionAddress(selection);
-    commitWorkbook(nextWorkbook, `Named ${rangeLabel} as ${nextName}`);
+    dispatchCommand({
+      type: "namedRange.define",
+      namedRange: { name: nextName, sheetId: activeSheet.id, range: selection }
+    }, `Named ${rangeLabel} as ${nextName}`);
   }
 
   function selectRangeReference(targetRange: CellRange) {
@@ -416,10 +600,14 @@ export default function App() {
   }
 
   function selectNamedRange(namedRange: NamedRange) {
-    const nextWorkbook = setActiveSheet(workbook, namedRange.sheetId);
-    setHistory({ ...history, present: nextWorkbook });
     const normalizedTarget = normalizeRange(namedRange.range);
-    setSelection(normalizedTarget);
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.activate", sheetId: namedRange.sheetId },
+        { type: "selection.set", selection: normalizedTarget }
+      ]
+    });
     gridApiRef.current?.ensureCellVisible(normalizedTarget.start.row, normalizedTarget.start.column);
     setStatus(`Selected ${namedRange.name}`);
   }
@@ -448,19 +636,6 @@ export default function App() {
     }
 
     setStatus(`No cell, range, or named range named ${nextReference}`);
-  }
-
-  function validateCellCommit(address: string, value: CellContent): boolean {
-    const rule = getCellValidation(workbook, activeSheet.id, address);
-    const result = validateCellValue(value === null ? "" : String(value), rule);
-    if (result.valid) {
-      return true;
-    }
-
-    const coord = parseCellAddress(address);
-    setSelection({ start: coord, end: coord });
-    setStatus(result.message);
-    return false;
   }
 
   function isAddressReadOnly(address: string): boolean {
@@ -510,10 +685,7 @@ export default function App() {
   }
 
   function applyFormat(format: CellFormat, nextStatus = "Formatted selection") {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellFormat(workbook, activeSheet.id, selection, format), nextStatus);
+    dispatchCommand({ type: "range.format", sheetId: activeSheet.id, range: selection, format }, nextStatus);
   }
 
   function handleFormatPainter() {
@@ -537,6 +709,84 @@ export default function App() {
     applyFormatPainter(nextSelection);
   }
 
+  function handleCreateStructuredTable() {
+    const normalizedSelection = normalizeRange(selection);
+    const command: WorkbookCommand = {
+      type: "transaction",
+      commands: [
+        {
+          type: "table.create",
+          sheetId: activeSheet.id,
+          range: normalizedSelection,
+          headerRow: true,
+          totalsRow: false,
+          style: { theme: "TableStyleLight1", showRowStripes: true }
+        },
+        { type: "selection.set", selection: normalizedSelection }
+      ]
+    };
+    const result = session.dispatch(command);
+    if (result.status === "rejected") {
+      const issues = result.issues ?? [{ code: "TABLE_CREATE_REJECTED", message: "Table could not be created" }];
+      setTableCommandIssues({ issues });
+      setStatus(issues[0]?.message ?? "Table could not be created");
+      return;
+    }
+    if (result.status !== "committed") {
+      setStatus("Table could not be created");
+      return;
+    }
+
+    setSelection(normalizedSelection);
+    setTableCommandIssues({ issues: [] });
+    setStatus(`Created table from ${formatSelectionAddress(normalizedSelection)}`);
+  }
+
+  function dispatchStructuredTableCommand(command: WorkbookCommand, nextStatus: string) {
+    const tableId = "tableId" in command && typeof command.tableId === "string" ? command.tableId : activeTable?.id;
+    const result = session.dispatch(command);
+    if (result.status === "rejected") {
+      const issues = result.issues ?? [{ code: "TABLE_COMMAND_REJECTED", message: "Table change was rejected" }];
+      setTableCommandIssues({ tableId, issues });
+      setStatus(issues[0]?.message ?? "Table change was rejected");
+      return false;
+    }
+    if (result.status !== "committed") {
+      setStatus("Table change could not be completed");
+      return false;
+    }
+
+    setTableCommandIssues({ tableId, issues: [] });
+    setStatus(nextStatus);
+    return true;
+  }
+
+  function openTableCellInSpreadsheet(tableId: string, cell?: { rowId: string; columnId: string }) {
+    const latestWorkbook = session.getSnapshot().workbook;
+    const table = latestWorkbook.tables.find((candidate) => candidate.id === tableId);
+    const body = table ? getStructuredTableBodyRange(table) : null;
+    const rowIndex = table && cell ? table.rowIds.indexOf(cell.rowId) : 0;
+    const column = table && cell
+      ? table.columns.find((candidate) => candidate.id === cell.columnId)
+      : table?.columns[0];
+    if (!table || !body || rowIndex < 0 || !column) {
+      setStatus("The table cell is no longer available in the spreadsheet");
+      return;
+    }
+    const coordinate = { row: body.start.row + rowIndex, column: column.sheetColumn };
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.activate", sheetId: table.sheetId },
+        { type: "selection.set", selection: { start: coordinate, end: coordinate } }
+      ]
+    }, `Selected ${formatCellAddress(coordinate)} in the spreadsheet`);
+    if (result.status !== "committed") return;
+    setOpenTableId(null);
+    gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
+    gridScrollRef.current?.focus({ preventScroll: true });
+  }
+
   function applyFormatPainter(targetSelection: CellRange) {
     if (!formatPainter) {
       return;
@@ -544,113 +794,122 @@ export default function App() {
 
     const painter = formatPainter;
     const normalizedTarget = normalizeRange(targetSelection);
-    if (!ensureEditableRange(normalizedTarget)) {
-      return;
-    }
-
     const targetLabel = formatSelectionAddress(normalizedTarget);
-    const clearedWorkbook = clearDirectCellFormats(workbook, activeSheet.id, normalizedTarget);
-    const paintedWorkbook = setCellFormat(clearedWorkbook, activeSheet.id, normalizedTarget, painter.format);
-    setSelection(normalizedTarget);
-    setFormatPainter(null);
-
-    if (paintedWorkbook === workbook) {
-      setStatus(`Painted format to ${targetLabel}`);
-      return;
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        {
+          type: "range.format.replace",
+          sheetId: activeSheet.id,
+          range: normalizedTarget,
+          format: painter.format
+        },
+        { type: "selection.set", selection: normalizedTarget }
+      ]
+    }, `Painted format to ${targetLabel}`);
+    if (result.status === "committed") {
+      setFormatPainter(null);
     }
-
-    commitWorkbook(paintedWorkbook, `Painted format to ${targetLabel}`);
   }
 
   function applyBorders(preset: BorderPreset) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    const nextWorkbook = setCellBorders(workbook, activeSheet.id, selection, preset);
     const selectionLabel = formatSelectionAddress(selection);
     const nextStatus =
       preset === "none"
         ? `Cleared borders from ${selectionLabel}`
         : `Applied ${borderPresetLabel(preset)} borders to ${selectionLabel}`;
-    commitWorkbook(nextWorkbook, nextStatus);
+    dispatchCommand({
+      type: "range.borders",
+      sheetId: activeSheet.id,
+      range: selection,
+      preset
+    }, nextStatus);
   }
 
   function applyValidation(rule: DataValidationRule) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellValidation(workbook, activeSheet.id, selection, rule), "Applied data validation");
-    setValidationPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.validation.set",
+      sheetId: activeSheet.id,
+      range: selection,
+      rule
+    }, "Applied data validation");
+    if (result.status === "committed") setValidationPanelOpen(false);
   }
 
   function clearValidation() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellValidation(workbook, activeSheet.id, selection, null), "Cleared data validation");
-    setValidationPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.validation.clear",
+      sheetId: activeSheet.id,
+      range: selection
+    }, "Cleared data validation");
+    if (result.status === "committed") setValidationPanelOpen(false);
   }
 
   function deleteDataValidationRule(summary: DataValidationSummary) {
-    if (!ensureEditableRange(summary.range)) {
-      return;
-    }
-
-    commitWorkbook(
-      setCellValidation(workbook, activeSheet.id, summary.range, null),
-      "Deleted data validation rule"
-    );
+    dispatchCommand({
+      type: "range.validation.clear",
+      sheetId: activeSheet.id,
+      range: summary.range
+    }, "Deleted data validation rule");
   }
 
-  function applyConditionalFormatting(rule: Parameters<typeof addConditionalFormatRule>[3]) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(
-      addConditionalFormatRule(workbook, activeSheet.id, selection, rule),
-      "Applied conditional formatting"
-    );
-    setConditionalPanelOpen(false);
+  function applyConditionalFormatting(rule: {
+    condition: ConditionalFormatRule["condition"];
+    format: CellFormat;
+  }) {
+    const result = dispatchCommand({
+      type: "range.conditionalFormat.add",
+      sheetId: activeSheet.id,
+      range: selection,
+      rule: {
+        id: nextConditionalFormatCommandId(activeSheet.conditionalFormats ?? []),
+        range: selection,
+        condition: rule.condition,
+        format: rule.format
+      }
+    }, "Applied conditional formatting");
+    if (result.status === "committed") setConditionalPanelOpen(false);
   }
 
   function clearConditionalFormatting() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(
-      clearConditionalFormatRules(workbook, activeSheet.id, selection),
-      "Cleared conditional formatting"
-    );
-    setConditionalPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.conditionalFormat.clear",
+      sheetId: activeSheet.id,
+      range: selection
+    }, "Cleared conditional formatting");
+    if (result.status === "committed") setConditionalPanelOpen(false);
   }
 
   function deleteConditionalFormatRule(ruleId: string) {
     const rule = (activeSheet.conditionalFormats ?? []).find((candidate) => candidate.id === ruleId);
-    if (!rule || !ensureEditableRange(rule.range)) {
+    if (!rule) {
       return;
     }
-
-    commitWorkbook(
-      removeConditionalFormatRule(workbook, activeSheet.id, ruleId),
-      "Deleted conditional format rule"
-    );
+    dispatchCommand({
+      type: "range.conditionalFormat.remove",
+      sheetId: activeSheet.id,
+      ruleId
+    }, "Deleted conditional format rule");
   }
 
   function applyFilter(filter: { operator: FilterOperator; value: string }) {
     const normalized = normalizeRange(selection);
-    commitWorkbook(
-      addSheetFilter(workbook, activeSheet.id, normalized, {
+    dispatchCommand({
+      type: "sheet.filter.set",
+      sheetId: activeSheet.id,
+      filter: {
+        id: nextSheetFilterCommandId(activeSheet.filters ?? []),
+        range: normalized,
         ...filter,
         column: normalized.start.column,
         hasHeader: normalized.start.row !== normalized.end.row
-      }),
-      "Filter applied"
-    );
+      }
+    }, "Filter applied");
     setFilterPanelOpen(false);
   }
 
   function clearFilters() {
-    commitWorkbook(clearSheetFilters(workbook, activeSheet.id), "Filters cleared");
+    dispatchCommand({ type: "sheet.filter.clear", sheetId: activeSheet.id }, "Filters cleared");
     setFilterPanelOpen(false);
   }
 
@@ -674,20 +933,27 @@ export default function App() {
     }
 
     if (values.length === 0) {
-      commitWorkbook(clearSheetFilter(workbook, activeSheet.id, range, column), `Cleared filter from ${columnIndexToName(column)}`);
+      dispatchCommand({
+        type: "sheet.filter.clear",
+        sheetId: activeSheet.id,
+        column
+      }, `Cleared filter from ${columnIndexToName(column)}`);
       return;
     }
 
-    commitWorkbook(
-      addSheetFilter(workbook, activeSheet.id, range, {
+    dispatchCommand({
+      type: "sheet.filter.set",
+      sheetId: activeSheet.id,
+      filter: {
+        id: nextSheetFilterCommandId(activeSheet.filters ?? []),
+        range,
         column,
         operator: "equals",
         value: values[0] ?? "",
         values,
         hasHeader: true
-      }),
-      `Filtered ${columnIndexToName(column)} by ${values.join(", ")}`
-    );
+      }
+    }, `Filtered ${columnIndexToName(column)} by ${values.join(", ")}`);
   }
 
   function clearAutoFilterColumn(column: number) {
@@ -696,19 +962,26 @@ export default function App() {
       return;
     }
 
-    commitWorkbook(clearSheetFilter(workbook, activeSheet.id, range, column), `Cleared filter from ${columnIndexToName(column)}`);
+    dispatchCommand({
+      type: "sheet.filter.clear",
+      sheetId: activeSheet.id,
+      column
+    }, `Cleared filter from ${columnIndexToName(column)}`);
   }
 
   function sortAutoFilterColumn(column: number, direction: "asc" | "desc") {
     const range = activeSheet.autoFilterRange ? normalizeRange(activeSheet.autoFilterRange) : null;
-    if (!range || !ensureEditableRange(range)) {
+    if (!range) {
       return;
     }
 
-    commitWorkbook(
-      sortRange(workbook, activeSheet.id, range, direction, column),
-      direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`
-    );
+    dispatchCommand({
+      type: "range.sort",
+      sheetId: activeSheet.id,
+      range,
+      direction,
+      sortColumn: column
+    }, direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`);
   }
 
   function handleAutoSum(functionName: AutoFunctionName = "SUM") {
@@ -724,20 +997,17 @@ export default function App() {
     }
 
     const targetAddress = formatCellAddress(plan.target);
-    if (!ensureEditableAddress(targetAddress)) {
-      return;
-    }
-    if (!validateCellCommit(targetAddress, plan.formula)) {
-      return;
-    }
-
-    commitWorkbook(
-      setCellContent(workbook, activeSheet.id, targetAddress, plan.formula),
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "cell.set", sheetId: activeSheet.id, address: targetAddress, input: plan.formula },
+        { type: "selection.set", selection: { start: plan.target, end: plan.target } }
+      ]
+    },
       functionName === "SUM"
         ? `Inserted AutoSum for ${formatRangeAddress(plan.source)}`
         : `Inserted ${autoFunctionLabel(functionName)} for ${formatRangeAddress(plan.source)}`
     );
-    setSelection({ start: plan.target, end: plan.target });
   }
 
   function handleFunctionLibrary() {
@@ -780,7 +1050,7 @@ export default function App() {
   }
 
   function handleDeleteNamedRange(name: string) {
-    commitWorkbook(removeNamedRange(workbook, name), `Deleted named range ${name}`);
+    dispatchCommand({ type: "namedRange.remove", name }, `Deleted named range ${name}`);
   }
 
   function handleComment() {
@@ -795,13 +1065,13 @@ export default function App() {
 
     const hadComment = existingComment.trim() !== "";
     const hasComment = nextComment.trim() !== "";
-    const nextWorkbook = setCellComment(workbook, activeSheet.id, activeAddress, nextComment);
-    if (nextWorkbook === workbook) {
-      return;
-    }
-
     const action = hasComment ? (hadComment ? "Updated" : "Added") : "Removed";
-    commitWorkbook(nextWorkbook, `${action} comment ${hasComment ? "to" : "from"} ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.comment.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      comment: nextComment
+    }, `${action} comment ${hasComment ? "to" : "from"} ${activeAddress}`);
   }
 
   function handleLink() {
@@ -822,13 +1092,13 @@ export default function App() {
 
     const hadLink = existingLink.trim() !== "";
     const hasLink = normalizedUrl !== "";
-    const nextWorkbook = setCellHyperlink(workbook, activeSheet.id, activeAddress, normalizedUrl);
-    if (nextWorkbook === workbook) {
-      return;
-    }
-
     const action = hasLink ? (hadLink ? "Updated" : "Added") : "Removed";
-    commitWorkbook(nextWorkbook, `${action} link ${hasLink ? "to" : "from"} ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.hyperlink.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      hyperlink: normalizedUrl
+    }, `${action} link ${hasLink ? "to" : "from"} ${activeAddress}`);
   }
 
   function handleUnlink() {
@@ -841,7 +1111,12 @@ export default function App() {
       return;
     }
 
-    commitWorkbook(setCellHyperlink(workbook, activeSheet.id, activeAddress, null), `Removed link from ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.hyperlink.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      hyperlink: null
+    }, `Removed link from ${activeAddress}`);
   }
 
   function handleMergeCells() {
@@ -856,21 +1131,23 @@ export default function App() {
       return;
     }
 
-    commitWorkbook(mergeCells(workbook, activeSheet.id, normalized), `Merged ${formatSelectionAddress(normalized)}`);
+    dispatchCommand({
+      type: "range.merge",
+      sheetId: activeSheet.id,
+      range: normalized
+    }, `Merged ${formatSelectionAddress(normalized)}`);
   }
 
   function handleUnmergeCells() {
     const normalized = normalizeRange(selection);
-    if (!ensureEditableRange(normalized)) {
-      return;
-    }
-    const nextWorkbook = unmergeCells(workbook, activeSheet.id, normalized);
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "range.unmerge",
+      sheetId: activeSheet.id,
+      range: normalized
+    }, `Unmerged ${formatSelectionAddress(normalized)}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus("No merged cells in selection");
-      return;
     }
-
-    commitWorkbook(nextWorkbook, `Unmerged ${formatSelectionAddress(normalized)}`);
   }
 
   function handleCreateChart(config: { type: SheetChartType; title: string }) {
@@ -883,40 +1160,52 @@ export default function App() {
     }
 
     const normalized = normalizeRange(sourceRange);
-    const nextWorkbook = addSheetChart(workbook, activeSheet.id, normalized, {
-      anchor: {
+    const result = dispatchCommand({
+      type: "sheet.chart.add",
+      sheetId: activeSheet.id,
+      chart: {
+        id: nextSheetChartCommandId(activeSheet.charts ?? []),
+        range: normalized,
+        anchor: {
         row: normalized.start.row,
         column: Math.min(activeSheet.columnCount - 1, normalized.end.column + 1)
-      },
-      title: config.title || chartData.title,
-      type: config.type
-    });
-    commitWorkbook(nextWorkbook, "Created chart");
-    setChartPanelOpen(false);
+        },
+        title: config.title || chartData.title,
+        type: config.type
+      }
+    }, "Created chart");
+    if (result.status === "committed") setChartPanelOpen(false);
   }
 
   function handleDeleteChart(chartId: string) {
     if (!ensureSheetStructureEditable()) {
       return;
     }
-    commitWorkbook(deleteSheetChart(workbook, activeSheet.id, chartId), "Deleted chart");
+    dispatchCommand({ type: "sheet.chart.delete", sheetId: activeSheet.id, chartId }, "Deleted chart");
   }
 
   function handleColumnResize(column: number, width: number) {
     if (!ensureSheetStructureEditable()) {
       return;
     }
-    commitWorkbook(
-      setColumnWidth(workbook, activeSheet.id, column, width),
-      `Set column ${columnIndexToName(column)} width`
-    );
+    dispatchCommand({
+      type: "columns.resize",
+      sheetId: activeSheet.id,
+      columns: [column],
+      width
+    }, `Set column ${columnIndexToName(column)} width`);
   }
 
   function handleRowResize(row: number, height: number) {
     if (!ensureSheetStructureEditable()) {
       return;
     }
-    commitWorkbook(setRowHeight(workbook, activeSheet.id, row, height), `Set row ${row + 1} height`);
+    dispatchCommand({
+      type: "rows.resize",
+      sheetId: activeSheet.id,
+      rows: [row],
+      height
+    }, `Set row ${row + 1} height`);
   }
 
   function handleAutoFitColumns() {
@@ -930,17 +1219,18 @@ export default function App() {
       return;
     }
 
-    let nextWorkbook = workbook;
-    for (const item of plan) {
-      nextWorkbook = setColumnWidth(nextWorkbook, activeSheet.id, item.column, item.width);
-    }
-
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: plan.map((item) => ({
+        type: "columns.resize" as const,
+        sheetId: activeSheet.id,
+        columns: [item.column],
+        width: item.width
+      }))
+    }, `Auto-fit ${pluralize(plan.length, "column")}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus(`${pluralize(plan.length, "column")} already fit`);
-      return;
     }
-
-    commitWorkbook(nextWorkbook, `Auto-fit ${pluralize(plan.length, "column")}`);
   }
 
   function handleAutoFitColumn(column: number) {
@@ -950,17 +1240,18 @@ export default function App() {
 
     const columnRange = { start: { row: 0, column }, end: { row: activeSheet.rowCount - 1, column } };
     const plan = createAutoFitColumnPlan(activeSheet, columnRange, (address) => getVisibleCellText(address));
-    let nextWorkbook = workbook;
-    for (const item of plan) {
-      nextWorkbook = setColumnWidth(nextWorkbook, activeSheet.id, item.column, item.width);
-    }
-
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: plan.map((item) => ({
+        type: "columns.resize" as const,
+        sheetId: activeSheet.id,
+        columns: [item.column],
+        width: item.width
+      }))
+    }, `Auto-fit column ${columnIndexToName(column)}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus(`Column ${columnIndexToName(column)} already fits`);
-      return;
     }
-
-    commitWorkbook(nextWorkbook, `Auto-fit column ${columnIndexToName(column)}`);
   }
 
   function handleAutoFitRow(row: number) {
@@ -970,17 +1261,18 @@ export default function App() {
 
     const rowRangeTarget = { start: { row, column: 0 }, end: { row, column: activeSheet.columnCount - 1 } };
     const plan = createAutoFitRowPlan(activeSheet, rowRangeTarget, (address) => getVisibleCellText(address));
-    let nextWorkbook = workbook;
-    for (const item of plan) {
-      nextWorkbook = setRowHeight(nextWorkbook, activeSheet.id, item.row, item.height);
-    }
-
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: plan.map((item) => ({
+        type: "rows.resize" as const,
+        sheetId: activeSheet.id,
+        rows: [item.row],
+        height: item.height
+      }))
+    }, `Auto-fit row ${row + 1}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus(`Row ${row + 1} already fits`);
-      return;
     }
-
-    commitWorkbook(nextWorkbook, `Auto-fit row ${row + 1}`);
   }
 
   function commitMoveFrom(address: string, move: CommitEditMove) {
@@ -1010,41 +1302,40 @@ export default function App() {
       return;
     }
 
-    let nextWorkbook = workbook;
-    for (const item of plan) {
-      nextWorkbook = setRowHeight(nextWorkbook, activeSheet.id, item.row, item.height);
-    }
-
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: plan.map((item) => ({
+        type: "rows.resize" as const,
+        sheetId: activeSheet.id,
+        rows: [item.row],
+        height: item.height
+      }))
+    }, `Auto-fit ${pluralize(plan.length, "row")}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus(`${pluralize(plan.length, "row")} already fit`);
-      return;
     }
-
-    commitWorkbook(nextWorkbook, `Auto-fit ${pluralize(plan.length, "row")}`);
   }
 
   function handleSort(direction: "asc" | "desc") {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(
-      sortRange(workbook, activeSheet.id, selection, direction),
-      direction === "asc" ? "Sorted A to Z" : "Sorted Z to A"
-    );
+    dispatchCommand({
+      type: "range.sort",
+      sheetId: activeSheet.id,
+      range: selection,
+      direction
+    }, direction === "asc" ? "Sorted A to Z" : "Sorted Z to A");
   }
 
   function handleRemoveDuplicates() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-
-    const result = removeDuplicateRows(workbook, activeSheet.id, selection);
-    if (result.removedCount === 0) {
+    const removedCount = countDuplicateRows(activeSheet, selection);
+    if (removedCount === 0) {
       setStatus("No duplicate rows found");
       return;
     }
-
-    commitWorkbook(result.workbook, `Removed ${result.removedCount} ${result.removedCount === 1 ? "duplicate row" : "duplicate rows"}`);
+    dispatchCommand({
+      type: "range.removeDuplicates",
+      sheetId: activeSheet.id,
+      range: selection
+    }, `Removed ${removedCount} ${removedCount === 1 ? "duplicate row" : "duplicate rows"}`);
   }
 
   function handleInsertRows() {
@@ -1053,11 +1344,16 @@ export default function App() {
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.row - normalized.start.row + 1;
-    commitWorkbook(insertRows(workbook, activeSheet.id, normalized.start.row, count), `Inserted ${pluralize(count, "row")}`);
-    setSelection({
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "rows.insert", sheetId: activeSheet.id, index: normalized.start.row, count },
+        { type: "selection.set", selection: {
       start: normalized.start,
       end: { row: normalized.start.row + count - 1, column: normalized.end.column }
-    });
+        } }
+      ]
+    }, `Inserted ${pluralize(count, "row")}`);
   }
 
   function handleDeleteRows() {
@@ -1066,12 +1362,17 @@ export default function App() {
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.row - normalized.start.row + 1;
-    commitWorkbook(deleteRows(workbook, activeSheet.id, normalized.start.row, count), `Deleted ${pluralize(count, "row")}`);
     const nextRow = clamp(normalized.start.row, 0, Math.max(activeSheet.rowCount - count - 1, 0));
-    setSelection({
-      start: { row: nextRow, column: normalized.start.column },
-      end: { row: nextRow, column: normalized.end.column }
-    });
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "rows.delete", sheetId: activeSheet.id, index: normalized.start.row, count },
+        { type: "selection.set", selection: {
+          start: { row: nextRow, column: normalized.start.column },
+          end: { row: nextRow, column: normalized.end.column }
+        } }
+      ]
+    }, `Deleted ${pluralize(count, "row")}`);
   }
 
   function handleInsertColumns() {
@@ -1080,11 +1381,16 @@ export default function App() {
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.column - normalized.start.column + 1;
-    commitWorkbook(insertColumns(workbook, activeSheet.id, normalized.start.column, count), `Inserted ${pluralize(count, "column")}`);
-    setSelection({
-      start: normalized.start,
-      end: { row: normalized.end.row, column: normalized.start.column + count - 1 }
-    });
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "columns.insert", sheetId: activeSheet.id, index: normalized.start.column, count },
+        { type: "selection.set", selection: {
+          start: normalized.start,
+          end: { row: normalized.end.row, column: normalized.start.column + count - 1 }
+        } }
+      ]
+    }, `Inserted ${pluralize(count, "column")}`);
   }
 
   function handleDeleteColumns() {
@@ -1093,12 +1399,17 @@ export default function App() {
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.column - normalized.start.column + 1;
-    commitWorkbook(deleteColumns(workbook, activeSheet.id, normalized.start.column, count), `Deleted ${pluralize(count, "column")}`);
     const nextColumn = clamp(normalized.start.column, 0, Math.max(activeSheet.columnCount - count - 1, 0));
-    setSelection({
-      start: { row: normalized.start.row, column: nextColumn },
-      end: { row: normalized.end.row, column: nextColumn }
-    });
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "columns.delete", sheetId: activeSheet.id, index: normalized.start.column, count },
+        { type: "selection.set", selection: {
+          start: { row: normalized.start.row, column: nextColumn },
+          end: { row: normalized.end.row, column: nextColumn }
+        } }
+      ]
+    }, `Deleted ${pluralize(count, "column")}`);
   }
 
   function handleHideRows() {
@@ -1112,12 +1423,25 @@ export default function App() {
     }
 
     const count = normalized.end.row - normalized.start.row + 1;
-    const nextWorkbook = setRowsHidden(workbook, activeSheet.id, normalized.start.row, normalized.end.row, true);
-    commitWorkbook(nextWorkbook, `Hid ${pluralize(count, "row")}`);
-    const nextSheet = getActiveSheet(nextWorkbook);
-    const nextRow = findNearestVisibleIndex(nextSheet.rowCount, nextSheet.hiddenRows ?? {}, normalized.end.row + 1);
-    const nextColumn = findNearestVisibleIndex(nextSheet.columnCount, nextSheet.hiddenColumns ?? {}, normalized.start.column);
-    setSelection({ start: { row: nextRow, column: nextColumn }, end: { row: nextRow, column: nextColumn } });
+    const nextHiddenRows = { ...(activeSheet.hiddenRows ?? {}) };
+    for (let row = normalized.start.row; row <= normalized.end.row; row += 1) nextHiddenRows[String(row)] = true;
+    const nextRow = findNearestVisibleIndex(activeSheet.rowCount, nextHiddenRows, normalized.end.row + 1);
+    const nextColumn = findNearestVisibleIndex(activeSheet.columnCount, activeSheet.hiddenColumns ?? {}, normalized.start.column);
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        {
+          type: "rows.hidden.set",
+          sheetId: activeSheet.id,
+          rows: inclusiveIndexes(normalized.start.row, normalized.end.row),
+          hidden: true
+        },
+        { type: "selection.set", selection: {
+          start: { row: nextRow, column: nextColumn },
+          end: { row: nextRow, column: nextColumn }
+        } }
+      ]
+    }, `Hid ${pluralize(count, "row")}`);
   }
 
   function handleHideColumns() {
@@ -1131,12 +1455,25 @@ export default function App() {
     }
 
     const count = normalized.end.column - normalized.start.column + 1;
-    const nextWorkbook = setColumnsHidden(workbook, activeSheet.id, normalized.start.column, normalized.end.column, true);
-    commitWorkbook(nextWorkbook, `Hid ${pluralize(count, "column")}`);
-    const nextSheet = getActiveSheet(nextWorkbook);
-    const nextRow = findNearestVisibleIndex(nextSheet.rowCount, nextSheet.hiddenRows ?? {}, normalized.start.row);
-    const nextColumn = findNearestVisibleIndex(nextSheet.columnCount, nextSheet.hiddenColumns ?? {}, normalized.end.column + 1);
-    setSelection({ start: { row: nextRow, column: nextColumn }, end: { row: nextRow, column: nextColumn } });
+    const nextHiddenColumns = { ...(activeSheet.hiddenColumns ?? {}) };
+    for (let column = normalized.start.column; column <= normalized.end.column; column += 1) nextHiddenColumns[String(column)] = true;
+    const nextRow = findNearestVisibleIndex(activeSheet.rowCount, activeSheet.hiddenRows ?? {}, normalized.start.row);
+    const nextColumn = findNearestVisibleIndex(activeSheet.columnCount, nextHiddenColumns, normalized.end.column + 1);
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        {
+          type: "columns.hidden.set",
+          sheetId: activeSheet.id,
+          columns: inclusiveIndexes(normalized.start.column, normalized.end.column),
+          hidden: true
+        },
+        { type: "selection.set", selection: {
+          start: { row: nextRow, column: nextColumn },
+          end: { row: nextRow, column: nextColumn }
+        } }
+      ]
+    }, `Hid ${pluralize(count, "column")}`);
   }
 
   function handleUnhideAll() {
@@ -1144,48 +1481,74 @@ export default function App() {
       return;
     }
 
-    const nextWorkbook = clearHiddenRowsAndColumns(workbook, activeSheet.id);
-    if (nextWorkbook === workbook) {
+    const rows = flaggedIndexes(activeSheet.hiddenRows ?? {});
+    const columns = flaggedIndexes(activeSheet.hiddenColumns ?? {});
+    if (rows.length === 0 && columns.length === 0) {
       setStatus("No hidden rows or columns");
       return;
     }
-
-    commitWorkbook(nextWorkbook, "Unhid rows and columns");
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        ...(rows.length > 0 ? [{
+          type: "rows.hidden.set" as const,
+          sheetId: activeSheet.id,
+          rows,
+          hidden: false
+        }] : []),
+        ...(columns.length > 0 ? [{
+          type: "columns.hidden.set" as const,
+          sheetId: activeSheet.id,
+          columns,
+          hidden: false
+        }] : [])
+      ]
+    }, "Unhid rows and columns");
   }
 
   function handleClearSelection() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearRange(workbook, activeSheet.id, selection), "Cleared selection");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "contents"
+    }, "Cleared selection");
   }
 
   function handleClearAll() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearRangeAll(workbook, activeSheet.id, selection), "Cleared all");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "all"
+    }, "Cleared all");
   }
 
   function handleClearComments() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellComments(workbook, activeSheet.id, selection), "Cleared comments");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "comments"
+    }, "Cleared comments");
   }
 
   function handleClearFormats() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellFormats(workbook, activeSheet.id, selection), "Cleared formats");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "formats"
+    }, "Cleared formats");
   }
 
   function handleClearHyperlinks() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellHyperlinks(workbook, activeSheet.id, selection), "Cleared hyperlinks");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "hyperlinks"
+    }, "Cleared hyperlinks");
   }
 
   function openCellContextMenu(event: { address: string; row: number; column: number; x: number; y: number }) {
@@ -1205,17 +1568,21 @@ export default function App() {
   }
 
   function handleFillDown() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(fillDown(workbook, activeSheet.id, selection), "Filled down");
+    dispatchCommand({
+      type: "range.fill",
+      sheetId: activeSheet.id,
+      range: selection,
+      direction: "down"
+    }, "Filled down");
   }
 
   function handleFillRight() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(fillRight(workbook, activeSheet.id, selection), "Filled right");
+    dispatchCommand({
+      type: "range.fill",
+      sheetId: activeSheet.id,
+      range: selection,
+      direction: "right"
+    }, "Filled right");
   }
 
   function handleAutoFill(sourceRange: CellRange, targetRange: CellRange) {
@@ -1235,11 +1602,13 @@ export default function App() {
         target.end.row < source.end.row
           ? { start: { row: target.end.row + 1, column: source.start.column }, end: source.end }
           : { start: { row: source.start.row, column: target.end.column + 1 }, end: source.end };
-      if (!ensureEditableRange(clearTarget)) {
-        return;
-      }
-      setSelection(target);
-      commitWorkbook(clearRange(workbook, activeSheet.id, clearTarget), `Cleared ${formatSelectionAddress(clearTarget)}`);
+      dispatchCommand({
+        type: "transaction",
+        commands: [
+          { type: "range.clear", sheetId: activeSheet.id, range: clearTarget, mode: "contents" },
+          { type: "selection.set", selection: target }
+        ]
+      }, `Cleared ${formatSelectionAddress(clearTarget)}`);
       return;
     }
 
@@ -1248,15 +1617,15 @@ export default function App() {
       setStatus("Drag the fill handle along one direction");
       return;
     }
-    if (!ensureEditableRange(writeRange)) {
-      return;
-    }
-
     const targetLabel = formatSelectionAddress(target);
-    const nextWorkbook = autoFillRange(workbook, activeSheet.id, source, target);
-    setSelection(target);
-    commitWorkbook(nextWorkbook, `AutoFilled ${targetLabel}`);
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "range.autoFill", sheetId: activeSheet.id, source, target },
+        { type: "selection.set", selection: target }
+      ]
+    }, `AutoFilled ${targetLabel}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus(`AutoFilled ${targetLabel}`);
     }
   }
@@ -1286,21 +1655,30 @@ export default function App() {
   }
 
   function handleLockCells() {
-    const nextWorkbook = setRangeReadOnly(workbook, activeSheet.id, selection, true);
-    commitWorkbook(nextWorkbook, `Locked ${formatSelectionAddress(selection)}`);
+    dispatchCommand({
+      type: "range.readOnly.set",
+      sheetId: activeSheet.id,
+      range: selection,
+      readOnly: true
+    }, `Locked ${formatSelectionAddress(selection)}`);
   }
 
   function handleUnlockCells() {
-    const nextWorkbook = setRangeReadOnly(workbook, activeSheet.id, selection, false);
-    commitWorkbook(nextWorkbook, `Unlocked ${formatSelectionAddress(selection)}`);
+    dispatchCommand({
+      type: "range.readOnly.set",
+      sheetId: activeSheet.id,
+      range: selection,
+      readOnly: false
+    }, `Unlocked ${formatSelectionAddress(selection)}`);
   }
 
   function handleToggleProtection() {
     const isProtected = Boolean(activeSheet.protection?.isProtected);
-    commitWorkbook(
-      setSheetProtection(workbook, activeSheet.id, !isProtected),
-      isProtected ? "Unprotected sheet" : "Protected sheet"
-    );
+    dispatchCommand({
+      type: "sheet.protection.set",
+      sheetId: activeSheet.id,
+      protected: !isProtected
+    }, isProtected ? "Unprotected sheet" : "Protected sheet");
   }
 
   function showPivotDrillDown(address: string): boolean {
@@ -1326,18 +1704,28 @@ export default function App() {
 
     const rows = [meta.sourceRows[0], ...indexes.map((index) => meta.sourceRows[index])];
     const detailsName = nextDetailsSheetName(workbook);
-    let nextWorkbook = addSheet(workbook, detailsName);
-    const detailsSheetId = nextWorkbook.activeSheetId;
-    nextWorkbook = pasteMatrix(nextWorkbook, detailsSheetId, "A1", rows);
-    nextWorkbook = setCellFormat(nextWorkbook, detailsSheetId, rowRange(0, rows[0].length), {
-      bold: true,
-      backgroundColor: "#eaf7f2"
-    });
-    commitWorkbook(
-      nextWorkbook,
-      `Showing ${indexes.length} source ${indexes.length === 1 ? "row" : "rows"} in ${detailsName}`
-    );
-    setSelection(INITIAL_SELECTION);
+    const detailsSheetId = nextGeneratedSheetId(workbook);
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        {
+          type: "sheet.createFromMatrix",
+          sheetId: detailsSheetId,
+          name: detailsName,
+          rows,
+          formats: [{
+            range: rowRange(0, rows[0].length),
+            format: { bold: true, backgroundColor: "#eaf7f2" }
+          }]
+        },
+        { type: "selection.set", selection: INITIAL_SELECTION }
+      ]
+    }, `Showing ${indexes.length} source ${indexes.length === 1 ? "row" : "rows"} in ${detailsName}`);
+    if (result.status !== "committed") {
+      return false;
+    }
+    setRichClipboard(null);
+    setFormatPainter(null);
     return true;
   }
 
@@ -1346,124 +1734,104 @@ export default function App() {
       const sourceRows = selectedRangeToDisplayRows(activeSheet, selection, formulaEngine);
       const { table: pivotRows, drillDown } = createPivotTableWithDetails(sourceRows, config);
       const pivotName = nextPivotSheetName(workbook);
-      let nextWorkbook = addSheet(workbook, pivotName);
-      const pivotSheetId = nextWorkbook.activeSheetId;
-      setPivotDrillDowns((current) => ({
-        ...current,
-        [pivotSheetId]: { sourceRows, drillDown, table: pivotRows }
-      }));
-
-      nextWorkbook = pasteMatrix(nextWorkbook, pivotSheetId, "A1", pivotRows);
-      nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(0, pivotRows[0].length), {
-        bold: true,
-        textColor: "#17634a",
-        backgroundColor: "#eaf7f2",
-        borders: { bottom: { style: "thin", color: "#17634a" } }
-      });
-      nextWorkbook = setCellFormat(nextWorkbook, pivotSheetId, rowRange(pivotRows.length - 1, pivotRows[0].length), {
-        bold: true,
-        backgroundColor: "#f1f5f8",
-        borders: { top: { style: "thin", color: "#94a3b8" } }
-      });
+      const pivotSheetId = nextGeneratedSheetId(workbook);
+      const formats: Array<{ range: CellRange; format: Partial<CellFormat> }> = [
+        {
+          range: rowRange(0, pivotRows[0].length),
+          format: {
+            bold: true,
+            textColor: "#17634a",
+            backgroundColor: "#eaf7f2",
+            borders: { bottom: { style: "thin", color: "#17634a" } }
+          }
+        },
+        {
+          range: rowRange(pivotRows.length - 1, pivotRows[0].length),
+          format: {
+            bold: true,
+            backgroundColor: "#f1f5f8",
+            borders: { top: { style: "thin", color: "#94a3b8" } }
+          }
+        }
+      ];
       // Value columns read as numbers: right-align them like Excel's pivot output.
       const valueColumnStart = config.rowFields.length;
       const valueColumnEnd = pivotRows[0].length - 1;
       if (valueColumnEnd >= valueColumnStart && pivotRows.length > 1) {
-        nextWorkbook = setCellFormat(
-          nextWorkbook,
-          pivotSheetId,
-          {
+        formats.push({
+          range: {
             start: { row: 1, column: valueColumnStart },
             end: { row: pivotRows.length - 1, column: valueColumnEnd }
           },
-          { horizontalAlign: "right" }
-        );
+          format: { horizontalAlign: "right" }
+        });
       }
       // Size each pivot column to its widest cell so nothing arrives truncated.
       // Incremental max: spreading all rows into Math.max overflows the call
       // stack on very large pivot outputs.
+      const columnWidths: number[] = [];
       for (let column = 0; column < pivotRows[0].length; column += 1) {
         let width = 0;
         for (const tableRow of pivotRows) {
           width = Math.max(width, textToAutoFitColumnWidth(String(tableRow[column] ?? "")));
         }
-        nextWorkbook = setColumnWidth(nextWorkbook, pivotSheetId, column, width);
+        columnWidths.push(width);
       }
-      // Keep the pivot's header row visible while scrolling long outputs.
-      nextWorkbook = setSheetFreezePanes(nextWorkbook, pivotSheetId, {
-        freezeTopRow: true,
-        freezeFirstColumn: false
-      });
-
-      commitWorkbook(nextWorkbook, `Created ${pivotName}`);
-      setSelection(INITIAL_SELECTION);
-      setPivotPanelOpen(false);
+      const result = dispatchCommand({
+        type: "transaction",
+        commands: [
+          {
+            type: "sheet.createFromMatrix",
+            sheetId: pivotSheetId,
+            name: pivotName,
+            rows: pivotRows,
+            formats,
+            columnWidths,
+            freeze: { rows: 1, columns: 0 }
+          },
+          { type: "selection.set", selection: INITIAL_SELECTION }
+        ]
+      }, `Created ${pivotName}`);
+      if (result.status === "committed") {
+        setPivotDrillDowns((current) => ({
+          ...current,
+          [pivotSheetId]: { sourceRows, drillDown, table: pivotRows }
+        }));
+        setRichClipboard(null);
+        setFormatPainter(null);
+        setPivotPanelOpen(false);
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not create pivot table");
     }
   }
 
-  function validateRichPaste(mode: RichPasteMode, options: PasteRichRangeOptions = {}): boolean {
+  function pasteRichClipboardMode(mode: RichPasteMode, nextStatus: string): boolean {
     if (!richClipboard) {
       setStatus("Copy cells before using paste special");
       return false;
     }
+    const isMovePaste = mode === "all" && richClipboard.operation === "cut";
+    const result = isMovePaste
+      ? dispatchCommand({
+          type: "clipboard.move",
+          sourceSheetId: richClipboard.sourceSheetId,
+          source: richClipboard.range.range,
+          targetSheetId: activeSheet.id,
+          target: parseCellAddress(activeAddress)
+        }, "Moved selection")
+      : dispatchCommand({
+          type: "clipboard.paste",
+          sheetId: activeSheet.id,
+          target: parseCellAddress(activeAddress),
+          payload: richClipboard.range,
+          mode
+        }, nextStatus);
 
-    const preview = previewRichPaste(richClipboard.range, activeAddress, { ...options, mode });
-    for (const item of preview) {
-      if (!ensureEditableAddress(item.address)) {
-        return false;
-      }
-      if (mode === "formats") {
-        continue;
-      }
-      const rule = mode === "values" ? getCellValidation(workbook, activeSheet.id, item.address) : item.validation;
-      const result = validateCellValue(item.content === null ? "" : String(item.content), rule);
-      if (!result.valid) {
-        const coord = parseCellAddress(item.address);
-        setSelection({ start: coord, end: coord });
-        setStatus(result.message);
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  function ensureMoveSourceEditable(clipboard: RichClipboardState, targetAddress: string): boolean {
-    const preservedSourceAddresses =
-      clipboard.sourceSheetId === activeSheet.id
-        ? new Set(previewRichPaste(clipboard.range, targetAddress, { translateFormulas: false }).map((item) => item.address))
-        : new Set<string>();
-
-    const readOnlyAddress = getRangeAddresses(clipboard.range.range).find(
-      (address) => !preservedSourceAddresses.has(address) && isAddressReadOnlyOnSheet(clipboard.sourceSheetId, address)
-    );
-    return readOnlyAddress ? ensureEditableAddressOnSheet(clipboard.sourceSheetId, readOnlyAddress) : true;
-  }
-
-  function pasteRichClipboardMode(mode: RichPasteMode, nextStatus: string): boolean {
-    const isMovePaste = mode === "all" && richClipboard?.operation === "cut";
-    const options: PasteRichRangeOptions = isMovePaste ? { mode, translateFormulas: false } : { mode };
-
-    if (!validateRichPaste(mode, options)) {
-      return false;
-    }
-    if (isMovePaste && !ensureMoveSourceEditable(richClipboard!, activeAddress)) {
-      return false;
-    }
-
-    if (isMovePaste) {
-      commitWorkbook(
-        moveRichRange(workbook, richClipboard!.sourceSheetId, activeSheet.id, activeAddress, richClipboard!.range),
-        "Moved selection"
-      );
+    if (isMovePaste && result.status === "committed") {
       setRichClipboard(null);
-      return true;
     }
-
-    commitWorkbook(pasteRichRange(workbook, activeSheet.id, activeAddress, richClipboard!.range, { mode }), nextStatus);
-    return true;
+    return result.status === "committed";
   }
 
   function pasteRichClipboard(text: string): boolean {
@@ -1496,8 +1864,6 @@ export default function App() {
     if (pasteRichClipboard(normalizedText)) {
       return;
     }
-    setRichClipboard(null);
-
     const matrix = normalizedText
       .split("\n")
       .filter((line, index, lines) => line.length > 0 || index < lines.length - 1)
@@ -1507,20 +1873,15 @@ export default function App() {
       return;
     }
 
-    const start = parseCellAddress(activeAddress);
-    for (let rowOffset = 0; rowOffset < matrix.length; rowOffset += 1) {
-      for (let columnOffset = 0; columnOffset < matrix[rowOffset].length; columnOffset += 1) {
-        const address = formatCellAddress({ row: start.row + rowOffset, column: start.column + columnOffset });
-        if (!ensureEditableAddress(address)) {
-          return;
-        }
-        if (!validateCellCommit(address, matrix[rowOffset][columnOffset])) {
-          return;
-        }
-      }
+    const result = dispatchCommand({
+      type: "clipboard.pasteMatrix",
+      sheetId: activeSheet.id,
+      target: parseCellAddress(activeAddress),
+      matrix
+    }, "Pasted cells");
+    if (result.status === "committed") {
+      setRichClipboard(null);
     }
-
-    commitWorkbook(pasteMatrix(workbook, activeSheet.id, activeAddress, matrix), "Pasted cells");
   }
 
   function createRichClipboardPayload(operation: RichClipboardState["operation"]): RichClipboardState {
@@ -1649,8 +2010,8 @@ export default function App() {
 
     if (isCommand && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      applyHistoryTransition(
-        event.shiftKey ? redoHistory(history) : undoHistory(history),
+      dispatchCommand(
+        { type: event.shiftKey ? "history.redo" : "history.undo" },
         event.shiftKey ? "Redone" : "Undone"
       );
       return;
@@ -1658,7 +2019,7 @@ export default function App() {
 
     if (isCommand && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      applyHistoryTransition(redoHistory(history), "Redone");
+      dispatchCommand({ type: "history.redo" }, "Redone");
       return;
     }
 
@@ -1820,13 +2181,16 @@ export default function App() {
     if ((activeSheet.hiddenRows ?? {})[String(row)]) {
       return true;
     }
+    if (!isStructuredTableRowVisible(row)) {
+      return true;
+    }
     const filters = activeSheet.filters ?? [];
     if (filters.length === 0) {
       return false;
     }
     return !filters.every((filter) =>
       isRowVisibleForFilter(row, filter, (filterRow, filterColumn) =>
-        formulaEngine.getDisplayValue(activeSheet.id, formatCellAddress({ row: filterRow, column: filterColumn }))
+        formulaEngine.getComputedValue(activeSheet.id, formatCellAddress({ row: filterRow, column: filterColumn }))
       )
     );
   }
@@ -1867,56 +2231,106 @@ export default function App() {
   }
 
   function handleAddSheet() {
-    commitWorkbook(addSheet(workbook), "Added sheet");
-    setSelection(INITIAL_SELECTION);
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.add" },
+        { type: "selection.set", selection: INITIAL_SELECTION }
+      ]
+    }, "Added sheet");
+    if (result.status === "committed") {
+      setRichClipboard(null);
+      setFormatPainter(null);
+      setPivotPanelOpen(false);
+    }
   }
 
   function handleRenameSheet() {
     const nextName = window.prompt("Rename active sheet", activeSheet.name);
     if (nextName) {
-      commitWorkbook(renameSheet(workbook, activeSheet.id, nextName), "Renamed sheet");
+      dispatchCommand({
+        type: "sheet.rename",
+        sheetId: activeSheet.id,
+        name: nextName
+      }, "Renamed sheet");
     }
   }
 
   function handleDuplicateSheet() {
-    commitWorkbook(duplicateSheet(workbook, activeSheet.id), "Duplicated sheet");
-    setSelection(INITIAL_SELECTION);
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.duplicate", sheetId: activeSheet.id },
+        { type: "selection.set", selection: INITIAL_SELECTION }
+      ]
+    }, "Duplicated sheet");
+    if (result.status === "committed") {
+      setRichClipboard(null);
+      setFormatPainter(null);
+      setPivotPanelOpen(false);
+    }
   }
 
   function handleDeleteSheet() {
     const deletedSheetId = activeSheet.id;
-    commitWorkbook(deleteSheet(workbook, deletedSheetId), "Deleted sheet");
-    setPivotDrillDowns((current) => {
-      if (!(deletedSheetId in current)) {
-        return current;
-      }
-      const { [deletedSheetId]: removed, ...rest } = current;
-      void removed;
-      return rest;
-    });
-    setSelection(INITIAL_SELECTION);
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.delete", sheetId: deletedSheetId },
+        { type: "selection.set", selection: INITIAL_SELECTION }
+      ]
+    }, "Deleted sheet");
+    if (result.status === "committed" && result.changed) {
+      setPivotDrillDowns((current) => {
+        if (!(deletedSheetId in current)) {
+          return current;
+        }
+        const { [deletedSheetId]: removed, ...rest } = current;
+        void removed;
+        return rest;
+      });
+      setRichClipboard(null);
+      setFormatPainter(null);
+      setPivotPanelOpen(false);
+    }
   }
 
   function handleHideSheet() {
     const hiddenSheetName = activeSheet.name;
-    const nextWorkbook = setSheetHidden(workbook, activeSheet.id, true);
-    if (nextWorkbook === workbook) {
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.hidden.set", sheetId: activeSheet.id, hidden: true },
+        { type: "selection.set", selection: INITIAL_SELECTION }
+      ]
+    }, `Hid ${hiddenSheetName}`);
+    if (result.status === "committed" && !result.changed) {
       setStatus("Cannot hide the only visible sheet");
       return;
     }
-
-    commitWorkbook(nextWorkbook, `Hid ${hiddenSheetName}`);
-    setSelection(INITIAL_SELECTION);
+    if (result.status === "committed") {
+      setRichClipboard(null);
+      setFormatPainter(null);
+      setPivotPanelOpen(false);
+    }
   }
 
   function handleUnhideSheets() {
-    const nextWorkbook = unhideAllSheets(workbook);
-    if (nextWorkbook === workbook) {
+    const hiddenSheetIds = session.getSnapshot().workbook.sheets
+      .filter((sheet) => sheet.isHidden === true)
+      .map((sheet) => sheet.id);
+    if (hiddenSheetIds.length === 0) {
       setStatus("No hidden sheets");
       return;
     }
-
-    commitWorkbook(nextWorkbook, "Unhid sheets");
+    dispatchCommand({
+      type: "transaction",
+      commands: hiddenSheetIds.map((sheetId) => ({
+        type: "sheet.hidden.set" as const,
+        sheetId,
+        hidden: false
+      }))
+    }, "Unhid sheets");
   }
 
   function handleMoveSheet(direction: "left" | "right") {
@@ -1932,26 +2346,27 @@ export default function App() {
 
     const targetSheet = visibleSheets[nextVisibleIndex];
     const targetIndex = workbook.sheets.findIndex((sheet) => sheet.id === targetSheet.id);
-    const nextWorkbook = moveSheet(workbook, activeSheet.id, targetIndex);
-    if (nextWorkbook === workbook) {
-      setStatus(`${activeSheet.name} is already ${boundary}`);
-      return;
-    }
-
-    commitWorkbook(nextWorkbook, `Moved ${activeSheet.name} ${direction}`);
+    dispatchCommand({
+      type: "sheet.move",
+      sheetId: activeSheet.id,
+      targetIndex
+    }, `Moved ${activeSheet.name} ${direction}`);
   }
 
   function handleSheetTabColor(color: string) {
-    commitWorkbook(setSheetTabColor(workbook, activeSheet.id, color), `Changed ${activeSheet.name} tab color`);
+    dispatchCommand({
+      type: "sheet.tabColor.set",
+      sheetId: activeSheet.id,
+      color
+    }, `Changed ${activeSheet.name} tab color`);
   }
 
   function handleNewWorkbook() {
     const next = createBlankWorkbook();
-    setHistory(createHistory(next));
-    setPivotDrillDowns({});
-    setSelection(INITIAL_SELECTION);
-    setFormatPainter(null);
-    setStatus("New workbook");
+    const result = session.replaceWorkbook(next, { history: "reset", origin: "external" });
+    if (result.status === "committed") {
+      resetAfterWorkbookReplacement("New workbook");
+    }
   }
 
   function handleImportCsv(file: File | undefined) {
@@ -1961,21 +2376,48 @@ export default function App() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const rows = parseCsv(String(reader.result ?? ""));
-        setHistory((current) => commitHistory(current, replaceActiveSheetWithRows(current.present, rows)));
-        setPivotDrillDowns({});
-        setSelection(INITIAL_SELECTION);
-        setFormatPainter(null);
-        setStatus(`Imported ${file.name}`);
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : "CSV import failed");
-      }
+      const text = String(reader.result ?? "");
+      const importer = services?.importers?.csv;
+      Promise.resolve().then(async () => {
+        if (importer) {
+          const nextWorkbook = await importer.import({ kind: "text", text, fileName: file.name });
+          const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
+          if (result.status === "committed") {
+            resetAfterWorkbookReplacement(`Imported ${file.name}`);
+          }
+          return;
+        }
+
+        const snapshot = session.getSnapshot();
+        const result = dispatchCommand({
+          type: "transaction",
+          commands: [
+            {
+              type: "sheet.replaceWithRows",
+              sheetId: snapshot.workbook.activeSheetId,
+              rows: parseCsv(text)
+            },
+            { type: "selection.set", selection: INITIAL_SELECTION }
+          ]
+        }, `Imported ${file.name}`);
+        if (result.status === "committed") {
+          clearWorkbookReplacementUiState();
+        }
+      })
+        .catch(() => reportServiceFailure("service.import.csv.failed", "CSV import failed"));
     };
     reader.readAsText(file);
   }
 
   function handleExportCsv() {
+    const exporter = services?.exporters?.csv;
+    if (exporter) {
+      Promise.resolve().then(() => exporter.export(workbook)).then((artifact) => {
+        downloadWorkbookArtifact(artifact);
+        setStatus("Exported CSV");
+      }).catch(() => reportServiceFailure("service.export.csv.failed", "CSV export failed"));
+      return;
+    }
     const csv = serializeCsv(activeSheetToRows(activeSheet));
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -1995,16 +2437,20 @@ export default function App() {
     file
       .arrayBuffer()
       .then(async (buffer) => {
-        const nextWorkbook = await importWorkbookFromXlsx(buffer);
-        setHistory((current) => commitHistory(current, nextWorkbook));
-        setPivotDrillDowns({});
-        setSelection(INITIAL_SELECTION);
-        setFormatPainter(null);
-        setStatus(`Imported ${file.name}`);
+        const importer = services?.importers?.xlsx;
+        const nextWorkbook = importer
+          ? await importer.import({
+              kind: "bytes",
+              bytes: new Uint8Array(buffer),
+              fileName: file.name
+            })
+          : await importWorkbookFromXlsx(buffer);
+        const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
+        if (result.status === "committed") {
+          resetAfterWorkbookReplacement(`Imported ${file.name}`);
+        }
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "XLSX import failed");
-      });
+      .catch(() => reportServiceFailure("service.import.xlsx.failed", "XLSX import failed"));
   }
 
   function handleImportGoogleSheet() {
@@ -2019,35 +2465,70 @@ export default function App() {
       return;
     }
 
+    let tokenProvider: TokenProvider;
+    try {
+      tokenProvider = getComponentGoogleTokenProvider(clientId);
+    } catch {
+      reportServiceFailure("service.google.auth.failed", "Google Sheets connection failed");
+      return;
+    }
     setStatus("Connecting to Google Sheets…");
-    importWorkbookFromGoogleSheets(input, getGoogleTokenProvider(clientId))
+    importWorkbookFromGoogleSheets(input, tokenProvider)
       .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
-        setHistory((current) => commitHistory(current, nextWorkbook));
-        setPivotDrillDowns({});
-        setSelection(INITIAL_SELECTION);
-        setFormatPainter(null);
-        setStatus(`Linked ${spreadsheetTitle}`);
+        const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
+        if (result.status === "committed") {
+          resetAfterWorkbookReplacement(`Linked ${spreadsheetTitle}`);
+        }
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "Google Sheets import failed");
-      });
+      .catch(() => reportServiceFailure("service.google.import.failed", "Google Sheets import failed"));
   }
 
   function handleExportXlsx() {
-    exportWorkbookToXlsx(workbook)
-      .then((bytes) => {
-        const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = "spreadsheet.xlsx";
-        anchor.click();
-        URL.revokeObjectURL(url);
+    const exporter = services?.exporters?.xlsx;
+    Promise.resolve().then(async () => exporter
+      ? exporter.export(workbook)
+      : {
+          bytes: new Uint8Array(await exportWorkbookToXlsx(workbook)),
+          mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          fileName: "spreadsheet.xlsx"
+        })
+      .then((artifact) => {
+        downloadWorkbookArtifact(artifact);
         setStatus("Exported XLSX");
       })
-      .catch((error: unknown) => {
-        setStatus(error instanceof Error ? error.message : "XLSX export failed");
-      });
+      .catch(() => reportServiceFailure("service.export.xlsx.failed", "XLSX export failed"));
+  }
+
+  function handleStructuredTableExport(tableId: string, tableName: string) {
+    Promise.resolve()
+      .then(() => session.table(tableId).export({
+        format: "xlsx",
+        scope: "completeDataset",
+        includeHeaders: true
+      }))
+      .then((artifact) => {
+        downloadWorkbookArtifact(artifact);
+        setStatus(`Exported ${tableName}`);
+      })
+      .catch(() => reportServiceFailure("service.export.table.failed", "Table export failed"));
+  }
+
+  function reportServiceFailure(code: string, message: string) {
+    setStatus(message);
+    invokeHostCallback(onError, { code, message, recoverable: true });
+  }
+
+  function clearWorkbookReplacementUiState() {
+    setPivotDrillDowns({});
+    setRichClipboard(null);
+    setFormatPainter(null);
+    setPivotPanelOpen(false);
+  }
+
+  function resetAfterWorkbookReplacement(nextStatus: string) {
+    dispatchCommand({ type: "selection.set", selection: INITIAL_SELECTION });
+    clearWorkbookReplacementUiState();
+    setStatus(nextStatus);
   }
 
   function handlePrintWorkbook() {
@@ -2160,12 +2641,20 @@ export default function App() {
       return;
     }
 
-    let nextWorkbook = workbook;
+    const currentWorkbook = session.getSnapshot().workbook;
+    const currentSheet = getActiveSheet(currentWorkbook);
+    const currentMatches = findMatches(currentSheet, findDraft);
+    const commands: WorkbookCommand[] = [];
     let changedCells = 0;
-    for (const match of matches) {
+    for (const match of currentMatches) {
       const nextContent = replaceEveryMatch(String(match.content), findDraft, replaceDraft);
       if (nextContent !== match.content) {
-        nextWorkbook = setCellContent(nextWorkbook, activeSheet.id, match.address, nextContent);
+        commands.push({
+          type: "cell.set",
+          sheetId: currentSheet.id,
+          address: match.address,
+          input: nextContent
+        });
         changedCells += 1;
       }
     }
@@ -2175,12 +2664,15 @@ export default function App() {
       return;
     }
 
-    commitWorkbook(nextWorkbook, `Replaced ${changedCells} ${changedCells === 1 ? "cell" : "cells"}`);
+    dispatchCommand({ type: "transaction", commands }, `Replaced ${changedCells} ${changedCells === 1 ? "cell" : "cells"}`);
   }
 
   function handleFileDrop(event: React.DragEvent) {
     event.preventDefault();
     setDropTargetActive(false);
+    if (features?.import === false) {
+      return;
+    }
     const file = event.dataTransfer.files?.[0];
     if (!file) {
       return;
@@ -2196,32 +2688,46 @@ export default function App() {
     }
   }
 
+  const themedStyle = {
+    ...themeToRootStyle(theme),
+    ...style
+  } as CSSProperties;
+
   return (
-    <main
-      className="app-shell"
-      onKeyDown={handleShellKeyCommand}
-      onDragOver={(event) => {
-        if (event.dataTransfer.types.includes("Files")) {
-          event.preventDefault();
-          setDropTargetActive(true);
-        }
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setDropTargetActive(false);
-        }
-      }}
-      onDrop={handleFileDrop}
+    <div
+      className={["js-spreadsheet-root", "js-spreadsheet-workbook", className]
+        .filter(Boolean)
+        .join(" ")}
+      data-js-spreadsheet-root="workbook"
+      style={themedStyle}
     >
-      {isDropTargetActive ? (
-        <div className="file-drop-overlay" aria-hidden="true">
-          Drop to import workbook
-        </div>
-      ) : null}
-      <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
+      <main
+        className="app-shell"
+        onKeyDown={handleShellKeyCommand}
+        onDragOver={(event) => {
+          if (event.dataTransfer.types.includes("Files")) {
+            event.preventDefault();
+            setDropTargetActive(true);
+          }
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setDropTargetActive(false);
+          }
+        }}
+        onDrop={handleFileDrop}
+      >
+        {isDropTargetActive ? (
+          <div className="file-drop-overlay" aria-hidden="true">
+            Drop to import workbook
+          </div>
+        ) : null}
+        <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
+        {features?.toolbar !== false ? (
         <Toolbar
-          canUndo={history.past.length > 0}
-          canRedo={history.future.length > 0}
+          features={features}
+          canUndo={sessionSnapshot.canUndo}
+          canRedo={sessionSnapshot.canRedo}
           onNew={handleNewWorkbook}
           onImport={() => fileInputRef.current?.click()}
           onExport={handleExportCsv}
@@ -2230,10 +2736,10 @@ export default function App() {
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
-            applyHistoryTransition(undoHistory(history), "Undone");
+            dispatchCommand({ type: "history.undo" }, "Undone");
           }}
           onRedo={() => {
-            applyHistoryTransition(redoHistory(history), "Redone");
+            dispatchCommand({ type: "history.redo" }, "Redone");
           }}
           onClear={handleClearSelection}
           canPasteSpecial={Boolean(richClipboard)}
@@ -2284,23 +2790,21 @@ export default function App() {
           freezeFirstColumn={freezeFirstColumn}
           onToggleFreezeTopRow={() => {
             const nextFreezeTopRow = !freezeTopRow;
-            commitWorkbook(
-              setSheetFreezePanes(workbook, activeSheet.id, {
-                freezeTopRow: nextFreezeTopRow,
-                freezeFirstColumn
-              }),
-              nextFreezeTopRow ? "Froze top row" : "Unfroze top row"
-            );
+            dispatchCommand({
+              type: "sheet.freeze.set",
+              sheetId: activeSheet.id,
+              rows: nextFreezeTopRow ? 1 : 0,
+              columns: freezeFirstColumn ? 1 : 0
+            }, nextFreezeTopRow ? "Froze top row" : "Unfroze top row");
           }}
           onToggleFreezeFirstColumn={() => {
             const nextFreezeFirstColumn = !freezeFirstColumn;
-            commitWorkbook(
-              setSheetFreezePanes(workbook, activeSheet.id, {
-                freezeTopRow,
-                freezeFirstColumn: nextFreezeFirstColumn
-              }),
-              nextFreezeFirstColumn ? "Froze first column" : "Unfroze first column"
-            );
+            dispatchCommand({
+              type: "sheet.freeze.set",
+              sheetId: activeSheet.id,
+              rows: freezeTopRow ? 1 : 0,
+              columns: nextFreezeFirstColumn ? 1 : 0
+            }, nextFreezeFirstColumn ? "Froze first column" : "Unfroze first column");
           }}
           onFindReplace={() => {
             setFindPanelOpen((isOpen) => !isOpen);
@@ -2397,6 +2901,78 @@ export default function App() {
             setGoToPanelOpen(false);
             setFormulaAuditOpen(false);
           }}
+          onCreateTable={handleCreateStructuredTable}
+          structuredTable={activeTable ? {
+            table: activeTable,
+            activeColumnId: activeTableColumnId,
+            issues: tableCommandIssues.tableId === activeTable.id ? tableCommandIssues.issues : [],
+            onRename: (name) => {
+              dispatchStructuredTableCommand(
+                { type: "table.rename", tableId: activeTable.id, name },
+                `Renamed table to ${name}`
+              );
+            },
+            onResize: (range) => {
+              dispatchStructuredTableCommand(
+                { type: "table.resize", tableId: activeTable.id, range },
+                `Resized ${activeTable.name} to ${formatSelectionAddress(range)}`
+              );
+            },
+            onHeaderRow: (enabled) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setHeaderRow", tableId: activeTable.id, enabled },
+                enabled ? "Enabled table header row" : "Disabled table header row"
+              );
+            },
+            onTotalsRow: (enabled) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setTotalsRow", tableId: activeTable.id, enabled },
+                enabled ? "Enabled table totals row" : "Disabled table totals row"
+              );
+            },
+            onTotalsFunction: (columnId, aggregate) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setTotalsFunction", tableId: activeTable.id, columnId, aggregate },
+                "Updated table totals function"
+              );
+            },
+            onStyle: (tableStyle) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setStyle", tableId: activeTable.id, style: tableStyle },
+                "Updated table style"
+              );
+            },
+            onKeyColumn: (columnId) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setKeyColumn", tableId: activeTable.id, columnId },
+                columnId ? "Updated table key column" : "Cleared table key column"
+              );
+            },
+            onCalculatedColumn: (columnId, formula) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setCalculatedColumn", tableId: activeTable.id, columnId, formula },
+                formula ? "Updated calculated column" : "Cleared calculated column"
+              );
+            },
+            onFilter: (filter) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setFilter", tableId: activeTable.id, filter },
+                filter ? "Applied table filter" : "Cleared table filter"
+              );
+            },
+            onExport: () => handleStructuredTableExport(activeTable.id, activeTable.name),
+            onConvertToRange: () => {
+              dispatchStructuredTableCommand(
+                { type: "table.convertToRange", tableId: activeTable.id },
+                `Converted ${activeTable.name} to a range`
+              );
+            },
+            onOpenTableView: () => {
+              setOpenTableId(activeTable.id);
+              setStatus(`Opened table view for ${activeTable.name}`);
+            }
+          } : undefined}
+          structuredTableExportReason={activeTableExportReason}
           onBold={() => applyFormat({ bold: selectionFormat.bold !== true }, "Applied bold")}
           onItalic={() => applyFormat({ italic: selectionFormat.italic !== true }, "Applied italic")}
           onWrapText={() =>
@@ -2418,6 +2994,9 @@ export default function App() {
           onTextColor={(color) => applyFormat({ textColor: color }, "Changed text color")}
           onFillColor={(color) => applyFormat({ backgroundColor: color }, "Changed fill color")}
         />
+        ) : null}
+        {features?.import !== false ? (
+        <>
         <input
           ref={fileInputRef}
           className="hidden-file-input"
@@ -2442,7 +3021,9 @@ export default function App() {
             event.currentTarget.value = "";
           }}
         />
-        {showFormulaBar ? (
+        </>
+        ) : null}
+        {showFormulaBar && features?.formulaBar !== false ? (
           <FormulaBar
             nameBoxValue={nameBoxDraft}
             onNameBoxChange={setNameBoxDraft}
@@ -2502,11 +3083,11 @@ export default function App() {
           onClose={() => setPivotPanelOpen(false)}
           onCreate={handleCreatePivotTable}
         />
-        <ChartPanel
+        {features?.charts !== false ? <ChartPanel
           isOpen={isChartPanelOpen}
           onClose={() => setChartPanelOpen(false)}
           onCreate={handleCreateChart}
-        />
+        /> : null}
         <DataValidationPanel
           isOpen={isValidationPanelOpen}
           onClose={() => setValidationPanelOpen(false)}
@@ -2559,6 +3140,8 @@ export default function App() {
           getCellReadOnly={(address) => getCellReadOnly(workbook, activeSheet.id, address)}
           getCellValidation={(address) => activeSheet.validations[address]}
           getCellConditionalFormatRules={(address) => getCellConditionalFormatRules(workbook, activeSheet.id, address)}
+          getStructuredTableCell={getStructuredTableCell}
+          isStructuredTableRowVisible={isStructuredTableRowVisible}
           scrollRef={gridScrollRef}
           onSelectionChange={handleSelectionChange}
           onStartEdit={(address) => {
@@ -2572,11 +3155,19 @@ export default function App() {
           }}
           onEditValueChange={(value) => setEditingCell((current) => (current ? { ...current, value } : current))}
           onCommitEdit={(address, value, move) => {
-            if (commitCell(address, value)) {
-              setEditingCell(null);
-              if (move) {
-                commitMoveFrom(address, move);
+            if (gridEditCommitInProgressRef.current) {
+              return;
+            }
+            gridEditCommitInProgressRef.current = true;
+            try {
+              if (commitCell(address, value)) {
+                setEditingCell(null);
+                if (move) {
+                  commitMoveFrom(address, move);
+                }
               }
+            } finally {
+              gridEditCommitInProgressRef.current = false;
             }
           }}
           onCancelEdit={() => {
@@ -2630,23 +3221,31 @@ export default function App() {
             onLink={handleLink}
           />
         ) : null}
-        <SheetCharts
+        {openTableId ? (
+          <WorkbookTableView
+            session={session.table(openTableId)}
+            onClose={() => setOpenTableId(null)}
+            onOpenInSpreadsheet={(cell) => openTableCellInSpreadsheet(openTableId, cell)}
+          />
+        ) : null}
+        {features?.charts !== false ? <SheetCharts
           charts={activeSheet.charts ?? []}
           sheet={activeSheet}
           formulaEngine={formulaEngine}
           onDelete={handleDeleteChart}
-        />
-        {showSheetTabs ? (
+        /> : null}
+        {showSheetTabs && features?.sheetTabs !== false ? (
           <SheetTabs
             sheets={workbook.sheets}
             activeSheetId={activeSheet.id}
             onSelect={(sheetId) => {
-              const nextWorkbook = setActiveSheet(workbook, sheetId);
-              if (nextWorkbook === workbook) {
-                return;
-              }
-              setHistory({ ...history, present: nextWorkbook });
-              setSelection(INITIAL_SELECTION);
+              dispatchCommand({
+                type: "transaction",
+                commands: [
+                  { type: "sheet.activate", sheetId },
+                  { type: "selection.set", selection: INITIAL_SELECTION }
+                ]
+              });
             }}
             onAdd={handleAddSheet}
           />
@@ -2663,61 +3262,35 @@ export default function App() {
           onResetZoom={handleResetZoom}
         />
       </section>
-    </main>
+      </main>
+    </div>
   );
 }
 
-function readInitialWorkbook(): WorkbookModel {
-  try {
-    return loadWorkbook(window.localStorage);
-  } catch {
-    return createBlankWorkbook();
-  }
+export default function App() {
+  return <Spreadsheet />;
 }
 
-function replaceActiveSheetWithRows(workbook: WorkbookModel, rows: string[][]): WorkbookModel {
-  const activeSheet = getActiveSheet(workbook);
-  const rowCount = Math.max(100, rows.length);
-  const columnCount = Math.max(26, ...rows.map((row) => row.length));
-  const cells: Record<string, CellContent> = {};
+function projectStructuredTableCell(workbook: WorkbookModel, sheetId: string, address: string) {
+  const coordinate = parseCellAddress(address);
+  const table = getStructuredTableAtCell(workbook, sheetId, coordinate);
+  if (!table) return null;
+  const column = table.columns.find((candidate) => candidate.sheetColumn === coordinate.column);
+  if (!column) return null;
 
-  rows.forEach((row, rowIndex) => {
-    row.forEach((value, columnIndex) => {
-      if (value !== "") {
-        cells[formatCellAddress({ row: rowIndex, column: columnIndex })] = value;
-      }
-    });
-  });
-
+  const role = table.headerRow && coordinate.row === table.range.start.row
+    ? "header" as const
+    : table.totalsRow && coordinate.row === table.range.end.row
+      ? "totals" as const
+      : "body" as const;
+  const body = role === "body" ? getStructuredTableBodyRange(table) : null;
+  const rowIndex = body ? coordinate.row - body.start.row : -1;
   return {
-    ...workbook,
-    sheets: workbook.sheets.map((sheet) =>
-      sheet.id === activeSheet.id
-        ? {
-            ...sheet,
-            rowCount,
-            columnCount,
-            cells,
-            formats: {},
-            columnWidths: {},
-            rowHeights: {},
-            hiddenColumns: {},
-            hiddenRows: {},
-            freezeTopRow: false,
-            freezeFirstColumn: false,
-            comments: {},
-            hyperlinks: {},
-            validations: {},
-            conditionalFormats: [],
-            autoFilterRange: undefined,
-            filters: [],
-            charts: [],
-            merges: [],
-            protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
-          }
-        : sheet
-    ),
-    namedRanges: (workbook.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== activeSheet.id)
+    tableId: table.id,
+    columnId: column.id,
+    rowId: rowIndex >= 0 ? table.rowIds[rowIndex] : undefined,
+    role,
+    style: table.style
   };
 }
 
@@ -3233,14 +3806,6 @@ function inferSourceRange(sheet: SheetModel, selection: CellRange): CellRange {
   };
 }
 
-// Matches the entry formats the formula engine is configured to parse as dates
-// (see ENGINE_CONFIG.dateFormats): ISO YYYY-MM-DD, MM/DD/YYYY, and MM/DD/YY.
-const DATE_ENTRY_PATTERN = /^\s*(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}\/(\d{4}|\d{2}))\s*$/;
-
-function isDateLikeEntry(value: string): boolean {
-  return DATE_ENTRY_PATTERN.test(value);
-}
-
 function trimEmptyEdges(rows: string[][]): string[][] {
   let lastRow = rows.length - 1;
   while (lastRow >= 0 && rows[lastRow].every((value) => value === "")) {
@@ -3429,6 +3994,39 @@ function nextGeneratedSheetName(workbook: WorkbookModel, base: string): string {
   return name;
 }
 
+function nextGeneratedSheetId(workbook: WorkbookModel): string {
+  let index = workbook.sheets.length + 1;
+  let id = `sheet-${index}`;
+  while (workbook.sheets.some((sheet) => sheet.id === id)) {
+    index += 1;
+    id = `sheet-${index}`;
+  }
+  return id;
+}
+
+function nextConditionalFormatCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "conditional-format-");
+}
+
+function nextSheetFilterCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "filter-");
+}
+
+function nextSheetChartCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "chart-");
+}
+
+function nextCommandId(items: readonly { id: string }[], prefix: string): string {
+  const existing = new Set(items.map((item) => item.id));
+  let index = items.length + 1;
+  let id = `${prefix}${index}`;
+  while (existing.has(id)) {
+    index += 1;
+    id = `${prefix}${index}`;
+  }
+  return id;
+}
+
 function rowRange(row: number, columnCount: number): CellRange {
   return {
     start: { row, column: 0 },
@@ -3456,6 +4054,36 @@ function hasVisibleIndexAfterHiding(
   return false;
 }
 
+function inclusiveIndexes(start: number, end: number): number[] {
+  const first = Math.min(start, end);
+  const last = Math.max(start, end);
+  return Array.from({ length: last - first + 1 }, (_, offset) => first + offset);
+}
+
+function flaggedIndexes(flags: Record<string, boolean>): number[] {
+  return Object.entries(flags)
+    .filter(([, flagged]) => flagged)
+    .map(([index]) => Number(index))
+    .filter((index) => Number.isInteger(index) && index >= 0)
+    .sort((left, right) => left - right);
+}
+
+function countDuplicateRows(sheet: SheetModel, selection: CellRange): number {
+  const range = normalizeRange(selection);
+  const seen = new Set<string>();
+  let duplicates = 0;
+  for (let row = range.start.row; row <= range.end.row; row += 1) {
+    const cells: CellContent[] = [];
+    for (let column = range.start.column; column <= range.end.column; column += 1) {
+      cells.push(sheet.cells[formatCellAddress({ row, column })] ?? null);
+    }
+    const key = JSON.stringify(cells.map((cell) => [cell === null ? "blank" : typeof cell, cell]));
+    if (seen.has(key)) duplicates += 1;
+    else seen.add(key);
+  }
+  return duplicates;
+}
+
 function findNearestVisibleIndex(count: number, hiddenIndexes: Record<string, boolean>, preferredIndex: number): number {
   if (count <= 0) {
     return 0;
@@ -3475,4 +4103,79 @@ function findNearestVisibleIndex(count: number, hiddenIndexes: Record<string, bo
   }
 
   return preferred;
+}
+
+const RESERVED_SERVICE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
+function hasInvalidServiceRegistry(
+  registry: Readonly<Record<string, WorkbookImporter | WorkbookExporter>> | undefined
+): boolean {
+  if (!registry) {
+    return false;
+  }
+  return Object.keys(registry).some((key) => !key.trim() || RESERVED_SERVICE_KEYS.has(key));
+}
+
+function themeToRootStyle(
+  theme: Partial<Record<WorkbookThemeToken, string>> | undefined
+): CSSProperties {
+  if (!theme) {
+    return {};
+  }
+  const properties: Record<string, string> = {};
+  for (const [token, value] of Object.entries(theme)) {
+    if (value !== undefined) {
+      properties[`--js-spreadsheet-${token}`] = value;
+    }
+  }
+  return properties as CSSProperties;
+}
+
+function displaySessionValue(value: ReturnType<WorkbookSession["getCellEvaluation"]>): string {
+  if (value === null) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return value.code;
+  }
+  if (typeof value === "boolean") {
+    return value ? "TRUE" : "FALSE";
+  }
+  return String(value);
+}
+
+function diagnosticOrigin(event: WorkbookDiagnosticEvent): WorkbookChangeEvent["origin"] {
+  const commandType = event.metadata.commandType;
+  if (commandType === "history.undo") {
+    return "undo";
+  }
+  if (commandType === "history.redo") {
+    return "redo";
+  }
+  return "command";
+}
+
+function invokeHostCallback<T>(callback: ((value: T) => void) | undefined, value: T): void {
+  if (!callback) {
+    return;
+  }
+  try {
+    callback(value);
+  } catch {
+    // Host callbacks are isolated from rendering and other subscribers.
+  }
+}
+
+function downloadWorkbookArtifact(artifact: WorkbookExportArtifact): void {
+  const bytes = new Uint8Array(artifact.bytes);
+  const blob = new Blob([bytes], { type: artifact.mediaType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = artifact.fileName;
+  try {
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
