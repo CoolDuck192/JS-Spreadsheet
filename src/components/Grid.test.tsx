@@ -196,10 +196,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const selections: CellRange[] = [];
 
@@ -258,10 +259,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -314,10 +316,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const selection: CellRange = {
       start: { row: 0, column: 0 },
@@ -364,10 +367,11 @@ describe("Grid", () => {
       cells: { [targetAddress]: "Two-axis target" }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -418,10 +422,11 @@ describe("Grid", () => {
       hiddenColumns: { [String(hiddenColumn)]: true }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -469,10 +474,11 @@ describe("Grid", () => {
       hiddenColumns: { "1": true }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const scrollRef = createRef<HTMLDivElement>();
     const selection = {
@@ -555,10 +561,11 @@ describe("Grid", () => {
       ]
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -602,10 +609,11 @@ describe("Grid", () => {
       hiddenColumns: { "1": true }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const scrollRef = createRef<HTMLDivElement>();
     let scrollApi: { ensureCellVisible(row: number, column: number): void } | null = null;
@@ -672,10 +680,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -725,10 +734,11 @@ describe("Grid", () => {
       protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     let resizedColumn: { column: number; width: number } | null = null;
     let resizedRow: { row: number; height: number } | null = null;
@@ -953,10 +963,11 @@ describe("Grid", () => {
       }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -998,10 +1009,11 @@ describe("Grid", () => {
       }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const formulaEngine = createFormulaEngine(workbook);
     const displayValueSpy = vi.spyOn(formulaEngine, "getDisplayValue");
@@ -1059,10 +1071,11 @@ describe("Grid", () => {
       }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
     const appliedValues: string[][] = [];
 
@@ -1109,10 +1122,11 @@ describe("Grid", () => {
       }
     };
     const workbook: WorkbookModel = {
-      version: 1,
+      version: 2,
       activeSheetId: sheet.id,
       sheets: [sheet],
-      namedRanges: []
+      namedRanges: [],
+      tables: []
     };
 
     render(
@@ -1163,10 +1177,11 @@ function createFixtureSheet(): { sheet: SheetModel; workbook: WorkbookModel } {
     protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
   };
   const workbook: WorkbookModel = {
-    version: 1,
+    version: 2,
     activeSheetId: sheet.id,
     sheets: [sheet],
-    namedRanges: []
+    namedRanges: [],
+    tables: []
   };
   return { sheet, workbook };
 }

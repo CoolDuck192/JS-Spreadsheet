@@ -1,3 +1,6 @@
+import type { TableDataType } from "./table/core/types";
+import type { FilterExpression, TableSort } from "./table/core/query";
+
 export type CellContent = string | number | boolean | null;
 
 export type CellCoord = {
@@ -146,6 +149,50 @@ export type NamedRange = {
   range: CellRange;
 };
 
+export type TableAggregate =
+  | "none"
+  | "sum"
+  | "average"
+  | "count"
+  | "countNumbers"
+  | "min"
+  | "max"
+  | "standardDeviation"
+  | "variance";
+
+export type TableStyle = {
+  theme: string;
+  showFirstColumn?: boolean;
+  showLastColumn?: boolean;
+  showRowStripes?: boolean;
+  showColumnStripes?: boolean;
+};
+
+export type StructuredTableColumn = {
+  id: string;
+  name: string;
+  sheetColumn: number;
+  dataType?: TableDataType;
+  calculatedFormula?: string;
+  totalsFunction?: TableAggregate;
+  totalsLabel?: string;
+};
+
+export type StructuredTable = {
+  id: string;
+  name: string;
+  sheetId: string;
+  range: CellRange;
+  headerRow: boolean;
+  totalsRow: boolean;
+  columns: readonly StructuredTableColumn[];
+  rowIds: readonly string[];
+  keyColumnId?: string;
+  style?: TableStyle;
+  sort?: readonly TableSort[];
+  filter?: FilterExpression;
+};
+
 export type SheetModel = {
   id: string;
   name: string;
@@ -173,10 +220,11 @@ export type SheetModel = {
 };
 
 export type WorkbookModel = {
-  version: 1;
+  version: 2;
   activeSheetId: string;
   sheets: SheetModel[];
   namedRanges: NamedRange[];
+  tables: StructuredTable[];
 };
 
 export type Selection = CellRange;

@@ -93,7 +93,8 @@ describe("workbook", () => {
   it("creates a blank workbook with one sheet", () => {
     const workbook = createBlankWorkbook();
 
-    expect(workbook.version).toBe(1);
+    expect(workbook.version).toBe(2);
+    expect(workbook.tables).toEqual([]);
     expect(workbook.sheets).toHaveLength(1);
     expect(getActiveSheet(workbook).name).toBe("Sheet1");
     expect(getActiveSheet(workbook).rowCount).toBe(100);

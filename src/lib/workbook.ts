@@ -144,10 +144,11 @@ export type CellMergeInfo =
 export function createBlankWorkbook(): WorkbookModel {
   const sheet = createSheet("sheet-1", "Sheet1");
   return {
-    version: 1,
+    version: 2,
     activeSheetId: sheet.id,
     sheets: [sheet],
-    namedRanges: []
+    namedRanges: [],
+    tables: []
   };
 }
 

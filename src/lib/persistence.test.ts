@@ -241,7 +241,8 @@ describe("persistence", () => {
 
     const workbook = loadWorkbook(storage);
 
-    expect(workbook.version).toBe(1);
+    expect(workbook.version).toBe(2);
+    expect(workbook.tables).toEqual([]);
     expect(workbook.sheets).toHaveLength(1);
   });
 });

@@ -60,10 +60,11 @@ export async function importWorkbookFromXlsx(data: ArrayBuffer | Uint8Array): Pr
   const activeSheet = sheets[activeSheetIndex]?.isHidden ? sheets.find((sheet) => sheet.isHidden !== true) ?? sheets[0] : sheets[activeSheetIndex];
 
   return {
-    version: 1,
+    version: 2,
     activeSheetId: activeSheet?.id ?? sheets[0].id,
     sheets,
-    namedRanges
+    namedRanges,
+    tables: []
   };
 }
 
