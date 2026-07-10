@@ -115,6 +115,20 @@ export class RemoteQueryController<TRow> {
 
   getSnapshot = (): RemoteQuerySnapshot<TRow> => this.snapshot;
 
+  getDiagnostics(): {
+    generation: number;
+    cachedPages: number;
+    cachedItems: number;
+    destroyed: boolean;
+  } {
+    return {
+      generation: this.generation,
+      cachedPages: this.cache.size,
+      cachedItems: this.cache.combine()?.items.length ?? 0,
+      destroyed: this.destroyed
+    };
+  }
+
   subscribe = (listener: () => void): (() => void) => {
     if (this.destroyed) return () => {};
     this.listeners.add(listener);
