@@ -1,6 +1,15 @@
 import type {
+  CellBorderSide,
+  CellBorders,
+  CellFormat,
   CellRange,
+  ConditionalFormatCondition,
+  ConditionalFormatRule,
+  DataValidationRule,
   NamedRange,
+  SheetChart,
+  SheetFilter,
+  SheetMerge,
   SheetModel,
   SheetProtection,
   StructuredTable,
@@ -17,7 +26,7 @@ import {
   type QueryRequest,
   type TableSort
 } from "../../table/core/query";
-import { formatCellAddress } from "../../lib/addressing";
+import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -81,9 +90,20 @@ function migrateSheet(value: unknown): SheetModel | null {
   if (!optionalRecord(value.comments) || !optionalRecord(value.hyperlinks) || !optionalRecord(value.validations)) return null;
   if (!optionalArray(value.conditionalFormats) || !optionalArray(value.filters) || !optionalArray(value.charts)) return null;
   if (!optionalArray(value.merges) || !optionalRecord(value.protection)) return null;
-  if (value.autoFilterRange !== undefined && !isCellRange(value.autoFilterRange)) return null;
+  const bounds = { rowCount: value.rowCount, columnCount: value.columnCount };
+  if (value.autoFilterRange !== undefined && (
+    !isCellRange(value.autoFilterRange) || !rangeInBounds(value.autoFilterRange, bounds)
+  )) return null;
 
-  const filters = (value.filters ?? []) as SheetModel["filters"];
+  const comments = migrateStringCellRecord(value.comments, bounds);
+  const hyperlinks = migrateStringCellRecord(value.hyperlinks, bounds);
+  const validations = migrateValidations(value.validations, bounds);
+  const conditionalFormats = migrateConditionalFormats(value.conditionalFormats, bounds);
+  const filters = migrateSheetFilters(value.filters, bounds);
+  const charts = migrateSheetCharts(value.charts, bounds);
+  const merges = migrateSheetMerges(value.merges, bounds);
+  if (!comments || !hyperlinks || !validations || !conditionalFormats || !filters || !charts || !merges) return null;
+
   const autoFilterRange = isCellRange(value.autoFilterRange)
     ? cloneRange(value.autoFilterRange)
     : migratedAutoFilterRange(filters);
@@ -102,16 +122,229 @@ function migrateSheet(value: unknown): SheetModel | null {
     hiddenRows: isRecord(value.hiddenRows) ? booleanFlagRecord(value.hiddenRows) : {},
     freezeTopRow: value.freezeTopRow === true,
     freezeFirstColumn: value.freezeFirstColumn === true,
-    comments: (value.comments ?? {}) as SheetModel["comments"],
-    hyperlinks: (value.hyperlinks ?? {}) as SheetModel["hyperlinks"],
-    validations: (value.validations ?? {}) as SheetModel["validations"],
-    conditionalFormats: (value.conditionalFormats ?? []) as SheetModel["conditionalFormats"],
+    comments,
+    hyperlinks,
+    validations,
+    conditionalFormats,
     ...(autoFilterRange ? { autoFilterRange } : {}),
     filters,
-    charts: (value.charts ?? []) as SheetModel["charts"],
-    merges: (value.merges ?? []) as SheetModel["merges"],
+    charts,
+    merges,
     protection: migrateProtection(value.protection)
   };
+}
+
+type SheetBounds = Pick<SheetModel, "rowCount" | "columnCount">;
+
+function migrateStringCellRecord(
+  value: unknown,
+  bounds: SheetBounds
+): Record<string, string> | null {
+  if (value === undefined) return {};
+  if (!isRecord(value)) return null;
+  const result: Record<string, string> = {};
+  for (const [address, item] of Object.entries(value)) {
+    if (typeof item !== "string" || !cellAddressInBounds(address, bounds)) return null;
+    result[address] = item;
+  }
+  return result;
+}
+
+function migrateValidations(
+  value: unknown,
+  bounds: SheetBounds
+): Record<string, DataValidationRule> | null {
+  if (value === undefined) return {};
+  if (!isRecord(value)) return null;
+  const result: Record<string, DataValidationRule> = {};
+  for (const [address, item] of Object.entries(value)) {
+    const rule = migrateValidationRule(item);
+    if (!rule || !cellAddressInBounds(address, bounds)) return null;
+    result[address] = rule;
+  }
+  return result;
+}
+
+function migrateValidationRule(value: unknown): DataValidationRule | null {
+  if (!isRecord(value) || !optionalBoolean(value.allowBlank)) return null;
+  if (value.type === "list") {
+    if (!Array.isArray(value.values) || !value.values.every((item) => typeof item === "string")) return null;
+    return {
+      type: "list",
+      values: [...value.values],
+      ...(value.allowBlank === undefined ? {} : { allowBlank: value.allowBlank })
+    };
+  }
+  if (value.type !== "number" && value.type !== "textLength") return null;
+  if (!optionalFiniteNumber(value.min) || !optionalFiniteNumber(value.max)) return null;
+  if (value.min !== undefined && value.max !== undefined && value.min > value.max) return null;
+  const bounds = {
+    ...(value.min === undefined ? {} : { min: value.min }),
+    ...(value.max === undefined ? {} : { max: value.max }),
+    ...(value.allowBlank === undefined ? {} : { allowBlank: value.allowBlank })
+  };
+  return value.type === "number" ? { type: "number", ...bounds } : { type: "textLength", ...bounds };
+}
+
+function migrateConditionalFormats(
+  value: unknown,
+  bounds: SheetBounds
+): ConditionalFormatRule[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: ConditionalFormatRule[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id)) return null;
+    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
+    const condition = migrateConditionalFormatCondition(item.condition);
+    const format = migrateCellFormat(item.format);
+    if (!condition || !format) return null;
+    ids.add(item.id);
+    result.push({ id: item.id, range: cloneRange(item.range), condition, format });
+  }
+  return result;
+}
+
+function migrateConditionalFormatCondition(value: unknown): ConditionalFormatCondition | null {
+  if (!isRecord(value) || typeof value.type !== "string") return null;
+  if (["greaterThan", "lessThan", "equalTo", "textContains"].includes(value.type)) {
+    return typeof value.value === "string"
+      ? { type: value.type as "greaterThan" | "lessThan" | "equalTo" | "textContains", value: value.value }
+      : null;
+  }
+  if (value.type === "between") {
+    return typeof value.value === "string" && typeof value.secondValue === "string"
+      ? { type: "between", value: value.value, secondValue: value.secondValue }
+      : null;
+  }
+  if (["blank", "notBlank", "duplicate", "unique"].includes(value.type)) {
+    return { type: value.type as "blank" | "notBlank" | "duplicate" | "unique" };
+  }
+  if (value.type === "top" || value.type === "bottom") {
+    return positiveInteger(value.count) ? { type: value.type, count: value.count } : null;
+  }
+  if (value.type === "dataBar") {
+    return typeof value.color === "string" ? { type: "dataBar", color: value.color } : null;
+  }
+  if (value.type === "colorScale") {
+    return typeof value.minColor === "string" && typeof value.maxColor === "string"
+      ? { type: "colorScale", minColor: value.minColor, maxColor: value.maxColor }
+      : null;
+  }
+  return null;
+}
+
+function migrateCellFormat(value: unknown): CellFormat | null {
+  if (!isRecord(value)) return null;
+  for (const key of ["bold", "italic", "wrapText"] as const) {
+    if (!optionalBoolean(value[key])) return null;
+  }
+  for (const key of ["fontFamily", "textColor", "backgroundColor"] as const) {
+    if (!optionalString(value[key])) return null;
+  }
+  if (value.fontSize !== undefined && (typeof value.fontSize !== "number" || !Number.isFinite(value.fontSize) || value.fontSize <= 0)) return null;
+  if (value.numberFormat !== undefined && !["general", "number", "currency", "percent", "date", "dateTime"].includes(value.numberFormat as string)) return null;
+  if (value.horizontalAlign !== undefined && !["left", "center", "right"].includes(value.horizontalAlign as string)) return null;
+  if (value.verticalAlign !== undefined && !["top", "middle", "bottom"].includes(value.verticalAlign as string)) return null;
+  const borders = migrateCellBorders(value.borders);
+  if (borders === null) return null;
+  return {
+    ...(value.bold === undefined ? {} : { bold: value.bold as boolean }),
+    ...(value.italic === undefined ? {} : { italic: value.italic as boolean }),
+    ...(value.fontFamily === undefined ? {} : { fontFamily: value.fontFamily as string }),
+    ...(value.fontSize === undefined ? {} : { fontSize: value.fontSize }),
+    ...(value.textColor === undefined ? {} : { textColor: value.textColor as string }),
+    ...(value.backgroundColor === undefined ? {} : { backgroundColor: value.backgroundColor as string }),
+    ...(value.numberFormat === undefined ? {} : { numberFormat: value.numberFormat as NonNullable<CellFormat["numberFormat"]> }),
+    ...(value.horizontalAlign === undefined ? {} : { horizontalAlign: value.horizontalAlign as NonNullable<CellFormat["horizontalAlign"]> }),
+    ...(value.verticalAlign === undefined ? {} : { verticalAlign: value.verticalAlign as NonNullable<CellFormat["verticalAlign"]> }),
+    ...(value.wrapText === undefined ? {} : { wrapText: value.wrapText as boolean }),
+    ...(borders === undefined ? {} : { borders })
+  };
+}
+
+function migrateCellBorders(value: unknown): CellBorders | undefined | null {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  const result: CellBorders = {};
+  for (const key of ["top", "right", "bottom", "left"] as const) {
+    const side = migrateCellBorderSide(value[key]);
+    if (side === null) return null;
+    if (side !== undefined) result[key] = side;
+  }
+  return result;
+}
+
+function migrateCellBorderSide(value: unknown): CellBorderSide | undefined | null {
+  if (value === undefined) return undefined;
+  return isRecord(value) && value.style === "thin" && typeof value.color === "string"
+    ? { style: "thin", color: value.color }
+    : null;
+}
+
+function migrateSheetFilters(value: unknown, bounds: SheetBounds): SheetFilter[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: SheetFilter[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id)) return null;
+    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
+    if (!Number.isInteger(item.column)
+      || (item.column as number) < item.range.start.column
+      || (item.column as number) > item.range.end.column) return null;
+    if (!["contains", "equals", "greaterThan", "lessThan"].includes(item.operator as string)) return null;
+    if (typeof item.value !== "string" || !optionalBoolean(item.hasHeader)) return null;
+    if (item.values !== undefined && (!Array.isArray(item.values) || !item.values.every((entry) => typeof entry === "string"))) return null;
+    ids.add(item.id);
+    result.push({
+      id: item.id,
+      range: cloneRange(item.range),
+      column: item.column as number,
+      operator: item.operator as SheetFilter["operator"],
+      value: item.value,
+      ...(item.values === undefined ? {} : { values: [...item.values] }),
+      ...(item.hasHeader === undefined ? {} : { hasHeader: item.hasHeader as boolean })
+    });
+  }
+  return result;
+}
+
+function migrateSheetCharts(value: unknown, bounds: SheetBounds): SheetChart[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: SheetChart[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id) || typeof item.title !== "string") return null;
+    if (item.type !== "bar" && item.type !== "line" && item.type !== "pie") return null;
+    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
+    if (!isCellCoord(item.anchor) || !coordinateInBounds(item.anchor, bounds)) return null;
+    ids.add(item.id);
+    result.push({
+      id: item.id,
+      title: item.title,
+      type: item.type,
+      range: cloneRange(item.range),
+      anchor: { ...item.anchor }
+    });
+  }
+  return result;
+}
+
+function migrateSheetMerges(value: unknown, bounds: SheetBounds): SheetMerge[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const result: SheetMerge[] = [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id)) return null;
+    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
+    ids.add(item.id);
+    result.push({ id: item.id, range: cloneRange(item.range) });
+  }
+  return result;
 }
 
 function migrateNamedRanges(value: unknown, sheets: readonly SheetModel[]): NamedRange[] | null {
@@ -321,13 +554,28 @@ function migrateProtection(value: unknown): SheetProtection {
   };
 }
 
-function rangeInBounds(range: CellRange, sheet: SheetModel): boolean {
+function rangeInBounds(range: CellRange, sheet: SheetBounds): boolean {
   return range.start.row >= 0
     && range.start.column >= 0
     && range.end.row >= range.start.row
     && range.end.column >= range.start.column
     && range.end.row < sheet.rowCount
     && range.end.column < sheet.columnCount;
+}
+
+function coordinateInBounds(coordinate: CellRange["start"], sheet: SheetBounds): boolean {
+  return coordinate.row >= 0
+    && coordinate.column >= 0
+    && coordinate.row < sheet.rowCount
+    && coordinate.column < sheet.columnCount;
+}
+
+function cellAddressInBounds(address: string, sheet: SheetBounds): boolean {
+  try {
+    return coordinateInBounds(parseCellAddress(address), sheet);
+  } catch {
+    return false;
+  }
 }
 
 function rangesIntersect(left: CellRange, right: CellRange): boolean {
@@ -375,12 +623,16 @@ function nonBlankString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function optionalBoolean(value: unknown): boolean {
+function optionalBoolean(value: unknown): value is boolean | undefined {
   return value === undefined || typeof value === "boolean";
 }
 
-function optionalString(value: unknown): boolean {
+function optionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+function optionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }
 
 function optionalRecord(value: unknown): boolean {

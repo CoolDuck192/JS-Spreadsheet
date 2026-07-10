@@ -360,6 +360,136 @@ describe("WorkbookSession", () => {
     expect(JSON.stringify(diagnostics[0])).not.toContain("secret-value");
   });
 
+  it("preserves safe exception detail in diagnostics while keeping rejections generic", () => {
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    const session = createWorkbookSession({
+      workbook: createBlankWorkbook(),
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+    const sheetId = session.getSnapshot().workbook.activeSheetId;
+
+    const result = session.dispatch({ type: "rows.insert", sheetId, index: -1, count: 1 });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "unsupported",
+      issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].metadata).toMatchObject({
+      outcome: "rejected",
+      errorType: "Error",
+      errorFingerprint: expect.stringMatching(/^[0-9a-f]{8}$/),
+      errorStackFrame: expect.stringContaining("commands.ts")
+    });
+    expect(JSON.stringify(result)).not.toContain("Index must be");
+  });
+
+  it("keeps reducer rejections generic when exception metadata cannot be inspected", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    const failure = new Error("private failure detail");
+    Object.defineProperty(failure, "stack", { value: { unavailable: true } });
+    const session = createWorkbookSession({
+      workbook,
+      createId() {
+        throw failure;
+      },
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+
+    const result = session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: origin,
+      name: "People",
+      headerRow: true,
+      totalsRow: false
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "unsupported",
+      issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].metadata).toMatchObject({
+      errorType: "Error",
+      errorFingerprint: expect.stringMatching(/^[0-9a-f]{8}$/)
+    });
+    expect(diagnostics[0].metadata).not.toHaveProperty("errorStackFrame");
+  });
+
+  it("does not copy arbitrary exception stack text into diagnostics", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    const failure = new Error("private failure detail");
+    failure.stack = "Error: private failure detail\n at secret-stack-value";
+    const session = createWorkbookSession({
+      workbook,
+      createId() {
+        throw failure;
+      },
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+
+    const result = session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: origin,
+      name: "People",
+      headerRow: true,
+      totalsRow: false
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(diagnostics).toHaveLength(1);
+    expect(JSON.stringify(diagnostics[0])).not.toContain("secret-stack-value");
+    expect(diagnostics[0].metadata).not.toHaveProperty("errorStackFrame");
+  });
+
+  it("serializes hostile non-Error causes without replacing the rejection", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    const hostileCause = new Proxy({}, {
+      getPrototypeOf() {
+        throw new Error("prototype unavailable");
+      },
+      get() {
+        throw new Error("property unavailable");
+      }
+    });
+    const session = createWorkbookSession({
+      workbook,
+      createId() {
+        throw hostileCause;
+      },
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+
+    const result = session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: origin,
+      name: "People",
+      headerRow: true,
+      totalsRow: false
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].metadata).toMatchObject({
+      errorType: "object",
+      errorFingerprint: expect.stringMatching(/^[0-9a-f]{8}$/)
+    });
+  });
+
   it("updates and recalculates the formula engine before publishing the snapshot", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;

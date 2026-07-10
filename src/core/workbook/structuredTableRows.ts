@@ -270,21 +270,18 @@ function rewriteWorkbookForRowEdits(
       let cells: SheetModel["cells"] | undefined;
       for (const [address, value] of Object.entries(sheet.cells)) {
         if (typeof value !== "string" || !value.startsWith("=")) continue;
-        let coord: { row: number; column: number };
+        let coordinate: { row: number; column: number };
         try {
-          coord = parseCellAddress(address);
+          coordinate = parseCellAddress(address);
         } catch {
           continue;
         }
-        if (
-          sheet.id === table.sheetId
-          && coord.row >= table.range.start.row
-          && coord.row <= table.range.end.row
-          && coord.column >= table.range.start.column
-          && coord.column <= table.range.end.column
-        ) {
-          continue;
-        }
+        // The totals row is included because insert/delete remapping moves it with the table body.
+        const isInsideTableDataOrTotals = sheet.id === table.sheetId
+          && coordinate.row >= table.range.start.row + Number(table.headerRow)
+          && coordinate.row <= table.range.end.row
+          && coordinate.column >= table.range.start.column
+          && coordinate.column <= table.range.end.column;
         const rewritten = rewriteFormulaForRectangularRowEdit(value, {
           formulaSheetId: sheet.name,
           editedSheetId: editedSheet.name,
@@ -296,6 +293,7 @@ function rewriteWorkbookForRowEdits(
           sheetBounds: { rowCount: editedSheet.rowCount, columnCount: editedSheet.columnCount }
         });
         if (!rewritten.ok) {
+          if (isInsideTableDataOrTotals) continue;
           return { status: "rejected", workbook, issues: [rewritten.issue] };
         }
         if (rewritten.formula !== value) {
@@ -391,7 +389,7 @@ function remapTableRows(
 ): WorkbookModel {
   const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === table.sheetId);
   const sheet = workbook.sheets[sheetIndex];
-  const remap = <T>(record: Readonly<Record<string, T>>, translateFormulas = false): Record<string, T> => {
+  const remap = <T>(record: Readonly<Record<string, T>>): Record<string, T> => {
     const next = { ...record };
     for (let row = clearStartRow; row <= clearEndRow; row += 1) {
       for (let column = table.range.start.column; column <= table.range.end.column; column += 1) {
@@ -402,21 +400,14 @@ function remapTableRows(
       for (let column = table.range.start.column; column <= table.range.end.column; column += 1) {
         const source = formatCellAddress({ row: mapping.sourceRow, column });
         if (!Object.prototype.hasOwnProperty.call(record, source)) continue;
-        let value = record[source];
-        if (translateFormulas && typeof value === "string" && value.startsWith("=")) {
-          value = translateFormulaReferences(value, {
-            rowOffset: mapping.targetRow - mapping.sourceRow,
-            columnOffset: 0
-          }) as T;
-        }
-        next[formatCellAddress({ row: mapping.targetRow, column })] = value;
+        next[formatCellAddress({ row: mapping.targetRow, column })] = record[source];
       }
     }
     return next;
   };
   const nextSheet: SheetModel = {
     ...sheet,
-    cells: remap(sheet.cells, true),
+    cells: remap(sheet.cells),
     formats: remap(sheet.formats),
     validations: remap(sheet.validations),
     comments: remap(sheet.comments),

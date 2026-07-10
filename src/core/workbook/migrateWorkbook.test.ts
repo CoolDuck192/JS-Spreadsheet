@@ -46,7 +46,90 @@ describe("workbook model migration", () => {
       tables: [{ ...fixture.tables[0], keyColumnId: "missing-column" }]
     })).toBeNull();
   });
+
+  it.each([
+    ["comments", { comments: { A1: 42 } }],
+    ["hyperlinks", { hyperlinks: { A1: { href: "https://example.test" } } }],
+    ["validations", { validations: { A1: { type: "list" } } }],
+    ["conditional formats", { conditionalFormats: [{ id: "rule-1", range: cellRange(), format: {} }] }],
+    ["filters", { filters: [{ id: "filter-1", range: cellRange(), operator: "equals", value: "Open" }] }],
+    ["charts", { charts: [{ id: "chart-1", title: "Chart", type: "bar", range: cellRange() }] }],
+    ["merges", { merges: [{ id: "merge-1" }] }]
+  ])("rejects malformed %s instead of casting persisted values", (_label, sheetPatch) => {
+    const fixture = createBlankWorkbook();
+    expect(migrateWorkbookModel({
+      ...fixture,
+      sheets: [{ ...fixture.sheets[0], ...sheetPatch }]
+    })).toBeNull();
+  });
+
+  it("accepts finite text-length bounds supported by the public workbook model", () => {
+    const fixture = createBlankWorkbook();
+    const migrated = migrateWorkbookModel({
+      ...fixture,
+      sheets: [{
+        ...fixture.sheets[0],
+        validations: { A1: { type: "textLength", min: -1.5, max: 3.5 } }
+      }]
+    });
+
+    expect(migrated?.sheets[0].validations.A1).toEqual({
+      type: "textLength",
+      min: -1.5,
+      max: 3.5
+    });
+  });
+
+  it("validates and deeply clones persisted sheet collections", () => {
+    const fixture = createBlankWorkbook();
+    const range = cellRange();
+    const sheet = {
+      ...fixture.sheets[0],
+      comments: { A1: "note" },
+      hyperlinks: { A1: "https://example.test" },
+      validations: { A1: { type: "list" as const, values: ["Open", "Closed"], allowBlank: false } },
+      conditionalFormats: [{
+        id: "rule-1",
+        range,
+        condition: { type: "between" as const, value: "1", secondValue: "5" },
+        format: { bold: true, borders: { top: { style: "thin" as const, color: "#123456" } } }
+      }],
+      filters: [{
+        id: "filter-1",
+        range,
+        column: 0,
+        operator: "equals" as const,
+        value: "Open",
+        values: ["Open"],
+        hasHeader: true
+      }],
+      charts: [{ id: "chart-1", title: "Chart", type: "bar" as const, range, anchor: { row: 2, column: 2 } }],
+      merges: [{ id: "merge-1", range }]
+    };
+
+    const migratedSheet = migrateWorkbookModel({ ...fixture, sheets: [sheet] })?.sheets[0];
+
+    expect(migratedSheet).toBeDefined();
+    expect(migratedSheet?.comments).toEqual(sheet.comments);
+    expect(migratedSheet?.comments).not.toBe(sheet.comments);
+    expect(migratedSheet?.hyperlinks).not.toBe(sheet.hyperlinks);
+    expect(migratedSheet?.validations.A1).not.toBe(sheet.validations.A1);
+    expect((migratedSheet?.validations.A1 as { values: readonly string[] }).values)
+      .not.toBe(sheet.validations.A1.values);
+    expect(migratedSheet?.conditionalFormats[0]).not.toBe(sheet.conditionalFormats[0]);
+    expect(migratedSheet?.conditionalFormats[0].range).not.toBe(range);
+    expect(migratedSheet?.conditionalFormats[0].condition).not.toBe(sheet.conditionalFormats[0].condition);
+    expect(migratedSheet?.conditionalFormats[0].format.borders).not.toBe(sheet.conditionalFormats[0].format.borders);
+    expect(migratedSheet?.filters[0]).not.toBe(sheet.filters[0]);
+    expect(migratedSheet?.filters[0].values).not.toBe(sheet.filters[0].values);
+    expect(migratedSheet?.charts[0].anchor).not.toBe(sheet.charts[0].anchor);
+    expect(migratedSheet?.merges[0].range).not.toBe(range);
+  });
 });
+
+function cellRange() {
+  return { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } };
+}
 
 function createVersionTwoFixture() {
   const current = createBlankWorkbook();

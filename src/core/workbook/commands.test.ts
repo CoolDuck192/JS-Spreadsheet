@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { StructuredTable } from "../../types";
 import {
   addConditionalFormatRule,
   addSheet,
@@ -272,6 +273,43 @@ describe("WorkbookCommand", () => {
     expect(getCellContent(result.workbook, "sheet-1", "B2")).toBe("1200");
     expect(getCellFormat(result.workbook, "sheet-1", "A1")).toEqual({});
     expect(getCellContent(result.workbook, "sheet-2", "A1")).toBe("keep");
+  });
+
+  it("removes only tables owned by a sheet replaced from CSV rows", () => {
+    let workbook = addSheet(createBlankWorkbook(), "Other");
+    const tables: StructuredTable[] = [
+      {
+        id: "table-replaced",
+        name: "ReplacedTable",
+        sheetId: "sheet-1",
+        range: { start: cell, end: { row: 1, column: 0 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [{ id: "column-replaced", name: "Old", sheetColumn: 0 }],
+        rowIds: ["row-replaced"]
+      },
+      {
+        id: "table-preserved",
+        name: "PreservedTable",
+        sheetId: "sheet-2",
+        range: { start: cell, end: { row: 1, column: 0 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [{ id: "column-preserved", name: "Keep", sheetColumn: 0 }],
+        rowIds: ["row-preserved"]
+      }
+    ];
+    workbook = { ...workbook, tables };
+
+    const result = apply(workbook, {
+      type: "sheet.replaceWithRows",
+      sheetId: "sheet-1",
+      rows: [["New"]]
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables).toEqual([tables[1]]);
   });
 
   it("creates a deterministic generated sheet from a matrix and presentation data", () => {

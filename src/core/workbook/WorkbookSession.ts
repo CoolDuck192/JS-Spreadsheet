@@ -194,6 +194,7 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     };
 
     let applied: DraftResult;
+    let reductionFailure: { cause: unknown } | undefined;
     try {
       applied = reduce(command, initialState, mutationContext, () => {
         transactionDepth += 1;
@@ -204,7 +205,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
           ensureScratchProjection(workbook);
         }
       });
-    } catch {
+    } catch (cause) {
+      reductionFailure = { cause };
       applied = invalidCommandResult();
     } finally {
       scratchEngine?.destroy();
@@ -223,7 +225,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
         now(),
         applied.reason === "validation" ? "validation" : "command",
         "rejected",
-        false
+        false,
+        reductionFailure
       ));
       return result;
     }
@@ -580,7 +583,8 @@ function createDiagnostic(
   completedAt: number,
   category: WorkbookDiagnosticEvent["category"],
   outcome: "committed" | "rejected" | "conflict",
-  changed: boolean
+  changed: boolean,
+  failure?: { cause: unknown }
 ): WorkbookDiagnosticEvent {
   return {
     category,
@@ -590,9 +594,77 @@ function createDiagnostic(
       commandType: command.type,
       outcome,
       changed,
-      ...collectCommandDiagnostics(command)
+      ...collectCommandDiagnostics(command),
+      ...(failure ? serializeDiagnosticError(failure.cause) : {})
     }
   };
+}
+
+function serializeDiagnosticError(
+  cause: unknown
+): Readonly<Record<string, string | number | boolean | null>> {
+  let errorType: string = typeof cause;
+  let detail = `[${errorType}]`;
+  let stack: unknown;
+  let isError = false;
+  try {
+    isError = cause instanceof Error;
+  } catch {
+    // Host-provided thrown values can be proxies with hostile prototype traps.
+  }
+  if (isError) {
+    const error = cause as Error;
+    errorType = "Error";
+    try {
+      if (typeof error.name === "string") errorType = safeErrorType(error.name);
+    } catch {
+      // Error metadata is optional and must not replace the original rejection.
+    }
+    try {
+      if (typeof error.message === "string") detail = error.message;
+    } catch {
+      // Error metadata is optional and must not replace the original rejection.
+    }
+    try {
+      stack = error.stack;
+    } catch {
+      // Error metadata is optional and must not replace the original rejection.
+    }
+  } else {
+    try {
+      detail = String(cause);
+    } catch {
+      // Keep the type-only fallback when coercion is hostile.
+    }
+  }
+  const stackFrame = sanitizeDiagnosticStackFrame(stack);
+  return {
+    errorType,
+    errorFingerprint: fingerprintDiagnosticDetail(`${errorType}\0${detail}`),
+    ...(stackFrame ? { errorStackFrame: stackFrame.slice(0, 512) } : {})
+  };
+}
+
+function sanitizeDiagnosticStackFrame(stack: unknown): string | undefined {
+  if (typeof stack !== "string") return undefined;
+  for (const line of stack.split("\n").slice(1)) {
+    const location = line.trim().match(/(?:^|[/\\])([A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?)):(\d+):(\d+)\)?$/);
+    if (location) return `${location[1]}:${location[2]}:${location[3]}`;
+  }
+  return undefined;
+}
+
+function safeErrorType(name: string): string {
+  return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(name) ? name : "Error";
+}
+
+function fingerprintDiagnosticDetail(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function diagnosticCategory(command: WorkbookCommand): WorkbookDiagnosticEvent["category"] {

@@ -33,6 +33,7 @@ import {
 import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
 import type { ComputedCellValue } from "./formulaEngine";
 import { compareDeterministicText } from "./filters";
+import { normalizeExcelTableNameKey, validateExcelTableName } from "../core/workbook/tableNames";
 
 export {
   commitWorkbookHistory as commitHistory,
@@ -1747,7 +1748,7 @@ export function duplicateSheet(
   };
 
   const sourceTables = workbook.tables.filter((table) => table.sheetId === sheetId);
-  const usedNames = new Set(workbook.tables.map((table) => table.name.normalize("NFKC").toLowerCase()));
+  const usedNames = new Set(workbook.tables.map((table) => normalizeExcelTableNameKey(table.name)));
   const copiedTables = sourceTables.map((table) => duplicateStructuredTable(table, copy.id, createId, usedNames));
 
   return {
@@ -1770,7 +1771,7 @@ function duplicateStructuredTable(
     columnIdMap.set(column.id, id);
     return { ...column, id };
   });
-  const name = nextDuplicatedTableName(usedNames);
+  const name = nextDuplicatedTableName(table.name, usedNames);
   return {
     ...table,
     id: createId("table"),
@@ -1792,12 +1793,14 @@ function duplicateStructuredTable(
   };
 }
 
-function nextDuplicatedTableName(usedNames: Set<string>): string {
+function nextDuplicatedTableName(sourceName: string, usedNames: Set<string>): string {
+  const normalizedSourceName = sourceName.normalize("NFKC");
   for (let index = 1; ; index += 1) {
-    const name = `Table${index}`;
-    const key = name.toLowerCase();
-    if (!usedNames.has(key)) {
-      usedNames.add(key);
+    const suffix = index === 1 ? "_Copy" : `_Copy_${index}`;
+    const name = `${[...normalizedSourceName].slice(0, 255 - suffix.length).join("")}${suffix}`;
+    const validation = validateExcelTableName(name);
+    if (validation.valid && !usedNames.has(validation.normalizedKey)) {
+      usedNames.add(validation.normalizedKey);
       return name;
     }
   }

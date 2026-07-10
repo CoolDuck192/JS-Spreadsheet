@@ -41,6 +41,40 @@ describe("structured table rows", () => {
     expect(getCellContent(result.workbook, "sheet-1", "D3")).toBe("unrelated-right");
   });
 
+  it("keeps out-of-table references pinned when body formulas move", () => {
+    const workbook = rowFixture({ B3: "=A3+D3+1" });
+
+    const inserted = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+    expect(inserted.status).toBe("committed");
+    expect(getCellContent(inserted.workbook, "sheet-1", "B4")).toBe("=A4+D3+1");
+
+    const deleted = deleteStructuredTableRows(workbook, "table-1", ["row-1"], servicesFor(workbook));
+    expect(deleted.status).toBe("committed");
+    expect(getCellContent(deleted.workbook, "sheet-1", "B2")).toBe("=A2+D3+1");
+
+    const sortable = rowFixture({ A3: "Zed", B3: "=A3+D3+1" });
+    const sorted = sortStructuredTableRows(sortable, "table-1", [
+      { columnId: "column-name", direction: "asc" }
+    ], servicesFor(sortable));
+    expect(sorted.status).toBe("committed");
+    expect(getCellContent(sorted.workbook, "sheet-1", "B4")).toBe("=A3+D3+1");
+  });
+
+  it("moves unsupported external body formulas without rewriting or blocking the row edit", () => {
+    const workbook = rowFixture({ B3: "='[Book.xlsx]Data'!D3" });
+
+    const result = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "B4")).toBe("='[Book.xlsx]Data'!D3");
+  });
+
   it("rejects unknown or duplicate anchors and row IDs without partial movement", () => {
     const workbook = rowFixture();
     for (const result of [

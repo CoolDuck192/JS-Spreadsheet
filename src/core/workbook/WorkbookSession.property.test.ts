@@ -28,6 +28,10 @@ export function createPropertyOptions(
 }
 
 describe("WorkbookSession seeded edit/undo sequences", () => {
+  it("compares reference records independently of insertion order", () => {
+    expect(recordsEqual({ A1: 1, B1: 2 }, { B1: 2, A1: 1 })).toBe(true);
+  });
+
   it("locks the deterministic seed, optional replay path, run count, and failure mode", () => {
     expect(createPropertyOptions({ FC_REPLAY_PATH: undefined })).toEqual({
       seed: 20260709,
@@ -135,7 +139,10 @@ function applyReferenceEdit(cells: ReferenceCells, address: string, input: strin
 }
 
 function recordsEqual(left: ReferenceCells, right: ReferenceCells): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  const leftEntries = Object.entries(left);
+  return leftEntries.length === Object.keys(right).length
+    && leftEntries.every(([address, value]) => Object.prototype.hasOwnProperty.call(right, address)
+      && Object.is(right[address], value));
 }
 
 function readReferenceCells(workbook: WorkbookModel, sheetId: string): ReferenceCells {

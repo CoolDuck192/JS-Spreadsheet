@@ -877,9 +877,10 @@ function replaceSheetWithRows(
     protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
   }));
   const namedRanges = (next.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId);
-  return namedRanges.length === (next.namedRanges ?? []).length
+  const tables = next.tables.filter((table) => table.sheetId !== sheetId);
+  return namedRanges.length === (next.namedRanges ?? []).length && tables.length === next.tables.length
     ? next
-    : { ...next, namedRanges };
+    : { ...next, namedRanges, tables };
 }
 
 function rejectedUnsupported(code: string, message: string): WorkbookMutationResult {

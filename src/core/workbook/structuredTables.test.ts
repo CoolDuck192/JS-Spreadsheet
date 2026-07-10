@@ -10,6 +10,7 @@ import {
   type StructuredTableCommand,
   type StructuredTableCommandServices
 } from "./structuredTables";
+import { validateExcelTableName } from "./tableNames";
 
 describe("structured table metadata", () => {
   it("creates an A1:C4 table with stable lookup and body geometry", () => {
@@ -204,9 +205,34 @@ describe("structured table metadata", () => {
     expect(duplicated.tables[1].sheetId).toBe(duplicated.activeSheetId);
     expect(duplicated.tables[1].id).not.toBe(duplicated.tables[0].id);
     expect(duplicated.tables[1].columns[0].id).not.toBe(duplicated.tables[0].columns[0].id);
+    expect(duplicated.tables[1].name).toBe("Source_Copy");
+    const withNormalizedCollision = {
+      ...duplicated,
+      tables: duplicated.tables.map((table, index) => index === 1
+        ? { ...table, name: "ＳＯＵＲＣＥ＿ＣＯＰＹ" }
+        : table)
+    };
+    const duplicatedAgain = duplicateSheet(withNormalizedCollision, created.activeSheetId, services.createId);
+    expect(duplicatedAgain.tables.at(-1)?.name).toBe("Source_Copy_2");
     const deleted = deleteSheet(duplicated, created.activeSheetId);
     expect(deleted.tables).toHaveLength(1);
     expect(deleted.tables[0].sheetId).toBe(duplicated.activeSheetId);
+  });
+
+  it("keeps duplicated names within Excel's normalized character limit", () => {
+    const { workbook, services } = tableFixture(2, 3);
+    const sourceName = "ﬃ".repeat(85);
+    const created = commit(workbook, {
+      type: "table.create", sheetId: workbook.activeSheetId, range: range(0, 0, 2, 1),
+      name: sourceName, headerRow: true, totalsRow: false
+    }, services);
+
+    const duplicated = duplicateSheet(created, created.activeSheetId, services.createId);
+    const duplicateName = duplicated.tables[1].name;
+
+    expect(duplicateName).toBe(duplicateName.normalize("NFKC"));
+    expect([...duplicateName]).toHaveLength(255);
+    expect(validateExcelTableName(duplicateName).valid).toBe(true);
   });
 });
 
