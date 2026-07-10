@@ -75,6 +75,13 @@ import {
 import { parseCellInput } from "../values/parseCellInput";
 import { validateCellCandidate } from "../../lib/validation";
 import type { TableIssue } from "../commands/types";
+import { createRandomId, type IdGenerator } from "../ids";
+import {
+  getStructuredTableAtCell,
+  getStructuredTableBodyRange,
+  reduceStructuredTableCommand,
+  type StructuredTableCommand
+} from "./structuredTables";
 
 export type SerializableRichClipboardRange = {
   readonly range: CellRange;
@@ -171,10 +178,12 @@ export type WorkbookCommand =
   | { type: "namedRange.remove"; name: string }
   | { type: "history.undo" | "history.redo" }
   | { type: "persistence.status"; status: "idle" | "saving" | "failed"; message?: string }
-  | { type: "workbook.replace"; workbook: WorkbookModel; history: "commit" | "reset" };
+  | { type: "workbook.replace"; workbook: WorkbookModel; history: "commit" | "reset" }
+  | StructuredTableCommand;
 
 export type WorkbookMutationContext = {
   evaluateCell(workbook: WorkbookModel, sheetId: string, address: string): ComputedCellValue;
+  createId?: IdGenerator;
 };
 
 export type WorkbookMutationResult =
@@ -190,12 +199,55 @@ export function applyWorkbookMutation(
   command: WorkbookCommand,
   context: WorkbookMutationContext
 ): WorkbookMutationResult {
+  if (isStructuredTableCommand(command)) {
+    const reduction = reduceStructuredTableCommand(workbook, command, {
+      createId: context.createId ?? createRandomId,
+      getCellEvaluation(sheetId, address) {
+        return context.evaluateCell(workbook, sheetId, address);
+      }
+    });
+    if (reduction.status === "rejected") {
+      return { status: "rejected", reason: "validation", issues: reduction.issues };
+    }
+    return applied(reduction.workbook);
+  }
   switch (command.type) {
     case "cell.set": {
-      parseCellAddress(command.address);
+      const coordinate = parseCellAddress(command.address);
       const permission = writableAddresses(workbook, command.sheetId, [command.address]);
       if (permission) {
         return permission;
+      }
+      const table = getStructuredTableAtCell(workbook, command.sheetId, coordinate);
+      if (table) {
+        const column = table.columns.find((candidate) => candidate.sheetColumn === coordinate.column);
+        if (column && table.headerRow && coordinate.row === table.range.start.row) {
+          const reduction = reduceStructuredTableCommand(workbook, {
+            type: "table.renameColumn",
+            tableId: table.id,
+            columnId: column.id,
+            name: command.input
+          }, {
+            createId: context.createId ?? createRandomId,
+            getCellEvaluation: (sheetId, address) => context.evaluateCell(workbook, sheetId, address)
+          });
+          return reduction.status === "rejected"
+            ? { status: "rejected", reason: "validation", issues: reduction.issues }
+            : applied(reduction.workbook);
+        }
+        const body = getStructuredTableBodyRange(table);
+        if (column?.calculatedFormula && body && coordinate.row >= body.start.row && coordinate.row <= body.end.row) {
+          return {
+            status: "rejected",
+            reason: "permission",
+            issues: [{
+              code: "TABLE_CALCULATED_COLUMN_READ_ONLY",
+              message: "Calculated table columns are read-only",
+              sheetId: command.sheetId,
+              address: command.address
+            }]
+          };
+        }
       }
       const parsed = parseCellInput(command.input);
       let candidate = setCellContent(workbook, command.sheetId, command.address, parsed.stored);
@@ -203,7 +255,6 @@ export function applyWorkbookMutation(
         parsed.inferredNumberFormat
         && getCellFormat(workbook, command.sheetId, command.address).numberFormat === undefined
       ) {
-        const coordinate = parseCellAddress(command.address);
         candidate = setCellFormat(
           candidate,
           command.sheetId,
@@ -211,7 +262,9 @@ export function applyWorkbookMutation(
           { numberFormat: parsed.inferredNumberFormat }
         );
       }
-      return validatedMutation(candidate, command.sheetId, [command.address], context);
+      const validated = validatedMutation(candidate, command.sheetId, [command.address], context);
+      if (validated.status === "rejected") return validated;
+      return applied(updateCustomTotalsMetadata(candidate, command.sheetId, coordinate, parsed.stored));
     }
     case "cell.comment.set": {
       parseCellAddress(command.address);
@@ -320,11 +373,25 @@ export function applyWorkbookMutation(
       ));
     case "range.merge": {
       const range = checkedRange(command.range);
+      if (workbook.tables.some((table) => table.sheetId === command.sheetId && rangesIntersect(table.range, range))) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{ code: "TABLE_PARTIAL_STRUCTURAL_EDIT", message: "Merged cells cannot intersect a table" }]
+        };
+      }
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
       return permission ?? applied(mergeCells(workbook, command.sheetId, range));
     }
     case "range.unmerge": {
       const range = checkedRange(command.range);
+      if (workbook.tables.some((table) => table.sheetId === command.sheetId && rangesIntersect(table.range, range))) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{ code: "TABLE_PARTIAL_STRUCTURAL_EDIT", message: "Merged cells cannot intersect a table" }]
+        };
+      }
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
       return permission ?? applied(unmergeCells(workbook, command.sheetId, range));
     }
@@ -803,6 +870,46 @@ function replaceSheetWithRows(
 
 function rejectedUnsupported(code: string, message: string): WorkbookMutationResult {
   return { status: "rejected", reason: "unsupported", issues: [{ code, message }] };
+}
+
+function isStructuredTableCommand(command: WorkbookCommand): command is StructuredTableCommand {
+  return command.type.startsWith("table.");
+}
+
+function updateCustomTotalsMetadata(
+  workbook: WorkbookModel,
+  sheetId: string,
+  coordinate: CellCoord,
+  value: WorkbookModel["sheets"][number]["cells"][string]
+): WorkbookModel {
+  const table = workbook.tables.find((candidate) => candidate.sheetId === sheetId
+    && candidate.totalsRow
+    && coordinate.row === candidate.range.end.row
+    && coordinate.column >= candidate.range.start.column
+    && coordinate.column <= candidate.range.end.column);
+  if (!table) return workbook;
+  const columnIndex = table.columns.findIndex((column) => column.sheetColumn === coordinate.column);
+  if (columnIndex < 0) return workbook;
+  const columns = table.columns.map((column, index) => {
+    if (index !== columnIndex) return column;
+    const { totalsFunction: _function, totalsLabel: _label, ...base } = column;
+    return index === 0 && typeof value === "string" && !value.startsWith("=") && value.trim().length > 0
+      ? { ...base, totalsLabel: value }
+      : base;
+  });
+  return {
+    ...workbook,
+    tables: workbook.tables.map((candidate) => candidate.id === table.id ? { ...table, columns } : candidate)
+  };
+}
+
+function rangesIntersect(left: CellRange, right: CellRange): boolean {
+  const normalizedLeft = normalizeRange(left);
+  const normalizedRight = normalizeRange(right);
+  return normalizedLeft.start.row <= normalizedRight.end.row
+    && normalizedLeft.end.row >= normalizedRight.start.row
+    && normalizedLeft.start.column <= normalizedRight.end.column
+    && normalizedLeft.end.column >= normalizedRight.start.column;
 }
 
 function mutableClipboard(clipboard: SerializableRichClipboardRange): RichClipboardRange {

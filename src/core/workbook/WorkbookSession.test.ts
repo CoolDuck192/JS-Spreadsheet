@@ -19,6 +19,56 @@ const origin = { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } } as c
 const block = { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } } as const;
 
 describe("WorkbookSession", () => {
+  it("commits, publishes, undoes, and redoes a structured table with exact IDs", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    for (const [address, value] of [
+      ["A1", "Name"], ["B1", "Department"], ["C1", "Salary"],
+      ["A2", "Ada"], ["B2", "Finance"], ["C2", 100],
+      ["A3", "Grace"], ["B3", "Research"], ["C3", 200],
+      ["A4", "Linus"], ["B4", "IT"], ["C4", 150]
+    ] as const) {
+      workbook = setCellContent(workbook, sheetId, address, value);
+    }
+    let nextId = 0;
+    const session = createWorkbookSession({
+      workbook,
+      createId(kind) {
+        nextId += 1;
+        return `${kind}-${nextId}`;
+      }
+    });
+    let notifications = 0;
+    session.subscribe(() => notifications += 1);
+
+    expect(session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 3, column: 2 } },
+      name: "Employees",
+      headerRow: true,
+      totalsRow: false
+    })).toEqual({ status: "committed", revision: "1", changed: true });
+    expect(notifications).toBe(1);
+    expect(session.getSnapshot().workbook.tables[0]).toMatchObject({
+      id: "table-4",
+      name: "Employees",
+      columns: [
+        { id: "table-column-1", name: "Name" },
+        { id: "table-column-2", name: "Department" },
+        { id: "table-column-3", name: "Salary" }
+      ],
+      rowIds: ["table-row-5", "table-row-6", "table-row-7"]
+    });
+    const committed = JSON.stringify(session.getSnapshot().workbook);
+
+    expect(session.dispatch({ type: "history.undo" })).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot().workbook.tables).toEqual([]);
+    expect(session.dispatch({ type: "history.redo" })).toMatchObject({ status: "committed", changed: true });
+    expect(JSON.stringify(session.getSnapshot().workbook)).toBe(committed);
+    expect(notifications).toBe(3);
+  });
+
   it("serializes two synchronous dispatches without losing the first edit", () => {
     const diagnostics: WorkbookDiagnosticEvent[] = [];
     const ids = ["command-1", "command-2"];

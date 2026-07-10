@@ -52,6 +52,51 @@ function workbookWithCells(cellCount: number): WorkbookModel {
 }
 
 describe("workbook history", () => {
+  it("counts every persisted structured-table metadata family deterministically", () => {
+    const workbook = createBlankWorkbook();
+    const baseWeight = estimateWorkbookWeight(workbook);
+    const withTable: WorkbookModel = {
+      ...workbook,
+      tables: [{
+        id: "table-1",
+        name: "Employees",
+        sheetId: workbook.activeSheetId,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "column-1", name: "Name", sheetColumn: 0, dataType: "text", calculatedFormula: "=A2" },
+          { id: "column-2", name: "Salary", sheetColumn: 1, dataType: "number", totalsFunction: "sum" }
+        ],
+        rowIds: ["row-1", "row-2"],
+        keyColumnId: "column-1",
+        style: { theme: "TableStyleLight1", showRowStripes: true },
+        sort: [{ columnId: "column-2", direction: "desc", nulls: "last" }],
+        filter: {
+          kind: "logical",
+          operator: "and",
+          operands: [{
+            kind: "comparison",
+            columnId: "column-2",
+            operator: "gte",
+            value: { type: "number", value: 100 }
+          }]
+        }
+      }]
+    };
+    const tableWeight = estimateWorkbookWeight(withTable);
+    expect(tableWeight).toBeGreaterThan(baseWeight);
+    expect(estimateWorkbookWeight(structuredClone(withTable))).toBe(tableWeight);
+    expect(estimateWorkbookWeight({
+      ...withTable,
+      tables: [{ ...withTable.tables[0], rowIds: [...withTable.tables[0].rowIds, "row-3"] }]
+    })).toBe(tableWeight + 1);
+    expect(estimateWorkbookWeight({
+      ...withTable,
+      tables: [{ ...withTable.tables[0], filter: undefined }]
+    })).toBeLessThan(tableWeight);
+  });
+
   it("accepts legacy three-field histories through typed compatibility delegates", () => {
     const initial = createBlankWorkbook();
     const legacyPast = Array.from({ length: 100 }, () => ({ ...initial }));

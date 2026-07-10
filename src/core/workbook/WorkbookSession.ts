@@ -5,6 +5,7 @@ import {
   type FormulaEngine
 } from "../../lib/formulaEngine";
 import type { CommandEnvelope, CommandResult, TableIssue } from "../commands/types";
+import { createRandomId, type IdGenerator } from "../ids";
 import {
   applyWorkbookMutation,
   collectCommandDiagnostics,
@@ -42,6 +43,7 @@ export type CreateWorkbookSessionOptions = {
   formulaEngineFactory?: typeof createFormulaEngine;
   now?: () => number;
   createCommandId?: () => string;
+  createId?: IdGenerator;
   history?: { maxEntries?: number; maxWeight?: number };
   onDiagnostic?: (event: WorkbookDiagnosticEvent) => void;
 };
@@ -96,6 +98,7 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
   const listeners = new Set<() => void>();
   const diagnosticListeners = new Set<(event: WorkbookDiagnosticEvent) => void>();
   const createCommandId = options.createCommandId ?? createDefaultCommandIdFactory();
+  const createId = options.createId ?? createRandomId;
   const now = options.now ?? createDefaultNow();
 
   let history = createWorkbookHistory(options.workbook, options.history);
@@ -169,6 +172,7 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     };
 
     const mutationContext: WorkbookMutationContext = {
+      createId,
       evaluateCell(workbook, sheetId, address) {
         return ensureScratchProjection(workbook).getComputedValue(sheetId, address);
       }

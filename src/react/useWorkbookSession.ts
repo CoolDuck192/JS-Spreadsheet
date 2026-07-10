@@ -216,7 +216,8 @@ function createOwnedSessionState(
     workbook: initialWorkbook,
     formulaEngineFactory: options.services?.formulaEngineFactory,
     now: options.services?.now,
-    createCommandId
+    createCommandId,
+    createId: options.services?.createId
   });
 
   const state: OwnedSessionState = {

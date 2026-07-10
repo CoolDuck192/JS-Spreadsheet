@@ -1,5 +1,6 @@
 import type { WorkbookModel } from "../../types";
 import type { createFormulaEngine } from "../../lib/formulaEngine";
+import type { IdGenerator } from "../ids";
 
 export type WorkbookImportPayload =
   | { kind: "bytes"; bytes: Uint8Array; fileName?: string }
@@ -40,5 +41,6 @@ export type SpreadsheetServices = Readonly<{
   exporters?: Readonly<Record<string, WorkbookExporter>>;
   now?: () => number;
   createCommandId?: () => string;
+  createId?: IdGenerator;
   googleTokenProviderFactory?: (clientId: string) => TokenProvider;
 }>;

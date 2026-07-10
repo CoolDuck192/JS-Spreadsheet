@@ -2,10 +2,12 @@ import type {
   CellFormat,
   DataValidationRule,
   SheetModel,
+  StructuredTable,
   WorkbookHistory,
   WorkbookHistoryLimits,
   WorkbookModel
 } from "../../types";
+import type { FilterExpression, QueryScalar } from "../../table/core/query";
 
 export type { WorkbookHistory, WorkbookHistoryLimits } from "../../types";
 
@@ -140,10 +142,55 @@ function estimateWorkbookWeightWith(
   estimateSheet: (sheet: SheetModel) => number
 ): number {
   let weight = 1 + (workbook.namedRanges ?? []).length;
+  weight += workbook.tables.reduce((total, table) => total + estimateStructuredTableWeight(table), 0);
   for (const sheet of workbook.sheets) {
     weight += estimateSheet(sheet);
   }
   return weight;
+}
+
+function estimateStructuredTableWeight(table: StructuredTable): number {
+  let weight = 6;
+  weight += table.rowIds.length;
+  weight += table.columns.reduce((total, column) => {
+    let columnWeight = 4;
+    columnWeight += column.dataType === undefined ? 0 : 1;
+    columnWeight += column.calculatedFormula === undefined ? 0 : 1;
+    columnWeight += column.totalsFunction === undefined ? 0 : 1;
+    columnWeight += column.totalsLabel === undefined ? 0 : 1;
+    return total + columnWeight;
+  }, 0);
+  weight += table.keyColumnId === undefined ? 0 : 1;
+  weight += table.style === undefined
+    ? 0
+    : 1 + Object.values(table.style).filter((value) => value !== undefined).length;
+  weight += table.sort?.reduce(
+    (total, sort) => total + 3 + (sort.nulls === undefined ? 0 : 1),
+    0
+  ) ?? 0;
+  weight += table.filter === undefined ? 0 : estimateFilterWeight(table.filter);
+  return weight;
+}
+
+function estimateFilterWeight(filter: FilterExpression): number {
+  switch (filter.kind) {
+    case "logical":
+      return 2 + filter.operands.reduce((total, operand) => total + estimateFilterWeight(operand), 0);
+    case "not":
+      return 1 + estimateFilterWeight(filter.operand);
+    case "comparison":
+      return 3 + estimateScalarWeight(filter.value);
+    case "set":
+      return 3 + filter.values.reduce((total, value) => total + estimateScalarWeight(value), 0);
+    case "range":
+      return 3 + estimateScalarWeight(filter.lower) + estimateScalarWeight(filter.upper);
+    case "blank":
+      return 3;
+  }
+}
+
+function estimateScalarWeight(value: QueryScalar): number {
+  return value.type === "null" ? 1 : 2;
 }
 
 function estimateSheetWeight(sheet: SheetModel): number {

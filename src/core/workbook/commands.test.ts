@@ -129,7 +129,23 @@ const completePreTableCommands = [
   { type: "history.undo" },
   { type: "history.redo" },
   { type: "persistence.status", status: "failed", message: "storage unavailable" },
-  { type: "workbook.replace", workbook: createBlankWorkbook(), history: "reset" }
+  { type: "workbook.replace", workbook: createBlankWorkbook(), history: "reset" },
+  { type: "table.create", sheetId: "sheet-1", range, name: "TableOne", headerRow: true, totalsRow: false },
+  { type: "table.rename", tableId: "table-1", name: "RenamedTable" },
+  { type: "table.renameColumn", tableId: "table-1", columnId: "column-1", name: "Renamed" },
+  { type: "table.resize", tableId: "table-1", range },
+  { type: "table.setHeaderRow", tableId: "table-1", enabled: true },
+  { type: "table.setTotalsRow", tableId: "table-1", enabled: true },
+  { type: "table.setTotalsFunction", tableId: "table-1", columnId: "column-1", aggregate: "sum" },
+  { type: "table.setStyle", tableId: "table-1", style: { theme: "TableStyleLight1" } },
+  { type: "table.setKeyColumn", tableId: "table-1", columnId: "column-1" },
+  { type: "table.setCalculatedColumn", tableId: "table-1", columnId: "column-1", formula: "=A2" },
+  { type: "table.setFilter", tableId: "table-1", filter: { kind: "blank", columnId: "column-1", operator: "isBlank" } },
+  { type: "table.sort", tableId: "table-1", sorting: [{ columnId: "column-1", direction: "asc" }] },
+  { type: "table.insertRows", tableId: "table-1", count: 2, beforeRowId: "row-1" },
+  { type: "table.deleteRows", tableId: "table-1", rowIds: ["row-1"] },
+  { type: "table.editCells", tableId: "table-1", edits: [{ rowId: "row-1", columnId: "column-1", rawText: "value" }] },
+  { type: "table.convertToRange", tableId: "table-1" }
 ] satisfies readonly WorkbookCommand[];
 
 describe("WorkbookCommand", () => {
