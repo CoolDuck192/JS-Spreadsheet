@@ -181,8 +181,17 @@ export type WorkbookModel = {
 
 export type Selection = CellRange;
 
-export type HistoryState = {
+export type WorkbookHistoryLimits = Readonly<{
+  maxEntries: number;
+  maxWeight: number;
+}>;
+
+export type WorkbookHistory = {
   past: WorkbookModel[];
   present: WorkbookModel;
   future: WorkbookModel[];
+  limits: WorkbookHistoryLimits;
 };
+
+/** @deprecated Import `WorkbookHistory` from `core/workbook/history` for new code. */
+export type HistoryState = WorkbookHistory;

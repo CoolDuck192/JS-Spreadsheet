@@ -7,7 +7,6 @@ import type {
   CellRange,
   ConditionalFormatRule,
   DataValidationRule,
-  HistoryState,
   NamedRange,
   SheetChart,
   SheetMerge,
@@ -31,6 +30,13 @@ import {
 import { rewriteFormulaForStructure, translateFormulaReferences } from "./formulaReferences";
 import type { ComputedCellValue } from "./formulaEngine";
 import { compareDeterministicText } from "./filters";
+
+export {
+  commitWorkbookHistory as commitHistory,
+  createWorkbookHistory as createHistory,
+  redoWorkbookHistory as redoHistory,
+  undoWorkbookHistory as undoHistory
+} from "../core/workbook/history";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
@@ -1787,59 +1793,6 @@ export function setActiveSheet(workbook: WorkbookModel, sheetId: string): Workbo
     return workbook;
   }
   return { ...workbook, activeSheetId: sheetId };
-}
-
-// Each history entry pins a workbook snapshot. Snapshots share unchanged sheets
-// and cell values structurally, but the edited sheet's cells record (its keys) is
-// a fresh copy per edit — on a 100k-cell sheet that is megabytes per entry, so an
-// unbounded past grows without limit. 100 undo steps matches Excel's default.
-const MAX_UNDO_HISTORY = 100;
-
-export function createHistory(initial: WorkbookModel): HistoryState {
-  return {
-    past: [],
-    present: initial,
-    future: []
-  };
-}
-
-export function commitHistory(history: HistoryState, present: WorkbookModel): HistoryState {
-  if (history.present === present) {
-    return history;
-  }
-
-  const past = [...history.past, history.present];
-  return {
-    past: past.length > MAX_UNDO_HISTORY ? past.slice(past.length - MAX_UNDO_HISTORY) : past,
-    present,
-    future: []
-  };
-}
-
-export function undoHistory(history: HistoryState): HistoryState {
-  const previous = history.past.at(-1);
-  if (!previous) {
-    return history;
-  }
-
-  return {
-    past: history.past.slice(0, -1),
-    present: previous,
-    future: [history.present, ...history.future]
-  };
-}
-
-export function redoHistory(history: HistoryState): HistoryState {
-  const next = history.future[0];
-  if (!next) {
-    return history;
-  }
-
-  return {
-    past: [...history.past, history.present],
-    present: next,
-    future: history.future.slice(1)
-  };
 }
 
 function createSheet(id: string, name: string): SheetModel {
