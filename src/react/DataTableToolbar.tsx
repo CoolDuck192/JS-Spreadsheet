@@ -39,6 +39,7 @@ export function DataTableToolbar<TRow>({
   const permissionReasonId = `${reasonPrefix}-permission-reason`;
   const validationReasonId = `${reasonPrefix}-validation-reason`;
   const exportReasonId = `${reasonPrefix}-export-reason`;
+  const quickToolsId = `${reasonPrefix}-quick-tools`;
   const permissionDenied = selectedCells.some((cell) => {
     const snapshotCell = snapshot.getCell(cell.rowId, cell.columnId);
     return !snapshotCell.editable && snapshotCell.metadata.readOnly !== true;
@@ -97,110 +98,112 @@ export function DataTableToolbar<TRow>({
   }
 
   return (
-    <div className="js-spreadsheet-data-table__toolbar" role="toolbar" aria-label="Data table toolbar">
-      <button type="button" aria-label="Undo" disabled={!snapshot.canUndo} onClick={() => void run({ type: "undo" })}>
-        Undo
-      </button>
-      <button type="button" aria-label="Redo" disabled={!snapshot.canRedo} onClick={() => void run({ type: "redo" })}>
-        Redo
-      </button>
-      <button type="button" aria-label="Refresh" onClick={() => void session.refresh()}>Refresh</button>
-      <button type="button" aria-label="Export CSV" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("csv")}>Export CSV</button>
-      <button type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
-      {!exportState.enabled ? <span id={exportReasonId}>{exportState.reason}</span> : null}
-      <span>{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
-      <button type="button" aria-label="Quick tools" aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
-        Quick tools
-      </button>
-      {offsetPage ? (
-        <span>
+    <>
+      <div className="js-spreadsheet-data-table__toolbar" role="toolbar" aria-label="Data table toolbar">
+        <button type="button" aria-label="Undo" disabled={!snapshot.canUndo} onClick={() => void run({ type: "undo" })}>
+          Undo
+        </button>
+        <button type="button" aria-label="Redo" disabled={!snapshot.canRedo} onClick={() => void run({ type: "redo" })}>
+          Redo
+        </button>
+        <button type="button" aria-label="Refresh" onClick={() => void session.refresh()}>Refresh</button>
+        <button type="button" aria-label="Export CSV" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("csv")}>Export CSV</button>
+        <button type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
+        {!exportState.enabled ? <span id={exportReasonId}>{exportState.reason}</span> : null}
+        <span>{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
+        <button type="button" aria-label="Quick tools" aria-controls={quickToolsId} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
+          Quick tools
+        </button>
+        {offsetPage ? (
+          <span>
+            <button
+              type="button"
+              aria-label="Previous page"
+              disabled={offsetPage.offset === 0}
+              onClick={() => void run({
+                type: "set-pagination",
+                pagination: { ...offsetPage, offset: Math.max(0, offsetPage.offset - offsetPage.limit) }
+              })}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              aria-label="Next page"
+              disabled={snapshot.pageInfo.kind === "offset" && !snapshot.pageInfo.hasMore}
+              onClick={() => void run({
+                type: "set-pagination",
+                pagination: { ...offsetPage, offset: offsetPage.offset + offsetPage.limit }
+              })}
+            >
+              Next
+            </button>
+          </span>
+        ) : null}
+        {cursorPage ? (
+          <span>
+            <button
+              type="button"
+              aria-label="Previous cursor page"
+              disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.previousCursor}
+              onClick={() => void run({
+                type: "set-pagination",
+                pagination: {
+                  kind: "cursor",
+                  cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.previousCursor : undefined,
+                  limit: cursorPage.limit
+                }
+              })}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              aria-label="Next cursor page"
+              disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.nextCursor}
+              onClick={() => void run({
+                type: "set-pagination",
+                pagination: {
+                  kind: "cursor",
+                  cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.nextCursor : undefined,
+                  limit: cursorPage.limit
+                }
+              })}
+            >
+              Next
+            </button>
+          </span>
+        ) : null}
+        {infinitePage ? (
           <button
             type="button"
-            aria-label="Previous page"
-            disabled={offsetPage.offset === 0}
-            onClick={() => void run({
-              type: "set-pagination",
-              pagination: { ...offsetPage, offset: Math.max(0, offsetPage.offset - offsetPage.limit) }
-            })}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            aria-label="Next page"
-            disabled={snapshot.pageInfo.kind === "offset" && !snapshot.pageInfo.hasMore}
-            onClick={() => void run({
-              type: "set-pagination",
-              pagination: { ...offsetPage, offset: offsetPage.offset + offsetPage.limit }
-            })}
-          >
-            Next
-          </button>
-        </span>
-      ) : null}
-      {cursorPage ? (
-        <span>
-          <button
-            type="button"
-            aria-label="Previous cursor page"
-            disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.previousCursor}
+            aria-label="Load more rows"
+            disabled={snapshot.pageInfo.kind !== "infinite" || !snapshot.pageInfo.nextCursor}
             onClick={() => void run({
               type: "set-pagination",
               pagination: {
-                kind: "cursor",
-                cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.previousCursor : undefined,
-                limit: cursorPage.limit
+                kind: "infinite",
+                after: snapshot.pageInfo.kind === "infinite" ? snapshot.pageInfo.nextCursor : undefined,
+                limit: infinitePage.limit
               }
             })}
           >
-            Previous
+            Load more
           </button>
-          <button
-            type="button"
-            aria-label="Next cursor page"
-            disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.nextCursor}
-            onClick={() => void run({
-              type: "set-pagination",
-              pagination: {
-                kind: "cursor",
-                cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.nextCursor : undefined,
-                limit: cursorPage.limit
-              }
-            })}
-          >
-            Next
-          </button>
+        ) : null}
+        <span aria-label="Table row total">
+          {snapshot.totalRowCount.kind === "known"
+            ? `${snapshot.totalRowCount.value} total rows`
+            : "Total rows unknown"}
         </span>
-      ) : null}
-      {infinitePage ? (
-        <button
-          type="button"
-          aria-label="Load more rows"
-          disabled={snapshot.pageInfo.kind !== "infinite" || !snapshot.pageInfo.nextCursor}
-          onClick={() => void run({
-            type: "set-pagination",
-            pagination: {
-              kind: "infinite",
-              after: snapshot.pageInfo.kind === "infinite" ? snapshot.pageInfo.nextCursor : undefined,
-              limit: infinitePage.limit
-            }
-          })}
-        >
-          Load more
-        </button>
-      ) : null}
-      <span aria-label="Table row total">
-        {snapshot.totalRowCount.kind === "known"
-          ? `${snapshot.totalRowCount.value} total rows`
-          : "Total rows unknown"}
-      </span>
-      {hiddenColumns.map((column) => (
-        <button key={column.id} type="button" aria-label={`Show column ${columnLabel(column)}`} onClick={() => onShowColumn(column.id)}>
-          Show {columnLabel(column)}
-        </button>
-      ))}
+        {hiddenColumns.map((column) => (
+          <button key={column.id} type="button" aria-label={`Show column ${columnLabel(column)}`} onClick={() => onShowColumn(column.id)}>
+            Show {columnLabel(column)}
+          </button>
+        ))}
+      </div>
       {quickToolsOpen ? (
-        <div className="js-spreadsheet-data-table__quick-tools" aria-label="Quick tools drawer">
+        <div id={quickToolsId} className="js-spreadsheet-data-table__quick-tools" aria-label="Quick tools drawer">
           <label>
             Number format
             <select aria-label="Number format" value={numberFormat} onChange={(event) => setNumberFormat(event.currentTarget.value)}>
@@ -241,6 +244,6 @@ export function DataTableToolbar<TRow>({
           </button>
         </div>
       ) : null}
-    </div>
+    </>
   );
 }

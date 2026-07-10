@@ -144,8 +144,9 @@ function migrateStringCellRecord(
   if (!isRecord(value)) return null;
   const result: Record<string, string> = {};
   for (const [address, item] of Object.entries(value)) {
-    if (typeof item !== "string" || !cellAddressInBounds(address, bounds)) return null;
-    result[address] = item;
+    const canonicalAddress = canonicalCellAddressInBounds(address, bounds);
+    if (typeof item !== "string" || !canonicalAddress || Object.hasOwn(result, canonicalAddress)) return null;
+    result[canonicalAddress] = item;
   }
   return result;
 }
@@ -159,8 +160,9 @@ function migrateValidations(
   const result: Record<string, DataValidationRule> = {};
   for (const [address, item] of Object.entries(value)) {
     const rule = migrateValidationRule(item);
-    if (!rule || !cellAddressInBounds(address, bounds)) return null;
-    result[address] = rule;
+    const canonicalAddress = canonicalCellAddressInBounds(address, bounds);
+    if (!rule || !canonicalAddress || Object.hasOwn(result, canonicalAddress)) return null;
+    result[canonicalAddress] = rule;
   }
   return result;
 }
@@ -570,11 +572,12 @@ function coordinateInBounds(coordinate: CellRange["start"], sheet: SheetBounds):
     && coordinate.column < sheet.columnCount;
 }
 
-function cellAddressInBounds(address: string, sheet: SheetBounds): boolean {
+function canonicalCellAddressInBounds(address: string, sheet: SheetBounds): string | null {
   try {
-    return coordinateInBounds(parseCellAddress(address), sheet);
+    const coordinate = parseCellAddress(address);
+    return coordinateInBounds(coordinate, sheet) ? formatCellAddress(coordinate) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

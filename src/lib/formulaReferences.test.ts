@@ -247,7 +247,7 @@ describe("formulaReferences", () => {
 
   it("does not reject external- or 3-D-shaped text inside formula string literals", () => {
     expect(rewriteFormulaForRectangularRowEdit(
-      '=IF(B2,"[note] ratio a:b! and ""[escaped]""","")',
+      '=IF(B2,"\'[Book.xlsx]Data\'!B2 and \'Jan\'\'A\':\'Mar\'\'B\'!B2 and ""[escaped]""","")',
       {
         formulaSheetId: "Data",
         editedSheetId: "Data",
@@ -260,7 +260,51 @@ describe("formulaReferences", () => {
       }
     )).toEqual({
       ok: true,
-      formula: '=IF(B3,"[note] ratio a:b! and ""[escaped]""","")'
+      formula: '=IF(B3,"\'[Book.xlsx]Data\'!B2 and \'Jan\'\'A\':\'Mar\'\'B\'!B2 and ""[escaped]""","")'
+    });
+  });
+
+  it("preserves structured table references while rewriting nearby cell references", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      row: 1,
+      count: 1,
+      operation: "insert" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(Sales[Quantity])+B2", context)).toEqual({
+      ok: true,
+      formula: "=SUM(Sales[Quantity])+B3"
+    });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM([@Quantity])+C2", context)).toEqual({
+      ok: true,
+      formula: "=SUM([@Quantity])+C3"
+    });
+  });
+
+  it.each([
+    "Sales[B2]",
+    "[@B2]",
+    "Sales[[#Data],[B2]]"
+  ])("does not rewrite cell-shaped labels inside structured reference %s", (structuredReference) => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      row: 1,
+      count: 1,
+      operation: "insert" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit(`=SUM(${structuredReference})+C2`, context)).toEqual({
+      ok: true,
+      formula: `=SUM(${structuredReference})+C3`
     });
   });
 
@@ -276,6 +320,8 @@ describe("formulaReferences", () => {
       sheetBounds: { rowCount: 100, columnCount: 26 }
     };
     expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    expect(rewriteFormulaForRectangularRowEdit("=[Book.xlsx]Data!B2", context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
     expect(rewriteFormulaForRectangularRowEdit("=SUM(Jan:Mar!B2)", context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });

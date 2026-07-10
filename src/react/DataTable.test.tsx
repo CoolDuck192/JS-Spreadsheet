@@ -600,6 +600,38 @@ describe("DataTable", () => {
     expect(screen.getByText("Formula service is not configured")).toBeVisible();
   });
 
+  it("owns simultaneous quick-tools drawers outside each toolbar overflow box", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <DataTable aria-label="First tools" rows={employees} columns={columns} getRowId={getRowId} />
+        <DataTable aria-label="Second tools" rows={employees} columns={columns} getRowId={getRowId} />
+      </>
+    );
+    const roots = [...document.querySelectorAll<HTMLElement>(".js-spreadsheet-data-table")];
+    const [firstRoot, secondRoot] = roots;
+    const firstToolbar = within(firstRoot).getByRole("toolbar", { name: "Data table toolbar" });
+    const secondToolbar = within(secondRoot).getByRole("toolbar", { name: "Data table toolbar" });
+    const firstToggle = within(firstToolbar).getByRole("button", { name: "Quick tools" });
+    const secondToggle = within(secondToolbar).getByRole("button", { name: "Quick tools" });
+
+    await user.click(firstToggle);
+    await user.click(secondToggle);
+
+    const firstDrawer = within(firstRoot).getByLabelText("Quick tools drawer");
+    const secondDrawer = within(secondRoot).getByLabelText("Quick tools drawer");
+    expect(firstToolbar).not.toContainElement(firstDrawer);
+    expect(secondToolbar).not.toContainElement(secondDrawer);
+    expect(firstToggle).toHaveAttribute("aria-controls", firstDrawer.id);
+    expect(secondToggle).toHaveAttribute("aria-controls", secondDrawer.id);
+    expect(firstDrawer.id).not.toBe(secondDrawer.id);
+
+    await user.type(within(firstDrawer).getByLabelText("Fill color"), "#111111");
+    await user.type(within(secondDrawer).getByLabelText("Fill color"), "#222222");
+    expect(within(firstDrawer).getByLabelText("Fill color")).toHaveValue("#111111");
+    expect(within(secondDrawer).getByLabelText("Fill color")).toHaveValue("#222222");
+  });
+
   it("isolates two simultaneous DataTable instances", async () => {
     const user = userEvent.setup();
     render(

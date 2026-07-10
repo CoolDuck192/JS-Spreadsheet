@@ -46,6 +46,7 @@
   min-height: 42px;
   padding: 6px 8px;
   overflow-x: auto;
+  overflow-y: hidden;
   color: var(--js-spreadsheet-text);
   background: var(--js-spreadsheet-chrome);
   border-block-end: 1px solid var(--js-spreadsheet-border);
@@ -351,17 +352,18 @@
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__quick-tools {
-  position: fixed;
+  position: absolute;
   inset: auto 8px 8px auto;
   z-index: 30;
   display: grid;
   grid-template-columns: repeat(2, minmax(150px, 1fr));
   gap: 8px;
   width: min(440px, calc(100cqi - 16px));
-  max-height: min(420px, calc(100dvh - 16px));
+  max-height: min(420px, calc(100dvh - 16px), calc(100% - 16px));
   padding: 10px;
   overflow-x: hidden;
   overflow-y: auto;
+  pointer-events: auto;
   color: var(--js-spreadsheet-text);
   background: var(--js-spreadsheet-surface);
   border: 1px solid var(--js-spreadsheet-border-strong);

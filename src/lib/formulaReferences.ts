@@ -67,6 +67,7 @@ const CELL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?)([A-Z]+)(\$?)([1-9]\d*)/gi;
 const LOCAL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?[A-Z]+\$?[1-9]\d*)(?::(\$?[A-Z]+\$?[1-9]\d*))?/gi;
 const FORMULA_IDENTIFIER_START_PATTERN = /^[\p{ID_Start}_]$/u;
 const FORMULA_IDENTIFIER_CONTINUE_PATTERN = /^[\p{ID_Continue}_.]$/u;
+const EXTERNAL_WORKBOOK_QUALIFIER_PATTERN = /(?:'(?:[^']|'')*\[[^\]]+\](?:[^']|'')*'|\[[^\]]+\][\p{ID_Start}_][\p{ID_Continue}_.]*)!/u;
 const MAX_FORMULA_COLUMN_INDEX = columnNameToIndex("XFD");
 
 export function rewriteFormulaForStructure(formula: string, context: FormulaStructureContext): string {
@@ -110,7 +111,7 @@ function containsUnsupportedRectangularReference(formula: string): boolean {
   let unsupported = false;
   transformUnquotedFormulaSegments(formula, (segment) => {
     if (
-      /\[[^\]]+\]/.test(segment)
+      EXTERNAL_WORKBOOK_QUALIFIER_PATTERN.test(segment)
       || /(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*):(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*)!/u.test(segment)
     ) {
       unsupported = true;
@@ -219,6 +220,10 @@ function tokenizeFormulaReferences(formula: string): FormulaToken[] {
       index = skipQuotedFormulaSegment(formula, index, '"');
       continue;
     }
+    if (formula[index] === "[") {
+      index = skipBracketedFormulaSegment(formula, index);
+      continue;
+    }
 
     const reference = parseFormulaReferenceToken(formula, index);
     if (!reference) {
@@ -241,6 +246,19 @@ function tokenizeFormulaReferences(formula: string): FormulaToken[] {
   }
 
   return tokens;
+}
+
+function skipBracketedFormulaSegment(formula: string, index: number): number {
+  let depth = 0;
+  for (let cursor = index; cursor < formula.length; cursor += 1) {
+    if (formula[cursor] === "[") {
+      depth += 1;
+    } else if (formula[cursor] === "]") {
+      depth -= 1;
+      if (depth === 0) return cursor + 1;
+    }
+  }
+  return formula.length;
 }
 
 function parseFormulaReferenceToken(formula: string, index: number): ParsedFormulaReferenceToken | null {

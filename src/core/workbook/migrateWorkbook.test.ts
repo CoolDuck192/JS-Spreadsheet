@@ -63,6 +63,45 @@ describe("workbook model migration", () => {
     })).toBeNull();
   });
 
+  it("canonicalizes accepted aliases for cell-address keyed metadata", () => {
+    const fixture = createBlankWorkbook();
+    const migrated = migrateWorkbookModel({
+      ...fixture,
+      sheets: [{
+        ...fixture.sheets[0],
+        comments: { " a1 ": "note" },
+        hyperlinks: { b2: "https://example.test" },
+        validations: { " c3 ": { type: "list", values: ["Open", "Closed"] } }
+      }]
+    });
+
+    expect(migrated?.sheets[0]).toMatchObject({
+      comments: { A1: "note" },
+      hyperlinks: { B2: "https://example.test" },
+      validations: { C3: { type: "list", values: ["Open", "Closed"] } }
+    });
+    expect(migrated?.sheets[0].comments).not.toHaveProperty(" a1 ");
+    expect(migrated?.sheets[0].hyperlinks).not.toHaveProperty("b2");
+    expect(migrated?.sheets[0].validations).not.toHaveProperty(" c3 ");
+  });
+
+  it.each([
+    ["comments", { comments: { A1: "first", " a1 ": "second" } }],
+    ["hyperlinks", { hyperlinks: { A1: "https://first.test", a1: "https://second.test" } }],
+    ["validations", {
+      validations: {
+        A1: { type: "list", values: ["First"] },
+        " a1 ": { type: "list", values: ["Second"] }
+      }
+    }]
+  ])("rejects normalized duplicate %s addresses", (_label, sheetPatch) => {
+    const fixture = createBlankWorkbook();
+    expect(migrateWorkbookModel({
+      ...fixture,
+      sheets: [{ ...fixture.sheets[0], ...sheetPatch }]
+    })).toBeNull();
+  });
+
   it("accepts finite text-length bounds supported by the public workbook model", () => {
     const fixture = createBlankWorkbook();
     const migrated = migrateWorkbookModel({
