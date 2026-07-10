@@ -409,9 +409,403 @@ describe("RemoteTableSession", () => {
     await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
     expect(session.getSnapshot().getCell("employee-1", "name").metadata)
       .toEqual({ format: { bold: true } });
+    expect(session.getSnapshot().canUndo).toBe(false);
+    expect(session.getDiagnostics().journalEntries).toBe(0);
 
     session.destroy();
   });
+
+  it("cancels a pending batch, retains tombstone reconciliation, and lets refresh win over a late acknowledgement", async () => {
+    const acknowledgement = createDeferredMutation<Employee>();
+    const refresh = createDeferredResult<QueryResult<Employee>>();
+    let mutationSignal: { aborted: boolean } | undefined;
+    const query = vi.fn(async (request: QueryRequest) => query.mock.calls.length === 1
+      ? offsetResult("1", employees, request)
+      : refresh.promise);
+    const mutate = vi.fn(async (_batch: readonly RemoteMutation[], context: { signal: { aborted: boolean } }) => {
+      mutationSignal = context.signal;
+      return acknowledgement.promise;
+    });
+    let command = 0;
+    const session = createRemoteTableSession({
+      source: createTestRemoteSource({ query, mutate, compareRevisions: numericRevisionComparator }),
+      columns,
+      commandIdFactory: () => `command-${++command}`
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "employee-1", columnId: "name", rawText: "Grace" },
+        { rowId: "employee-1", columnId: "salary", rawText: "120" }
+      ]
+    })).toEqual({ status: "pending", operationId: "command-2" });
+    expect(session.getSnapshot().canUndo).toBe(true);
+    expect(session.getSnapshot().getCell("employee-1", "name").storedValue).toBe("Grace");
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(120);
+
+    expect(await session.undo()).toEqual({ status: "pending", operationId: "command-3" });
+    expect(mutationSignal?.aborted).toBe(true);
+    expect(session.getSnapshot().pendingOperations).toHaveLength(0);
+    expect(session.getSnapshot().canUndo).toBe(false);
+    expect(session.getDiagnostics().journalEntries).toBe(0);
+    await waitForCalls(query, 2);
+
+    const sent = mutate.mock.calls[0][0];
+    acknowledgement.resolve(sent.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: "2",
+      row: { ...employees[0], name: "Grace", salary: 120 },
+      rowVersion: "row-2"
+    })));
+    await Promise.resolve();
+    expect(session.getSnapshot().canUndo).toBe(false);
+    expect(session.getDiagnostics().journalEntries).toBe(0);
+
+    refresh.resolve(offsetResult(
+      "3",
+      [{ ...employees[0], name: "Refreshed", salary: 130 }],
+      query.mock.calls[1][0]
+    ));
+    await waitUntilReady(session);
+    expect(session.getSnapshot().getCell("employee-1", "name").storedValue).toBe("Refreshed");
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(130);
+    expect(session.getSnapshot().pendingOperations).toHaveLength(0);
+
+    session.destroy();
+  });
+
+  it("does not let an abort-ignoring acknowledgement overwrite a completed undo refresh", async () => {
+    const acknowledgement = createDeferredMutation<Employee>();
+    const refresh = createDeferredResult<QueryResult<Employee>>();
+    const compareRevisions = vi.fn(numericRevisionComparator);
+    const query = vi.fn(async (request: QueryRequest) => query.mock.calls.length === 1
+      ? offsetResult("1", employees, request)
+      : refresh.promise);
+    const mutate = vi.fn(async (_batch: readonly RemoteMutation[]) => acknowledgement.promise);
+    const session = createRemoteTableSession({
+      source: createTestRemoteSource({ query, mutate, compareRevisions }),
+      columns
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "salary", rawText: "120" }]
+    })).toMatchObject({ status: "pending" });
+    expect(await session.undo()).toMatchObject({ status: "pending" });
+    await waitForCalls(query, 2);
+
+    refresh.resolve(offsetResult("3", [{ ...employees[0], salary: 130 }], query.mock.calls[1][0]));
+    await waitUntilReady(session);
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(130);
+
+    const sent = mutate.mock.calls[0][0];
+    acknowledgement.resolve(sent.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: "4",
+      row: { ...employees[0], salary: 120 },
+      rowVersion: "row-4"
+    })));
+    await vi.waitFor(() => expect(compareRevisions).toHaveBeenCalledWith("4", "3"));
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(130);
+    expect(session.getSnapshot().canUndo).toBe(false);
+
+    session.destroy();
+  });
+
+  it("undoes an acknowledged value batch with original values and latest row versions", async () => {
+    let serverRow = employees[0];
+    let serverRevision = "1";
+    let rowVersion = "row-1";
+    const compensation = createDeferredMutation<Employee>();
+    const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+      if (mutate.mock.calls.length === 1) {
+        serverRow = { ...serverRow, name: "Grace", salary: 120 };
+        serverRevision = "3";
+        rowVersion = "row-3";
+        return batch.map((mutation, index) => ({
+          clientMutationId: mutation.clientMutationId,
+          status: "committed" as const,
+          revision: String(index + 2),
+          row: serverRow,
+          rowVersion: `row-${index + 2}`
+        }));
+      }
+      return compensation.promise;
+    });
+    let command = 0;
+    const source = createTestRemoteSource<Employee>({
+      capabilities: unpaginatedUndoCapabilities(),
+      paginationMode: "none",
+      query: async () => unpaginatedResult(serverRevision, [serverRow]),
+      mutate,
+      compareRevisions: numericRevisionComparator,
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return { storedValue: value, evaluatedValue: value, rowVersion };
+      }
+    });
+    const session = createRemoteTableSession({
+      source,
+      columns,
+      commandIdFactory: () => `command-${++command}`
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "employee-1", columnId: "name", rawText: "Grace" },
+        { rowId: "employee-1", columnId: "salary", rawText: "120" }
+      ]
+    })).toEqual({ status: "pending", operationId: "command-2" });
+    await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+    expect(session.getDiagnostics().journalEntries).toBe(1);
+
+    serverRevision = "4";
+    rowVersion = "row-4";
+    await session.refresh();
+
+    expect(await session.undo()).toEqual({ status: "pending", operationId: "command-4" });
+    expect(mutate).toHaveBeenCalledTimes(2);
+    const compensatingBatch = mutate.mock.calls[1][0];
+    expect(compensatingBatch).toEqual([
+      expect.objectContaining({
+        kind: "cell-value",
+        rowId: "employee-1",
+        columnId: "name",
+        baseRevision: "3",
+        rowVersion: "row-3",
+        rawText: "Ada",
+        parsedValue: "Ada"
+      }),
+      expect.objectContaining({
+        kind: "cell-value",
+        rowId: "employee-1",
+        columnId: "salary",
+        baseRevision: "3",
+        rowVersion: "row-3",
+        rawText: "100",
+        parsedValue: 100
+      })
+    ]);
+    expect(session.getDiagnostics().journalEntries).toBe(1);
+    expect(session.getSnapshot().canUndo).toBe(false);
+
+    serverRow = employees[0];
+    serverRevision = "5";
+    rowVersion = "row-5";
+    compensation.resolve(compensatingBatch.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: serverRevision,
+      row: serverRow,
+      rowVersion
+    })));
+    await vi.waitFor(() => expect(session.getDiagnostics().journalEntries).toBe(0));
+    expect(session.getSnapshot().getCell("employee-1", "name").storedValue).toBe("Ada");
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(100);
+
+    session.destroy();
+  });
+
+  it("undoes acknowledged metadata with complete original metadata objects", async () => {
+    const originals: Record<string, TableCellMetadata> = {
+      name: { comment: "name-original", format: { italic: true } },
+      department: { comment: "department-original", readOnly: true }
+    };
+    let metadata = structuredClone(originals);
+    let serverRevision = "1";
+    let rowVersion = "row-1";
+    const compensation = createDeferredMutation<Employee>();
+    const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+      if (mutate.mock.calls.length === 1) {
+        for (const mutation of batch) {
+          if (mutation.kind === "cell-metadata") metadata[mutation.columnId] = mutation.metadata;
+        }
+        serverRevision = "2";
+        rowVersion = "row-2";
+        return batch.map((mutation) => ({
+          clientMutationId: mutation.clientMutationId,
+          status: "committed" as const,
+          revision: serverRevision,
+          row: employees[0],
+          rowVersion
+        }));
+      }
+      return compensation.promise;
+    });
+    const source = createTestRemoteSource<Employee>({
+      capabilities: unpaginatedUndoCapabilities(),
+      paginationMode: "none",
+      query: async () => unpaginatedResult(serverRevision, employees),
+      mutate,
+      compareRevisions: numericRevisionComparator,
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return {
+          storedValue: value,
+          evaluatedValue: value,
+          metadata: structuredClone(metadata[columnId] ?? {}),
+          rowVersion
+        };
+      }
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "update-cell-metadata",
+      updates: [
+        { rowId: "employee-1", columnId: "name", patch: { comment: "changed", format: { bold: true } } },
+        { rowId: "employee-1", columnId: "department", patch: { comment: "changed-too", readOnly: false } }
+      ]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+
+    serverRevision = "3";
+    rowVersion = "row-3";
+    await session.refresh();
+
+    expect(await session.undo()).toMatchObject({ status: "pending" });
+    const compensatingBatch = mutate.mock.calls[1][0];
+    expect(compensatingBatch).toEqual([
+      expect.objectContaining({
+        kind: "cell-metadata",
+        columnId: "name",
+        baseRevision: "2",
+        rowVersion: "row-2",
+        metadata: originals.name
+      }),
+      expect.objectContaining({
+        kind: "cell-metadata",
+        columnId: "department",
+        baseRevision: "2",
+        rowVersion: "row-2",
+        metadata: originals.department
+      })
+    ]);
+    metadata = structuredClone(originals);
+    serverRevision = "3";
+    rowVersion = "row-3";
+    compensation.resolve(compensatingBatch.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: serverRevision,
+      row: employees[0],
+      rowVersion
+    })));
+    await vi.waitFor(() => expect(session.getDiagnostics().journalEntries).toBe(0));
+    expect(session.getSnapshot().getCell("employee-1", "name").metadata).toEqual(originals.name);
+    expect(session.getSnapshot().getCell("employee-1", "department").metadata).toEqual(originals.department);
+
+    session.destroy();
+  });
+
+  it.each(["rejected", "conflict", "uncertain"] as const)(
+    "keeps %s compensation retryable and never advertises remote redo",
+    async (failure) => {
+      let serverRow = employees[0];
+      let revision = "1";
+      const mutate = vi.fn(async (
+        batch: readonly RemoteMutation[]
+      ): Promise<readonly RemoteMutationResult<Employee>[]> => {
+        if (mutate.mock.calls.length === 1) {
+          serverRow = { ...serverRow, salary: 120 };
+          revision = "2";
+          return batch.map((mutation) => ({
+            clientMutationId: mutation.clientMutationId,
+            status: "committed" as const,
+            revision,
+            row: serverRow,
+            rowVersion: "row-2"
+          }));
+        }
+        if (failure === "uncertain") throw new Error("network outcome unknown");
+        if (failure === "conflict" && mutate.mock.calls.length === 2) {
+          return batch.map((mutation) => ({
+            clientMutationId: mutation.clientMutationId,
+            status: "conflict" as const,
+            revision: "3",
+            current: { ...serverRow, salary: 125 },
+            rowVersion: "row-3"
+          }));
+        }
+        if (failure === "conflict") {
+          serverRow = employees[0];
+          revision = "4";
+          return batch.map((mutation) => ({
+            clientMutationId: mutation.clientMutationId,
+            status: "committed" as const,
+            revision,
+            row: serverRow,
+            rowVersion: "row-4"
+          }));
+        }
+        return batch.map((mutation) => ({
+          clientMutationId: mutation.clientMutationId,
+          status: "rejected" as const,
+          revision,
+          issues: [{ code: "UNDO_REJECTED", message: "Retry later" }]
+        }));
+      });
+      const source = createTestRemoteSource<Employee>({
+        capabilities: unpaginatedUndoCapabilities(),
+        paginationMode: "none",
+        query: async () => unpaginatedResult(revision, [serverRow]),
+        mutate,
+        compareRevisions: numericRevisionComparator,
+        readCell(row, columnId) {
+          const value = row[columnId as keyof Employee];
+          return { storedValue: value, evaluatedValue: value, rowVersion: revision === "1" ? "row-1" : "row-2" };
+        }
+      });
+      const session = createRemoteTableSession({ source, columns });
+      session.start();
+      await waitUntilReady(session);
+
+      expect(await session.undo()).toMatchObject({ status: "rejected", reason: "unsupported" });
+      expect(await session.redo()).toMatchObject({ status: "rejected", reason: "unsupported" });
+      expect(await session.dispatch({
+        type: "edit-cells",
+        edits: [{ rowId: "employee-1", columnId: "salary", rawText: "120" }]
+      })).toMatchObject({ status: "pending" });
+      await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+
+      expect(await session.undo()).toMatchObject({ status: "pending" });
+      await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+      expect(session.getDiagnostics().journalEntries).toBe(1);
+      if (failure === "conflict") {
+        const conflict = session.getSnapshot().conflicts[0];
+        expect(conflict).toBeDefined();
+        expect(await session.dispatch({
+          type: "retry-with-revision",
+          operationId: conflict.operationId,
+          rowId: conflict.rowId,
+          expectedRevision: conflict.revision
+        })).toMatchObject({ status: "pending" });
+        expect(mutate.mock.calls[2][0][0]).toMatchObject({
+          baseRevision: "3",
+          rowVersion: "row-3"
+        });
+        await vi.waitFor(() => expect(session.getDiagnostics().journalEntries).toBe(0));
+        expect(session.getSnapshot().canUndo).toBe(false);
+      }
+      if (failure === "uncertain") expect(session.getSnapshot().pendingOperations).toHaveLength(1);
+      expect(session.getSnapshot().canRedo).toBe(false);
+      expect(await session.redo()).toMatchObject({ status: "rejected", reason: "unsupported" });
+
+      session.destroy();
+    }
+  );
 
   it("starts and stops the declared remote subscription with the session lifecycle", async () => {
     let listener: ((event: RemoteSourceEvent<Employee>) => void) | undefined;
@@ -721,6 +1115,14 @@ function createDeferredMutation<TRow>() {
   return { promise, resolve };
 }
 
+function createDeferredResult<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 async function createConflictHarness() {
   let queryRevision = "1";
   let queryRow = employees[0];
@@ -780,6 +1182,14 @@ function loadedRowCapabilities(): TableCapabilities {
     pagination: { ...loaded, modes: ["offset"] },
     edit: false, bulkEdit: false, metadata: false, validation: false,
     formula: "none", subscription: false, undo: false, export: false
+  };
+}
+
+function unpaginatedUndoCapabilities(): TableCapabilities {
+  return {
+    ...defaultRemoteCapabilities(),
+    pagination: false,
+    subscription: false
   };
 }
 

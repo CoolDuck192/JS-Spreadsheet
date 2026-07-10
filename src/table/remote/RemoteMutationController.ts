@@ -29,7 +29,19 @@ export type RemoteMutationControllerOptions<TRow> = {
   overlays: OptimisticOverlayStore;
   getActiveQuery(): QueryRequest;
   onChange(): void;
+  onAcknowledged?(acknowledgement: RemoteMutationAcknowledgement): void;
   limits?: { maxPendingOperations?: number; maxPendingCells?: number };
+};
+
+export type RemoteMutationAcknowledgement = {
+  operationId: string;
+  revision: string;
+  rowVersions: readonly { rowId: string; columnId: string; rowVersion?: string }[];
+};
+
+export type RemoteMutationExecutionOptions = {
+  abortController?: AbortController;
+  baseRevision?: string;
 };
 
 type MutationBatch = {
@@ -40,6 +52,13 @@ type MutationBatch = {
   startedAt: number;
   abortController: AbortController;
   status: "pending" | "uncertain";
+  cancelled: boolean;
+  cancelledAtQueryGeneration: number;
+  authoritativeRefreshCompleted: boolean;
+};
+
+export type RemoteMutationCancellation = {
+  markAuthoritativeRefreshCompleted(): void;
 };
 
 const DEFAULT_MAX_PENDING_OPERATIONS = 100;
@@ -51,6 +70,7 @@ export class RemoteMutationController<TRow> {
   private readonly overlays: OptimisticOverlayStore;
   private readonly getActiveQuery: () => QueryRequest;
   private readonly onChange: () => void;
+  private readonly onAcknowledged: ((acknowledgement: RemoteMutationAcknowledgement) => void) | undefined;
   private readonly maxPendingOperations: number;
   private readonly maxPendingCells: number;
   private readonly batches = new Map<string, MutationBatch>();
@@ -66,6 +86,7 @@ export class RemoteMutationController<TRow> {
     this.overlays = options.overlays;
     this.getActiveQuery = options.getActiveQuery;
     this.onChange = options.onChange;
+    this.onAcknowledged = options.onAcknowledged;
     this.maxPendingOperations = positiveLimit(
       options.limits?.maxPendingOperations,
       DEFAULT_MAX_PENDING_OPERATIONS,
@@ -80,7 +101,8 @@ export class RemoteMutationController<TRow> {
 
   async execute(
     operationId: string,
-    prepared: readonly PreparedRemoteMutation[]
+    prepared: readonly PreparedRemoteMutation[],
+    options: RemoteMutationExecutionOptions = {}
   ): Promise<CommandResult<TRow>> {
     const preflight = this.preflight(operationId, prepared);
     if (preflight) return preflight;
@@ -92,7 +114,7 @@ export class RemoteMutationController<TRow> {
         changed: false
       };
     }
-    const revision = this.queryController.getCurrentRevision()!;
+    const revision = options.baseRevision ?? this.queryController.getCurrentRevision()!;
 
     const mutations: RemoteMutation[] = prepared.map((item, index) => {
       const clientMutationId = `${operationId}:${index}`;
@@ -124,7 +146,7 @@ export class RemoteMutationController<TRow> {
           }
         : { ...base, kind: "cell-metadata", metadata: item.metadata };
     });
-    const abortController = new AbortController();
+    const abortController = options.abortController ?? new AbortController();
     const batch: MutationBatch = {
       operationId,
       mutationIds: mutations.map((mutation) => mutation.clientMutationId),
@@ -132,7 +154,10 @@ export class RemoteMutationController<TRow> {
       feature: prepared.some((mutation) => mutation.kind === "cell-metadata") ? "metadata" : "edit",
       startedAt: Date.now(),
       abortController,
-      status: "pending"
+      status: "pending",
+      cancelled: false,
+      cancelledAtQueryGeneration: 0,
+      authoritativeRefreshCompleted: false
     };
     this.batches.set(operationId, batch);
     this.publish();
@@ -144,8 +169,16 @@ export class RemoteMutationController<TRow> {
         operationId
       });
     } catch (error) {
-      if (this.destroyed || abortController.signal.aborted || isAbortError(error)) {
+      if (this.destroyed) {
         this.removeBatch(batch, this.destroyed);
+        return unsupported("Remote mutation was aborted");
+      }
+      if (batch.cancelled) {
+        this.removeBatch(batch, true);
+        return unsupported("Remote mutation was cancelled for undo");
+      }
+      if (abortController.signal.aborted || isAbortError(error)) {
+        this.removeBatch(batch, false);
         return unsupported("Remote mutation was aborted");
       }
       for (const mutationId of batch.mutationIds) this.overlays.updateStatus(mutationId, "uncertain");
@@ -154,7 +187,12 @@ export class RemoteMutationController<TRow> {
       return { status: "pending", operationId };
     }
 
-    if (this.destroyed || abortController.signal.aborted) {
+    if (this.destroyed) {
+      this.removeBatch(batch, true);
+      return unsupported("Remote mutation was aborted");
+    }
+    if (batch.cancelled) return this.reconcileCancelledBatch(batch, results);
+    if (abortController.signal.aborted) {
       this.removeBatch(batch, true);
       return unsupported("Remote mutation was aborted");
     }
@@ -179,6 +217,10 @@ export class RemoteMutationController<TRow> {
       if (!overlay) {
         this.reconciliationTombstones.delete(result.clientMutationId);
         continue;
+      }
+      if ("rowVersion" in result && result.rowVersion !== undefined) {
+        const attempt = this.attempts.get(result.clientMutationId);
+        if (attempt) this.attempts.set(result.clientMutationId, { ...attempt, rowVersion: result.rowVersion });
       }
       const comparison = this.source.compareRevisions(
         result.revision,
@@ -244,6 +286,37 @@ export class RemoteMutationController<TRow> {
       }
     }
 
+    const acknowledged = !invalidated && !conflictResult && issues.length === 0
+      && ordered.every((result) => result.status === "committed" || result.status === "corrected");
+    if (acknowledged) {
+      const latestRowVersions = new Map<string, { revision: string; rowVersion: string }>();
+      ordered.forEach((result, index) => {
+        if (
+          (result.status !== "committed" && result.status !== "corrected")
+          || result.rowVersion === undefined
+        ) return;
+        const rowId = batch.cells[index].rowId;
+        const current = latestRowVersions.get(rowId);
+        if (
+          !current
+          || this.source.compareRevisions(result.revision, current.revision) !== "older"
+        ) {
+          latestRowVersions.set(rowId, { revision: result.revision, rowVersion: result.rowVersion });
+        }
+      });
+      try {
+        this.onAcknowledged?.({
+          operationId,
+          revision: latestRevision,
+          rowVersions: batch.cells.map((cell) => {
+            const rowVersion = latestRowVersions.get(cell.rowId)?.rowVersion;
+            return { ...cell, ...(rowVersion === undefined ? {} : { rowVersion }) };
+          })
+        });
+      } catch {
+        // Journal callbacks never alter remote mutation reconciliation.
+      }
+    }
     this.batches.delete(operationId);
     this.issues = issues;
     if (invalidated || (committedRows.length > 0 && queryIsProjected(this.getActiveQuery()))) {
@@ -269,6 +342,27 @@ export class RemoteMutationController<TRow> {
 
   getOverlay(rowId: string, columnId: string) {
     return this.overlays.getLatest(rowId, columnId);
+  }
+
+  cancelOperation(operationId: string): RemoteMutationCancellation | null {
+    const batch = this.batches.get(operationId);
+    if (!batch) return null;
+    batch.cancelled = true;
+    batch.cancelledAtQueryGeneration = this.queryController.getDiagnostics().generation;
+    batch.abortController.abort();
+    for (const mutationId of batch.mutationIds) {
+      this.reconciliationTombstones.add(mutationId);
+      this.overlays.remove(mutationId);
+      this.conflicts.delete(mutationId);
+      this.attempts.delete(mutationId);
+    }
+    this.batches.delete(operationId);
+    this.publish();
+    return {
+      markAuthoritativeRefreshCompleted: () => {
+        batch.authoritativeRefreshCompleted = true;
+      }
+    };
   }
 
   preflight(
@@ -441,6 +535,37 @@ export class RemoteMutationController<TRow> {
     }
     this.batches.delete(batch.operationId);
     if (!silent) this.publish();
+  }
+
+  private reconcileCancelledBatch(
+    batch: MutationBatch,
+    results: readonly RemoteMutationResult<TRow>[]
+  ): CommandResult<TRow> {
+    this.removeBatch(batch, true);
+    const query = this.queryController.getSnapshot();
+    const queryGeneration = this.queryController.getDiagnostics().generation;
+    const authoritativeRefreshCompleted = batch.authoritativeRefreshCompleted
+      || (queryGeneration >= batch.cancelledAtQueryGeneration + 2 && query.status !== "loading");
+    const protocolIssue = validateResults(batch.mutationIds, results);
+    if (protocolIssue) {
+      this.issues = [{ code: "REMOTE_MUTATION_PROTOCOL_ERROR", message: protocolIssue }];
+      return validationIssue("REMOTE_MUTATION_PROTOCOL_ERROR", protocolIssue);
+    }
+    const byId = new Map(results.map((result) => [result.clientMutationId, result]));
+    for (const mutationId of batch.mutationIds) {
+      const result = byId.get(mutationId)!;
+      const currentRevision = this.queryController.getCurrentRevision();
+      const comparison = currentRevision
+        ? this.source.compareRevisions(result.revision, currentRevision)
+        : "newer";
+      if (comparison === "older" || comparison === "unknown") continue;
+      if (authoritativeRefreshCompleted) continue;
+      this.queryController.noteCurrentRevision(result.revision, false);
+      const row = authoritativeRow(result);
+      if (row) this.queryController.applyCanonicalRows([row], result.revision, false);
+    }
+    if (!authoritativeRefreshCompleted) this.queryController.publishCanonicalState();
+    return unsupported("Remote mutation was cancelled for undo");
   }
 
   private publish(): void {

@@ -30,7 +30,7 @@ defineTableSessionContract("remote", async () => {
     capabilities: mutableCapabilities(),
     paginationMode: "none",
     mutationMode: "versioned",
-    undoMode: "none",
+    undoMode: "compensating",
     compareRevisions: (candidate, current) => candidate === current
       ? "equal"
       : Number(candidate.slice(1)) > Number(current.slice(1)) ? "newer" : "older",
@@ -98,6 +98,13 @@ defineTableSessionContract("remote", async () => {
       type: "edit-cells",
       edits: [{ rowId: "row-1", columnId: "amount", rawText: "20" }]
     }),
+    undo: async () => {
+      await session.dispatch({
+        type: "edit-cells",
+        edits: [{ rowId: "row-1", columnId: "amount", rawText: "30" }]
+      });
+      return session.undo();
+    },
     export: async () => {
       await vi.waitFor(() => expect(session.getSnapshot().status.phase).toBe("ready"));
       await session.export({ format: "csv", scope: "completeDataset" });
@@ -174,7 +181,8 @@ function mutableCapabilities(): TableCapabilities {
     bulkEdit: { ...complete },
     metadata: { ...complete },
     validation: { ...complete },
-    formula: "server"
+    formula: "server",
+    undo: { ...complete }
   };
 }
 

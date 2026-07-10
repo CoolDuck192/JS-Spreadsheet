@@ -31,8 +31,14 @@ import {
 } from "./OptimisticOverlayStore";
 import {
   RemoteMutationController,
-  type PreparedRemoteMutation
+  type PreparedRemoteMutation,
+  type RemoteMutationAcknowledgement
 } from "./RemoteMutationController";
+import {
+  RemoteOperationJournal,
+  type RemoteOperationJournalChange,
+  type RemoteOperationJournalEntry
+} from "./RemoteOperationJournal";
 import {
   RemoteQueryController,
   type RemoteQuerySnapshot
@@ -109,6 +115,9 @@ class RemoteTableSessionImpl<
   private controller: RemoteQueryController<TRow> | null = null;
   private mutationController: RemoteMutationController<TRow> | null = null;
   private subscriptionController: RemoteSubscriptionController<TRow> | null = null;
+  private readonly operationJournal = new RemoteOperationJournal();
+  private readonly compensationTargets = new Map<string, string>();
+  private readonly compensationConflictTargets = new Map<string, string>();
   private readonly overlays = new OptimisticOverlayStore();
   private controllerUnsubscribe: (() => void) | null = null;
   private controllerSource: RemoteTableSource<TRow> | null = null;
@@ -209,6 +218,7 @@ class RemoteTableSessionImpl<
           this.snapshot = null;
           this.publish();
         },
+        onAcknowledged: (acknowledgement) => this.handleMutationAcknowledged(acknowledgement),
         limits: this.options.mutationLimits
       });
       if (source.capabilities.subscription) {
@@ -283,7 +293,9 @@ class RemoteTableSessionImpl<
       operationStates,
       pendingOperations: this.mutationController?.getPendingOperations() ?? [],
       conflicts: this.mutationController?.getConflicts() ?? [],
-      canUndo: false,
+      canUndo: operationStates.undo.enabled
+        && this.options.source.undoMode === "compensating"
+        && this.operationJournal.canUndo,
       canRedo: false,
       pageInfo: query.pageInfo,
       getCell: (rowId, columnId) => this.readCell(rows, rowId, columnId),
@@ -317,9 +329,11 @@ class RemoteTableSessionImpl<
         return this.updateCellMetadata(intent, commandId);
       case "insert-rows":
       case "delete-rows":
+        return unsupported("Remote row mutations are not enabled yet");
       case "undo":
+        return this.undoRemote(commandId);
       case "redo":
-        return unsupported("Remote mutations and reconciliation are not enabled yet");
+        return unsupported("Remote redo is not supported");
       case "reload-authoritative":
         return this.reloadAuthoritative(intent, commandId);
       case "retry-with-revision":
@@ -393,7 +407,7 @@ class RemoteTableSessionImpl<
       cachedItems: query?.cachedItems ?? 0,
       pendingMutations: this.mutationController?.getDiagnostics().pendingOperations ?? 0,
       conflicts: this.mutationController?.getDiagnostics().conflicts ?? 0,
-      journalEntries: 0,
+      journalEntries: this.operationJournal.size,
       destroyed: this.destroyed
     };
   }
@@ -498,6 +512,7 @@ class RemoteTableSessionImpl<
       : intent.cells.map((cell) => ({ ...cell, rawText: "" }));
     const seen = new Set<string>();
     const prepared: PreparedRemoteMutation[] = [];
+    const journalChanges: RemoteOperationJournalChange[] = [];
 
     for (const edit of edits) {
       const key = `${edit.rowId.length}:${edit.rowId}${edit.columnId}`;
@@ -582,6 +597,13 @@ class RemoteTableSessionImpl<
           metadata: authoritative.cell.metadata
         }
       });
+      journalChanges.push({
+        kind: "value",
+        rowId: edit.rowId,
+        columnId: edit.columnId,
+        originalValue: authoritative.cell.formula ?? authoritative.cell.storedValue,
+        committedValue: formula ?? parsedValue
+      });
     }
 
     if (prepared.length === 0) {
@@ -589,10 +611,7 @@ class RemoteTableSessionImpl<
     }
     const preflight = this.mutationController.preflight(commandId, prepared);
     if (preflight) return preflight;
-    void this.mutationController.execute(commandId, prepared).then(() => {
-      this.snapshot = null;
-      this.refreshAfterInvalidation(commandId);
-    }).catch(() => {});
+    this.executeJournaledMutation(commandId, prepared, journalChanges);
     return { status: "pending", operationId: commandId };
   }
 
@@ -604,6 +623,7 @@ class RemoteTableSessionImpl<
       return unsupported("Remote metadata is unavailable");
     }
     const prepared: PreparedRemoteMutation[] = [];
+    const journalChanges: RemoteOperationJournalChange[] = [];
     const seen = new Set<string>();
     for (const update of intent.updates) {
       const key = `${update.rowId.length}:${update.rowId}${update.columnId}`;
@@ -636,17 +656,216 @@ class RemoteTableSessionImpl<
           metadata
         }
       });
+      journalChanges.push({
+        kind: "metadata",
+        rowId: update.rowId,
+        columnId: update.columnId,
+        originalMetadata: authoritative.cell.metadata,
+        committedMetadata: metadata
+      });
     }
     if (prepared.length === 0) {
       return { status: "committed", revision: this.getSnapshot().revision, changed: false };
     }
     const preflight = this.mutationController.preflight(commandId, prepared);
     if (preflight) return preflight;
-    void this.mutationController.execute(commandId, prepared).then(() => {
+    this.executeJournaledMutation(commandId, prepared, journalChanges);
+    return { status: "pending", operationId: commandId };
+  }
+
+  private executeJournaledMutation(
+    operationId: string,
+    prepared: readonly PreparedRemoteMutation[],
+    changes: readonly RemoteOperationJournalChange[]
+  ): void {
+    const mutations = this.mutationController;
+    if (!mutations) return;
+    const journaled = this.options.source.undoMode === "compensating"
+      && this.getSnapshot().operationStates.undo.enabled;
+    const abortController = journaled ? new AbortController() : undefined;
+    if (abortController) this.operationJournal.begin(operationId, abortController, changes);
+    void mutations.execute(operationId, prepared, abortController ? { abortController } : {}).then((result) => {
+      if (this.operationJournal.isTombstoned(operationId)) {
+        this.operationJournal.reconcileTombstone(operationId);
+      } else if (
+        journaled
+        && result.status !== "committed"
+        && result.status !== "pending"
+      ) {
+        this.operationJournal.discardPending(operationId);
+        this.publishJournalChange();
+      }
+      this.snapshot = null;
+      this.refreshAfterInvalidation(operationId);
+    }).catch(() => {
+      if (this.operationJournal.isTombstoned(operationId)) {
+        this.operationJournal.reconcileTombstone(operationId);
+      } else if (journaled) {
+        this.operationJournal.discardPending(operationId);
+        this.publishJournalChange();
+      }
+    });
+  }
+
+  private handleMutationAcknowledged(acknowledgement: RemoteMutationAcknowledgement): void {
+    const compensatedOperationId = this.compensationTargets.get(acknowledgement.operationId);
+    if (compensatedOperationId) {
+      this.compensationTargets.delete(acknowledgement.operationId);
+      this.operationJournal.completeCompensation(compensatedOperationId);
+      for (const [operationId, target] of this.compensationConflictTargets) {
+        if (target === compensatedOperationId) this.compensationConflictTargets.delete(operationId);
+      }
+    } else {
+      this.operationJournal.acknowledge(
+        acknowledgement.operationId,
+        acknowledgement.revision,
+        acknowledgement.rowVersions
+      );
+    }
+    this.snapshot = null;
+  }
+
+  private undoRemote(commandId: string): CommandResult<TRow> {
+    const controller = this.controller;
+    const mutations = this.mutationController;
+    if (
+      !controller
+      || !mutations
+      || this.options.source.undoMode !== "compensating"
+      || !this.getSnapshot().operationStates.undo.enabled
+    ) {
+      return unsupported("Remote compensation is unavailable");
+    }
+    const claim = this.operationJournal.claimLatestForUndo();
+    if (!claim) return unsupported("No remote compensation is available");
+    if (claim.kind === "pending") {
+      const cancellation = mutations.cancelOperation(claim.entry.operationId);
+      controller.invalidate();
+      void controller.refresh(`${commandId}:refresh`).then(() => {
+        cancellation?.markAuthoritativeRefreshCompleted();
+      }).catch(() => {});
+      return { status: "pending", operationId: commandId };
+    }
+
+    const prepared = this.prepareCompensatingMutations(claim.entry);
+    if (!Array.isArray(prepared)) {
+      this.operationJournal.releaseCompensation(claim.entry.operationId);
+      return prepared;
+    }
+    const preflight = mutations.preflight(commandId, prepared);
+    if (preflight) {
+      this.operationJournal.releaseCompensation(claim.entry.operationId);
+      return preflight;
+    }
+    this.executeCompensatingMutation(
+      commandId,
+      prepared,
+      claim.entry.operationId,
+      claim.entry.acknowledgedRevision
+    );
+    return { status: "pending", operationId: commandId };
+  }
+
+  private executeCompensatingMutation(
+    commandId: string,
+    prepared: readonly PreparedRemoteMutation[],
+    compensatedOperationId: string,
+    baseRevision?: string
+  ): void {
+    const mutations = this.mutationController;
+    if (!mutations) return;
+    this.compensationTargets.set(commandId, compensatedOperationId);
+    void mutations.execute(commandId, prepared, baseRevision === undefined ? {} : { baseRevision }).then((result) => {
+      const retryableOperationId = this.compensationTargets.get(commandId);
+      if (retryableOperationId) {
+        this.compensationTargets.delete(commandId);
+        if (result.status === "conflict") {
+          this.compensationConflictTargets.set(commandId, retryableOperationId);
+        }
+        this.operationJournal.releaseCompensation(retryableOperationId);
+        this.publishJournalChange();
+      }
       this.snapshot = null;
       this.refreshAfterInvalidation(commandId);
-    }).catch(() => {});
-    return { status: "pending", operationId: commandId };
+    }).catch(() => {
+      const retryableOperationId = this.compensationTargets.get(commandId);
+      if (!retryableOperationId) return;
+      this.compensationTargets.delete(commandId);
+      this.operationJournal.releaseCompensation(retryableOperationId);
+      this.publishJournalChange();
+    });
+  }
+
+  private prepareCompensatingMutations(
+    entry: RemoteOperationJournalEntry
+  ): PreparedRemoteMutation[] | Extract<CommandResult, { status: "rejected" }> {
+    const controller = this.controller;
+    if (!controller) return unsupported("Remote table is not started");
+    const prepared: PreparedRemoteMutation[] = [];
+    for (const change of entry.changes) {
+      const row = controller.getCanonicalRow(change.rowId);
+      if (!row) return validationResult("TABLE_ROW_NOT_FOUND", "Row not found", change.rowId, change.columnId);
+      const column = this.columnsById.get(change.columnId);
+      if (!column) return validationResult("TABLE_COLUMN_NOT_FOUND", "Column not found", change.rowId, change.columnId);
+      const authoritative = this.readAuthoritativeCell(row, change.rowId, change.columnId);
+      if ("issue" in authoritative) {
+        return { status: "rejected", reason: "unsupported", issues: [authoritative.issue] };
+      }
+      const acknowledgedRowVersion = entry.rowVersions.find((candidate) =>
+        candidate.rowId === change.rowId && candidate.columnId === change.columnId
+      )?.rowVersion;
+      const rowVersion = acknowledgedRowVersion ?? authoritative.rowVersion;
+      if (change.kind === "metadata") {
+        const metadata = cleanMetadata(change.originalMetadata);
+        prepared.push({
+          kind: "cell-metadata",
+          rowId: change.rowId,
+          columnId: change.columnId,
+          metadata,
+          ...(rowVersion === undefined ? {} : { rowVersion }),
+          optimisticCell: {
+            ...authoritative.cell,
+            metadata
+          }
+        });
+        continue;
+      }
+      const rawText = rawTextForCompensation(change.originalValue);
+      const formula = typeof change.originalValue === "string" && change.originalValue.startsWith("=")
+        ? change.originalValue
+        : undefined;
+      const formatted = column.format
+        ? safeInvokeTableExtension("format", () => column.format!(change.originalValue, this.columnContext(
+            row,
+            change.rowId,
+            change.columnId
+          )))
+        : null;
+      prepared.push({
+        kind: "cell-value",
+        rowId: change.rowId,
+        columnId: change.columnId,
+        rawText,
+        parsedValue: change.originalValue,
+        ...(formula === undefined ? {} : { formula }),
+        ...(rowVersion === undefined ? {} : { rowVersion }),
+        optimisticCell: {
+          storedValue: change.originalValue,
+          evaluatedValue: change.originalValue,
+          displayValue: formatted?.ok ? formatted.value : formatDefault(change.originalValue),
+          ...(formula === undefined ? {} : { formula }),
+          metadata: authoritative.cell.metadata
+        }
+      });
+    }
+    return prepared;
+  }
+
+  private publishJournalChange(): void {
+    if (this.destroyed) return;
+    this.localRevision += 1;
+    this.snapshot = null;
+    this.publish();
   }
 
   private reloadAuthoritative(
@@ -658,6 +877,7 @@ class RemoteTableSessionImpl<
     const conflict = mutations?.getConflict(intent.operationId, intent.rowId);
     if (!controller || !mutations || !conflict) return conflictNotCurrent();
     if (!mutations.abandonConflict(intent.operationId, intent.rowId)) return conflictNotCurrent();
+    this.compensationConflictTargets.delete(intent.operationId);
     controller.invalidate();
     void controller.refresh(commandId).catch(() => {});
     return { status: "pending", operationId: commandId };
@@ -686,12 +906,21 @@ class RemoteTableSessionImpl<
       intent.expectedRevision
     );
     if (!prepared) return conflictNotCurrent();
+    const compensatedOperationId = this.compensationConflictTargets.get(intent.operationId);
     const preflight = mutations.preflight(commandId, prepared);
     if (preflight) return preflight;
-    void mutations.execute(commandId, prepared).then(() => {
-      this.snapshot = null;
-      this.refreshAfterInvalidation(commandId);
-    }).catch(() => {});
+    if (compensatedOperationId) {
+      if (!this.operationJournal.reserveCompensation(compensatedOperationId)) {
+        return conflictNotCurrent();
+      }
+      this.compensationConflictTargets.delete(intent.operationId);
+      this.executeCompensatingMutation(commandId, prepared, compensatedOperationId);
+    } else {
+      void mutations.execute(commandId, prepared).then(() => {
+        this.snapshot = null;
+        this.refreshAfterInvalidation(commandId);
+      }).catch(() => {});
+    }
     return { status: "pending", operationId: commandId };
   }
 
@@ -878,6 +1107,9 @@ class RemoteTableSessionImpl<
     this.subscriptionController = null;
     this.mutationController?.destroy();
     this.mutationController = null;
+    this.operationJournal.clear();
+    this.compensationTargets.clear();
+    this.compensationConflictTargets.clear();
     this.overlays.clear();
     this.controllerUnsubscribe?.();
     this.controllerUnsubscribe = null;
@@ -1090,6 +1322,12 @@ function formatDefault(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
   if (typeof value === "object" && "code" in value && typeof value.code === "string") return value.code;
+  return String(value);
+}
+
+function rawTextForCompensation(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
   return String(value);
 }
 
