@@ -871,9 +871,9 @@ export function Grid({
     normalizedSelection.end.row === sheet.rowCount - 1 &&
     normalizedSelection.end.column === sheet.columnCount - 1;
   const zoomStyle = {
-    "--sheet-zoom": String(zoomLevel / 100),
-    "--row-header-width": showHeaders ? `${ROW_HEADER_WIDTH}px` : "0px",
-    "--column-header-height": showHeaders ? `${COLUMN_HEADER_HEIGHT}px` : "0px"
+    "--js-spreadsheet-sheet-zoom": String(zoomLevel / 100),
+    "--js-spreadsheet-row-header-width": showHeaders ? `${ROW_HEADER_WIDTH}px` : "0px",
+    "--js-spreadsheet-column-header-height": showHeaders ? `${COLUMN_HEADER_HEIGHT}px` : "0px"
   } as CSSProperties;
   const rootClassName = ["grid-scroll", showGridlines ? "" : "grid-scroll--no-gridlines"]
     .filter(Boolean)
