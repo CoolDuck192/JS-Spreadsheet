@@ -236,6 +236,7 @@ function SuppliedSpreadsheet(
       invokeHostCallback(onCommandResultRef.current, { command, result });
       return result;
     },
+    table: props.session.table,
     // This facade is view-local. Ownership always remains with the host.
     destroy() {}
   }), [props.session]);

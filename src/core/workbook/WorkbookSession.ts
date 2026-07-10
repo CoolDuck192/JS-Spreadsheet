@@ -1,5 +1,9 @@
 import type { CellRange, WorkbookHistory, WorkbookModel } from "../../types";
 import {
+  createWorkbookTableSession,
+  type WorkbookTableSession
+} from "../../table/workbook/WorkbookTableSession";
+import {
   createFormulaEngine,
   type ComputedCellValue,
   type FormulaEngine
@@ -58,6 +62,7 @@ export interface WorkbookSession {
     workbook: WorkbookModel,
     options?: { history?: "reset" | "preserve"; origin?: "external" | "import" }
   ): WorkbookCommandResult;
+  table(tableId: string): WorkbookTableSession;
   destroy(): void;
 }
 
@@ -97,6 +102,7 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
   let projectionUnavailable = false;
   const listeners = new Set<() => void>();
   const diagnosticListeners = new Set<(event: WorkbookDiagnosticEvent) => void>();
+  const tableSessions = new Map<string, WorkbookTableSession>();
   const createCommandId = options.createCommandId ?? createDefaultCommandIdFactory();
   const createId = options.createId ?? createRandomId;
   const now = options.now ?? createDefaultNow();
@@ -357,7 +363,7 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     }
   }
 
-  return {
+  const session: WorkbookSession = {
     getSnapshot() {
       return snapshot;
     },
@@ -388,11 +394,31 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
         history: replaceOptions?.history === "preserve" ? "commit" : "reset"
       });
     },
+    table(tableId) {
+      if (destroyed) {
+        throw new Error("Workbook session is destroyed");
+      }
+      const existing = tableSessions.get(tableId);
+      if (existing) {
+        return existing;
+      }
+      const child = createWorkbookTableSession(session, tableId, () => {
+        if (tableSessions.get(tableId) === child) {
+          tableSessions.delete(tableId);
+        }
+      });
+      tableSessions.set(tableId, child);
+      return child;
+    },
     destroy() {
       if (destroyed) {
         return;
       }
       destroyed = true;
+      for (const tableSession of [...tableSessions.values()]) {
+        tableSession.destroy();
+      }
+      tableSessions.clear();
       listeners.clear();
       diagnosticListeners.clear();
       const engine = formulaEngine;
@@ -405,6 +431,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       }
     }
   };
+
+  return session;
 
   function reduce(
     command: WorkbookCommand,

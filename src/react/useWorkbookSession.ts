@@ -352,6 +352,7 @@ function createOwnedSessionState(
       );
       return result;
     },
+    table: raw.table,
     destroy: state.destroy
   };
 
