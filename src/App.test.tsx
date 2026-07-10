@@ -1939,6 +1939,103 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B1 Amount" })).toHaveTextContent("Amount");
   });
 
+  it("inserts the selected width to the right from the ribbon split menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    selectRange("A1", "B1");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 2 columns right");
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1:D1");
+  });
+
+  it("expands the selected structured table at its right boundary", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+  });
+
+  it("appends a column after the final worksheet column", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    const nameBox = screen.getByLabelText("Name box");
+    await user.clear(nameBox);
+    await user.type(nameBox, "Z1{Enter}");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+    expect(nameBox).toHaveValue("AA1");
+  });
+
+  it("rejects right column insertion on a protected sheet", async () => {
+    const user = userEvent.setup();
+    const workbook = createBlankWorkbook();
+    render(
+      <Spreadsheet
+        defaultWorkbook={{
+          ...workbook,
+          sheets: workbook.sheets.map((sheet) => ({
+            ...sheet,
+            protection: { ...sheet.protection, isProtected: true }
+          }))
+        }}
+        storage={false}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Sheet is protected");
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1");
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("undoes a multi-column right insertion as one action", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    selectRange("A1", "B1");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(grid).toHaveAttribute("aria-colcount", "29");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("inserts to the right from a column-header context menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    fireEvent.contextMenu(screen.getByRole("columnheader", { name: "Column B" }), {
+      clientX: 240,
+      clientY: 60
+    });
+    const menu = screen.getByRole("menu", { name: "Column B context menu" });
+    await user.click(within(menu).getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1:C100");
+  });
+
   it("finds and replaces values from a compact panel", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -2556,7 +2653,28 @@ describe("App", () => {
 
     expect(screen.getByRole("gridcell", { name: "B1" })).toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "C1 Amount" })).toHaveTextContent("Amount");
-    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column left");
+  });
+
+  it("inserts a column to the right from the cell context menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    await editCell(user, "B1", "Amount");
+    await editCell(user, "C1", "Tail");
+    fireEvent.contextMenu(screen.getByRole("gridcell", { name: "B1 Amount" }), {
+      clientX: 220,
+      clientY: 160
+    });
+    await user.click(
+      within(screen.getByRole("menu", { name: "Cell context menu" })).getByRole("menuitem", {
+        name: "Insert column right"
+      })
+    );
+
+    expect(screen.getByRole("gridcell", { name: "C1" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "D1 Tail" })).toHaveTextContent("Tail");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
   });
 
   it("applies and clears cell borders from the toolbar", async () => {

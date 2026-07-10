@@ -105,6 +105,12 @@ type GridProps = {
   onAutoFill?: (sourceRange: CellRange, targetRange: CellRange) => void;
   onAutoFillDoubleClick?: () => void;
   onCellContextMenu?: (event: { address: string; row: number; column: number; x: number; y: number }) => void;
+  onColumnHeaderContextMenu?: (event: {
+    column: number;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  }) => void;
   onAutoFilterColumn?: (column: number, values: string[]) => void;
   onClearAutoFilterColumn?: (column: number) => void;
   onSortAutoFilterColumn?: (column: number, direction: "asc" | "desc") => void;
@@ -177,6 +183,7 @@ export function Grid({
   onAutoFill,
   onAutoFillDoubleClick,
   onCellContextMenu,
+  onColumnHeaderContextMenu,
   onAutoFilterColumn,
   onClearAutoFilterColumn,
   onSortAutoFilterColumn,
@@ -879,6 +886,21 @@ export function Grid({
     .filter(Boolean)
     .join(" ");
 
+  function openColumnHeaderContextMenu(column: number, x: number, y: number, opener: HTMLElement) {
+    const preservesWholeColumnSelection =
+      normalizedSelection.start.row === 0 &&
+      normalizedSelection.end.row === sheet.rowCount - 1 &&
+      column >= normalizedSelection.start.column &&
+      column <= normalizedSelection.end.column;
+    if (!preservesWholeColumnSelection) {
+      onSelectionChange({
+        start: { row: 0, column },
+        end: { row: sheet.rowCount - 1, column }
+      });
+    }
+    onColumnHeaderContextMenu?.({ column, x, y, opener });
+  }
+
   return (
     <GridViewport
       idPrefix={`spreadsheet-${sheet.id}`}
@@ -1039,6 +1061,15 @@ export function Grid({
           y: event.clientY
         });
       }}
+      onColumnHeaderContextMenu={(column, event) => {
+        event.preventDefault();
+        openColumnHeaderContextMenu(
+          parseSheetIndex(column.id, "column:"),
+          event.clientX,
+          event.clientY,
+          event.currentTarget
+        );
+      }}
       onReadOnlyCellEditAttempt={(cell) => {
         const resolved = resolveCell(cell.rowId, cell.columnId);
         if (resolved.mergeInfo?.role !== "covered") {
@@ -1105,6 +1136,18 @@ export function Grid({
         });
       }}
       onColumnHeaderKeyDown={(column, event) => {
+        if ((event.key === "F10" && event.shiftKey) || event.key === "ContextMenu") {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          openColumnHeaderContextMenu(
+            parseSheetIndex(column.id, "column:"),
+            rect.left,
+            rect.bottom,
+            event.currentTarget
+          );
+          return;
+        }
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           const index = parseSheetIndex(column.id, "column:");

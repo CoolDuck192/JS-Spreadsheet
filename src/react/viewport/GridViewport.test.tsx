@@ -8,6 +8,7 @@ import type {
   GridViewportCell,
   GridViewportColumn,
   GridViewportInteraction,
+  GridViewportProps,
   GridViewportRow
 } from "./types";
 
@@ -30,6 +31,7 @@ function StatefulViewport({
   ariaRowCount = viewportRows.length + 1,
   ariaColumnCount = viewportColumns.length + 1,
   withRowHeaders = true,
+  onColumnHeaderContextMenu,
   initialSelection = {
     anchor: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" },
     focus: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" }
@@ -42,6 +44,7 @@ function StatefulViewport({
   ariaRowCount?: number;
   ariaColumnCount?: number;
   withRowHeaders?: boolean;
+  onColumnHeaderContextMenu?: GridViewportProps["onColumnHeaderContextMenu"];
   initialSelection?: TableSelection | null;
 }) {
   const [selection, setSelection] = useState<TableSelection | null>(initialSelection);
@@ -75,6 +78,7 @@ function StatefulViewport({
         editing={editing}
         onInteraction={onInteraction}
         renderRowHeader={withRowHeaders ? (row) => row.label : undefined}
+        onColumnHeaderContextMenu={onColumnHeaderContextMenu}
         announce={`${viewportRows.length} rows loaded`}
       />
       <output data-testid={`${idPrefix}-last-interaction`}>{JSON.stringify(lastInteraction)}</output>
@@ -98,6 +102,24 @@ describe("GridViewport", () => {
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-readonly", "false");
     expect(screen.getByRole("gridcell", { name: "Grace Active" })).toHaveAttribute("aria-readonly", "true");
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("forwards native context-menu events from column headers", () => {
+    const contexts: Array<{ column: string; x: number; y: number }> = [];
+    render(
+      <StatefulViewport
+        onColumnHeaderContextMenu={(column, event) => {
+          contexts.push({ column: column.id, x: event.clientX, y: event.clientY });
+        }}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByRole("columnheader", { name: "Salary" }), {
+      clientX: 240,
+      clientY: 60
+    });
+
+    expect(contexts).toEqual([{ column: "salary", x: 240, y: 60 }]);
   });
 
   it("uses explicit offset row indexes and minus one for an unknown total", () => {

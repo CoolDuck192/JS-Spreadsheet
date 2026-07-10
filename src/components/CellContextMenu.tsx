@@ -24,7 +24,8 @@ type CellContextMenuProps = {
   onToggleWrapText: () => void;
   onInsertRow: () => void;
   onDeleteRow: () => void;
-  onInsertColumn: () => void;
+  onInsertColumnLeft: () => void;
+  onInsertColumnRight: () => void;
   onDeleteColumn: () => void;
   onComment: () => void;
   onLink: () => void;
@@ -52,7 +53,8 @@ export function CellContextMenu({
   onToggleWrapText,
   onInsertRow,
   onDeleteRow,
-  onInsertColumn,
+  onInsertColumnLeft,
+  onInsertColumnRight,
   onDeleteColumn,
   onComment,
   onLink
@@ -148,8 +150,11 @@ export function CellContextMenu({
       <button type="button" role="menuitem" onClick={() => run(onDeleteRow)}>
         Delete row
       </button>
-      <button type="button" role="menuitem" onClick={() => run(onInsertColumn)}>
+      <button type="button" role="menuitem" onClick={() => run(onInsertColumnLeft)}>
         Insert column left
+      </button>
+      <button type="button" role="menuitem" onClick={() => run(onInsertColumnRight)}>
+        Insert column right
       </button>
       <button type="button" role="menuitem" onClick={() => run(onDeleteColumn)}>
         Delete column

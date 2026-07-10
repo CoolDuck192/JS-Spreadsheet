@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ChartPanel } from "./components/ChartPanel";
 import { CellContextMenu } from "./components/CellContextMenu";
+import { ColumnHeaderContextMenu } from "./components/ColumnHeaderContextMenu";
 import { ConditionalFormattingPanel } from "./components/ConditionalFormattingPanel";
 import { DataValidationPanel } from "./components/DataValidationPanel";
 import { FilterPanel } from "./components/FilterPanel";
@@ -319,6 +320,12 @@ function SpreadsheetWorkbook({
   const [richClipboard, setRichClipboard] = useState<RichClipboardState | null>(null);
   const [formatPainter, setFormatPainter] = useState<FormatPainterState | null>(null);
   const [cellContextMenu, setCellContextMenu] = useState<{ address: string; x: number; y: number } | null>(null);
+  const [columnHeaderContextMenu, setColumnHeaderContextMenu] = useState<{
+    column: number;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [isDropTargetActive, setDropTargetActive] = useState(false);
   // Drill-down metadata for pivot sheets created this session, keyed by sheet id.
@@ -1375,22 +1382,35 @@ function SpreadsheetWorkbook({
     }, `Deleted ${pluralize(count, "row")}`);
   }
 
-  function handleInsertColumns() {
+  function handleInsertColumns(direction: "left" | "right") {
     if (!ensureSheetStructureEditable()) {
       return;
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.column - normalized.start.column + 1;
+    const index = direction === "left" ? normalized.start.column : normalized.end.column + 1;
+    const expandTableIds = boundaryTablesForColumnInsertion(
+      workbook,
+      activeSheet.id,
+      normalized,
+      index
+    );
     dispatchCommand({
       type: "transaction",
       commands: [
-        { type: "columns.insert", sheetId: activeSheet.id, index: normalized.start.column, count },
+        {
+          type: "columns.insert",
+          sheetId: activeSheet.id,
+          index,
+          count,
+          ...(expandTableIds.length === 0 ? {} : { expandTableIds })
+        },
         { type: "selection.set", selection: {
-          start: normalized.start,
-          end: { row: normalized.end.row, column: normalized.start.column + count - 1 }
+          start: { row: normalized.start.row, column: index },
+          end: { row: normalized.end.row, column: index + count - 1 }
         } }
       ]
-    }, `Inserted ${pluralize(count, "column")}`);
+    }, `Inserted ${pluralize(count, "column")} ${direction}`);
   }
 
   function handleDeleteColumns() {
@@ -1564,7 +1584,19 @@ function SpreadsheetWorkbook({
       setSelection({ start: { row: event.row, column: event.column }, end: { row: event.row, column: event.column } });
     }
     setEditingCell(null);
+    setColumnHeaderContextMenu(null);
     setCellContextMenu({ address: event.address, x: event.x, y: event.y });
+  }
+
+  function openColumnHeaderContextMenu(event: {
+    column: number;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  }) {
+    setEditingCell(null);
+    setCellContextMenu(null);
+    setColumnHeaderContextMenu(event);
   }
 
   function handleFillDown() {
@@ -2779,7 +2811,8 @@ function SpreadsheetWorkbook({
           onRemoveDuplicates={handleRemoveDuplicates}
           onInsertRows={handleInsertRows}
           onDeleteRows={handleDeleteRows}
-          onInsertColumns={handleInsertColumns}
+          onInsertColumnsLeft={() => handleInsertColumns("left")}
+          onInsertColumnsRight={() => handleInsertColumns("right")}
           onDeleteColumns={handleDeleteColumns}
           onAutoFitRows={handleAutoFitRows}
           onAutoFitColumns={handleAutoFitColumns}
@@ -3181,6 +3214,7 @@ function SpreadsheetWorkbook({
           onAutoFill={handleAutoFill}
           onAutoFillDoubleClick={handleAutoFillDoubleClick}
           onCellContextMenu={openCellContextMenu}
+          onColumnHeaderContextMenu={openColumnHeaderContextMenu}
           onAutoFilterColumn={applyAutoFilterColumn}
           onClearAutoFilterColumn={clearAutoFilterColumn}
           onSortAutoFilterColumn={sortAutoFilterColumn}
@@ -3215,10 +3249,23 @@ function SpreadsheetWorkbook({
             }
             onInsertRow={handleInsertRows}
             onDeleteRow={handleDeleteRows}
-            onInsertColumn={handleInsertColumns}
+            onInsertColumnLeft={() => handleInsertColumns("left")}
+            onInsertColumnRight={() => handleInsertColumns("right")}
             onDeleteColumn={handleDeleteColumns}
             onComment={handleComment}
             onLink={handleLink}
+          />
+        ) : null}
+        {columnHeaderContextMenu ? (
+          <ColumnHeaderContextMenu
+            label={columnIndexToName(columnHeaderContextMenu.column)}
+            x={columnHeaderContextMenu.x}
+            y={columnHeaderContextMenu.y}
+            opener={columnHeaderContextMenu.opener}
+            onClose={() => setColumnHeaderContextMenu(null)}
+            onInsertLeft={() => handleInsertColumns("left")}
+            onInsertRight={() => handleInsertColumns("right")}
+            onDelete={handleDeleteColumns}
           />
         ) : null}
         {openTableId ? (
@@ -3737,6 +3784,22 @@ function rangesIntersect(left: CellRange, right: CellRange): boolean {
     normalizedLeft.start.column <= normalizedRight.end.column &&
     normalizedLeft.end.column >= normalizedRight.start.column
   );
+}
+
+function boundaryTablesForColumnInsertion(
+  workbook: WorkbookModel,
+  sheetId: string,
+  selection: CellRange,
+  index: number
+): string[] {
+  const normalizedSelection = normalizeRange(selection);
+  return workbook.tables
+    .filter((table) =>
+      table.sheetId === sheetId &&
+      rangesIntersect(table.range, normalizedSelection) &&
+      (table.range.start.column === index || table.range.end.column + 1 === index)
+    )
+    .map((table) => table.id);
 }
 
 function parseNameBoxRange(value: string, sheet: SheetModel): CellRange | null {

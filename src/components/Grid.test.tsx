@@ -233,6 +233,48 @@ describe("Grid", () => {
     ]);
   });
 
+  it("opens a column-header context menu without collapsing an enclosing whole-column selection", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.columnCount = 4;
+    const selections: CellRange[] = [];
+    const contexts: Array<{ column: number; x: number; y: number; opener: HTMLElement }> = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 3, column: 2 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onColumnHeaderContextMenu={(event) => contexts.push(event)}
+      />
+    );
+
+    const columnB = screen.getByRole("columnheader", { name: "Column B" });
+    fireEvent.contextMenu(columnB, { clientX: 240, clientY: 60 });
+    expect(contexts).toEqual([{ column: 1, x: 240, y: 60, opener: columnB }]);
+    expect(selections).toEqual([]);
+
+    fireEvent.keyDown(columnB, { key: "F10", shiftKey: true });
+    fireEvent.keyDown(columnB, { key: "ContextMenu" });
+    expect(contexts).toHaveLength(3);
+    expect(selections).toEqual([]);
+
+    const columnD = screen.getByRole("columnheader", { name: "Column D" });
+    fireEvent.contextMenu(columnD, { clientX: 432, clientY: 60 });
+    expect(selections).toEqual([
+      { start: { row: 0, column: 3 }, end: { row: 3, column: 3 } }
+    ]);
+    expect(contexts.at(-1)).toEqual({ column: 3, x: 432, y: 60, opener: columnD });
+  });
+
   it("does not render hidden rows or columns", () => {
     const sheet: SheetModel = {
       id: "sheet-1",

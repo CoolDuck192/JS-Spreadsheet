@@ -194,7 +194,8 @@ type ToolbarProps = {
   onRemoveDuplicates: () => void;
   onInsertRows: () => void;
   onDeleteRows: () => void;
-  onInsertColumns: () => void;
+  onInsertColumnsLeft: () => void;
+  onInsertColumnsRight: () => void;
   onDeleteColumns: () => void;
   onAutoFitRows: () => void;
   onAutoFitColumns: () => void;
@@ -549,7 +550,16 @@ function CellsGroup(props: ToolbarProps) {
       <ToolbarButton label="Unmerge cells" onClick={props.onUnmergeCells} icon={<TableCellsSplit />} compact />
       <ToolbarButton label="Insert row above" onClick={props.onInsertRows} icon={<Rows3 />} compact />
       <ToolbarButton label="Delete row" onClick={props.onDeleteRows} icon={<Trash2 />} compact />
-      <ToolbarButton label="Insert column left" onClick={props.onInsertColumns} icon={<Columns3 />} compact />
+      <SplitButton
+        label="Insert columns"
+        primaryAriaLabel="Insert column left"
+        icon={<Columns3 />}
+        onPrimary={props.onInsertColumnsLeft}
+        items={[
+          { label: "Insert column left", onSelect: props.onInsertColumnsLeft },
+          { label: "Insert column right", onSelect: props.onInsertColumnsRight }
+        ]}
+      />
       <ToolbarButton label="Delete column" onClick={props.onDeleteColumns} icon={<Trash2 />} compact />
       <ToolbarButton label="Auto-fit rows" onClick={props.onAutoFitRows} icon={<Rows3 />} compact />
       <ToolbarButton label="Auto-fit columns" onClick={props.onAutoFitColumns} icon={<Columns3 />} compact />
@@ -929,12 +939,14 @@ function ariaKeyshortcuts(shortcut: string): string {
 
 function SplitButton({
   label,
+  primaryAriaLabel,
   icon,
   onPrimary,
   items,
   disabled = false
 }: {
   label: string;
+  primaryAriaLabel?: string;
   icon: ReactNode;
   onPrimary: () => void;
   items: Array<{ label: string; onSelect: () => void }>;
@@ -1023,7 +1035,7 @@ function SplitButton({
       <button
         type="button"
         className="toolbar-button compact-toolbar-button split-button-primary"
-        aria-label={label}
+        aria-label={primaryAriaLabel ?? label}
         onClick={() => {
           setOpen(false);
           onPrimary();
