@@ -78,7 +78,6 @@ type OwnedSessionState = {
   pendingSave?: SaveRequest;
   saveInFlight: boolean;
   destroyed: boolean;
-  everMounted: boolean;
   cleanupToken?: object;
   controlledWorkbook?: WorkbookModel;
   beginHydration(callbacks: CallbackState): void;
@@ -137,7 +136,6 @@ export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): Wor
   }, [controlled, options.workbook, snapshot.revision, state, callbacks]);
 
   useEffect(() => {
-    state.everMounted = true;
     state.destroyed = false;
     state.cleanupToken = undefined;
     state.beginHydration(callbacks.current);
@@ -175,11 +173,11 @@ function acquireOwnedSession(
   const state = createOwnedSessionState(options, callbacks);
   renderSessionCache.set(instanceId, state);
   queueMicrotask(() => {
+    // This cache only deduplicates React's render replay. A concurrent root may
+    // commit after this microtask, so resource ownership starts in the effect
+    // below and destruction belongs exclusively to its final cleanup.
     if (renderSessionCache.get(instanceId) === state) {
       renderSessionCache.delete(instanceId);
-    }
-    if (!state.everMounted) {
-      state.destroy();
     }
   });
   return state;
@@ -230,7 +228,6 @@ function createOwnedSessionState(
     lastQueuedWorkbook: raw.getSnapshot().workbook,
     saveInFlight: false,
     destroyed: false,
-    everMounted: false,
     controlledWorkbook: options.workbook,
     beginHydration(currentCallbacks) {
       if (state.hydrationStarted || state.destroyed || !state.storage) {
