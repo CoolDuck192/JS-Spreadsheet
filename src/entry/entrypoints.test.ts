@@ -2,7 +2,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   WorkbookTableRow as CoreWorkbookTableRow,
-  WorkbookTableSession as CoreWorkbookTableSession
+  WorkbookTableSession as CoreWorkbookTableSession,
+  XlsxImportOptions
 } from "./core";
 import type {
   WorkbookTableRow as ReactWorkbookTableRow,
@@ -29,5 +30,8 @@ describe("public entrypoints", () => {
     expect(react.WorkbookTableView).toBeTypeOf("function");
     expectTypeOf<ReactWorkbookTableRow>().toEqualTypeOf<CoreWorkbookTableRow>();
     expectTypeOf<ReactWorkbookTableSession>().toEqualTypeOf<CoreWorkbookTableSession>();
+    expectTypeOf<XlsxImportOptions>().toMatchTypeOf<{
+      tableKeys?: Readonly<Record<string, { columnName: string }>>;
+    }>();
   });
 });
