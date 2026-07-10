@@ -35,6 +35,8 @@ import { DataTableCell, DataTableEditor, columnLabel } from "./DataTableCell";
 import { DataTableColumnMenu } from "./DataTableColumnMenu";
 import { DataTableExtensionBoundary } from "./DataTableExtensionBoundary";
 import { DataTableToolbar } from "./DataTableToolbar";
+import { ConflictPanel } from "./ConflictPanel";
+import { RemoteTableStatus } from "./RemoteTableStatus";
 import { exportArtifactToBlob } from "./exportArtifact";
 import type {
   ColumnDef,
@@ -272,7 +274,7 @@ function DataTableSurface<TRow>({
     move?: "up" | "down" | "left" | "right"
   ) {
     const result = await run({ type: "edit-cells", edits: [{ ...cell, rawText }] });
-    if (result.status !== "committed") {
+    if (result.status === "rejected" || result.status === "conflict") {
       queueMicrotask(() => {
         const editor = scrollRef.current?.querySelector<HTMLElement>('[data-grid-editor-overlay="true"] input, [data-grid-editor-overlay="true"] select');
         editor?.focus();
@@ -281,7 +283,7 @@ function DataTableSurface<TRow>({
     }
     setEditing(null);
     setIssue("");
-    if (move) await moveAfterCommit(cell, move);
+    if (move && result.status === "committed") await moveAfterCommit(cell, move);
   }
 
   async function moveAfterCommit(cell: TableCellRef, move: "up" | "down" | "left" | "right") {
@@ -445,6 +447,19 @@ function DataTableSurface<TRow>({
         onShowColumn={(columnId) => void run({ type: "set-column-visibility", columnId, visible: true })}
         onIssue={setIssue}
       />
+      <RemoteTableStatus session={session} snapshot={snapshot} onIssue={setIssue} />
+      {snapshot.conflicts.map((conflict) => {
+        const column = conflict.columnId ? columnsById.get(conflict.columnId) : undefined;
+        return (
+          <ConflictPanel
+            key={`${conflict.operationId}:${conflict.rowId}:${conflict.columnId ?? ""}`}
+            conflict={conflict}
+            session={session}
+            columnName={column ? columnLabel(column) : conflict.columnId ?? "Row"}
+            onIssue={setIssue}
+          />
+        );
+      })}
       {presentation.inlineFilters ? (
         <div className="js-spreadsheet-data-table__inline-filters" aria-label="Inline filters">
           {visibleColumns.filter((column) => column.filterable).map((column) => (

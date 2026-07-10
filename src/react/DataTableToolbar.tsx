@@ -47,6 +47,12 @@ export function DataTableToolbar<TRow>({
   const offsetPage = snapshot.state.pagination.kind === "offset"
     ? snapshot.state.pagination
     : null;
+  const cursorPage = snapshot.state.pagination.kind === "cursor"
+    ? snapshot.state.pagination
+    : null;
+  const infinitePage = snapshot.state.pagination.kind === "infinite"
+    ? snapshot.state.pagination
+    : null;
 
   async function run(command: Parameters<typeof session.dispatch>[0]) {
     const result = await session.dispatch(command);
@@ -132,6 +138,62 @@ export function DataTableToolbar<TRow>({
           </button>
         </span>
       ) : null}
+      {cursorPage ? (
+        <span>
+          <button
+            type="button"
+            aria-label="Previous cursor page"
+            disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.previousCursor}
+            onClick={() => void run({
+              type: "set-pagination",
+              pagination: {
+                kind: "cursor",
+                cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.previousCursor : undefined,
+                limit: cursorPage.limit
+              }
+            })}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            aria-label="Next cursor page"
+            disabled={snapshot.pageInfo.kind !== "cursor" || !snapshot.pageInfo.nextCursor}
+            onClick={() => void run({
+              type: "set-pagination",
+              pagination: {
+                kind: "cursor",
+                cursor: snapshot.pageInfo.kind === "cursor" ? snapshot.pageInfo.nextCursor : undefined,
+                limit: cursorPage.limit
+              }
+            })}
+          >
+            Next
+          </button>
+        </span>
+      ) : null}
+      {infinitePage ? (
+        <button
+          type="button"
+          aria-label="Load more rows"
+          disabled={snapshot.pageInfo.kind !== "infinite" || !snapshot.pageInfo.nextCursor}
+          onClick={() => void run({
+            type: "set-pagination",
+            pagination: {
+              kind: "infinite",
+              after: snapshot.pageInfo.kind === "infinite" ? snapshot.pageInfo.nextCursor : undefined,
+              limit: infinitePage.limit
+            }
+          })}
+        >
+          Load more
+        </button>
+      ) : null}
+      <span aria-label="Table row total">
+        {snapshot.totalRowCount.kind === "known"
+          ? `${snapshot.totalRowCount.value} total rows`
+          : "Total rows unknown"}
+      </span>
       {hiddenColumns.map((column) => (
         <button key={column.id} type="button" aria-label={`Show column ${columnLabel(column)}`} onClick={() => onShowColumn(column.id)}>
           Show {columnLabel(column)}

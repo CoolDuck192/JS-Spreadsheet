@@ -14,8 +14,8 @@
   --js-spreadsheet-shadow: 0 12px 28px rgb(15 23 42 / 14%);
   container: js-spreadsheet-table / inline-size;
   position: relative;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 220px;
   height: 100%;
@@ -151,7 +151,8 @@
   z-index: 1;
   min-width: 0;
   min-height: 0;
-  height: 100%;
+  flex: 1 1 auto;
+  height: auto;
   color: var(--js-spreadsheet-text);
   background: var(--js-spreadsheet-surface);
   outline: none;
@@ -395,6 +396,7 @@
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__issue,
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__conflict,
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__remote-error,
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__status {
   z-index: 6;
   padding: 6px 9px;
@@ -408,8 +410,31 @@
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   color: var(--js-spreadsheet-text);
-  background: #fff7df;
+  background: var(--js-spreadsheet-chrome);
+  border-inline-start: 3px solid var(--js-spreadsheet-accent);
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__conflict p {
+  margin: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__conflict > div {
+  display: flex;
+  gap: 8px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__remote-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--js-spreadsheet-danger);
+  background: var(--js-spreadsheet-danger-soft);
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__status {
