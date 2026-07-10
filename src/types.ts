@@ -190,7 +190,8 @@ export type WorkbookHistory = {
   past: WorkbookModel[];
   present: WorkbookModel;
   future: WorkbookModel[];
-  limits: WorkbookHistoryLimits;
+  /** Absent on histories created by releases before weighted retention. */
+  limits?: WorkbookHistoryLimits;
 };
 
 /** @deprecated Import `WorkbookHistory` from `core/workbook/history` for new code. */

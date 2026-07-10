@@ -22,8 +22,6 @@ export type WorkbookHistoryStats = Readonly<{
   presentWeight: number;
 }>;
 
-const workbookWeightCache = new WeakMap<WorkbookModel, number>();
-
 export function createWorkbookHistory(
   workbook: WorkbookModel,
   limits: Partial<WorkbookHistoryLimits> = {}
@@ -40,20 +38,31 @@ export function commitWorkbookHistory(
   history: WorkbookHistory,
   workbook: WorkbookModel
 ): WorkbookHistory {
+  const limits = resolveHistoryLimits(history);
   if (history.present === workbook) {
-    return history;
+    if (history.future.length === 0) {
+      return history;
+    }
+
+    const retained = trimRetainedSnapshots(history.past, [], limits);
+    return {
+      ...history,
+      ...retained,
+      limits
+    };
   }
 
   const { past } = trimRetainedSnapshots(
     [...history.past, history.present],
     [],
-    history.limits
+    limits
   );
   return {
     ...history,
     past,
     present: workbook,
-    future: []
+    future: [],
+    limits
   };
 }
 
@@ -63,15 +72,17 @@ export function undoWorkbookHistory(history: WorkbookHistory): WorkbookHistory {
     return history;
   }
 
+  const limits = resolveHistoryLimits(history);
   const retained = trimRetainedSnapshots(
     history.past.slice(0, -1),
     [history.present, ...history.future],
-    history.limits
+    limits
   );
   return {
     ...history,
     ...retained,
-    present: previous
+    present: previous,
+    limits
   };
 }
 
@@ -81,21 +92,24 @@ export function redoWorkbookHistory(history: WorkbookHistory): WorkbookHistory {
     return history;
   }
 
+  const limits = resolveHistoryLimits(history);
   const retained = trimRetainedSnapshots(
     [...history.past, history.present],
     history.future.slice(1),
-    history.limits
+    limits
   );
   return {
     ...history,
     ...retained,
-    present: next
+    present: next,
+    limits
   };
 }
 
 export function getWorkbookHistoryStats(history: WorkbookHistory): WorkbookHistoryStats {
-  const pastWeight = totalWeight(history.past);
-  const futureWeight = totalWeight(history.future);
+  const estimateWeight = createOperationWeightEstimator();
+  const pastWeight = totalWeight(history.past, estimateWeight);
+  const futureWeight = totalWeight(history.future, estimateWeight);
   return {
     pastCount: history.past.length,
     pastWeight,
@@ -103,7 +117,7 @@ export function getWorkbookHistoryStats(history: WorkbookHistory): WorkbookHisto
     futureWeight,
     retainedCount: history.past.length + history.future.length,
     retainedWeight: pastWeight + futureWeight,
-    presentWeight: snapshotWeight(history.present)
+    presentWeight: estimateWeight(history.present)
   };
 }
 
@@ -114,9 +128,16 @@ export function getWorkbookHistoryStats(history: WorkbookHistory): WorkbookHisto
  * values and format fields.
  */
 export function estimateWorkbookWeight(workbook: WorkbookModel): number {
+  return estimateWorkbookWeightWith(workbook, estimateSheetWeight);
+}
+
+function estimateWorkbookWeightWith(
+  workbook: WorkbookModel,
+  estimateSheet: (sheet: SheetModel) => number
+): number {
   let weight = 1 + (workbook.namedRanges ?? []).length;
   for (const sheet of workbook.sheets) {
-    weight += estimateSheetWeight(sheet);
+    weight += estimateSheet(sheet);
   }
   return weight;
 }
@@ -217,19 +238,25 @@ function sumRecordEntries<T>(
   return record ? Object.values(record).reduce((total, entry) => total + estimateEntry(entry), 0) : 0;
 }
 
-function snapshotWeight(workbook: WorkbookModel): number {
-  const cached = workbookWeightCache.get(workbook);
-  if (cached !== undefined) {
-    return cached;
-  }
+function createOperationWeightEstimator(): (workbook: WorkbookModel) => number {
+  const sheetWeights = new WeakMap<SheetModel, number>();
+  return (workbook) => estimateWorkbookWeightWith(workbook, (sheet) => {
+    const measured = sheetWeights.get(sheet);
+    if (measured !== undefined) {
+      return measured;
+    }
 
-  const weight = estimateWorkbookWeight(workbook);
-  workbookWeightCache.set(workbook, weight);
-  return weight;
+    const weight = estimateSheetWeight(sheet);
+    sheetWeights.set(sheet, weight);
+    return weight;
+  });
 }
 
-function totalWeight(workbooks: readonly WorkbookModel[]): number {
-  return workbooks.reduce((total, workbook) => total + snapshotWeight(workbook), 0);
+function totalWeight(
+  workbooks: readonly WorkbookModel[],
+  estimateWeight: (workbook: WorkbookModel) => number
+): number {
+  return workbooks.reduce((total, workbook) => total + estimateWeight(workbook), 0);
 }
 
 function trimRetainedSnapshots(
@@ -237,23 +264,31 @@ function trimRetainedSnapshots(
   initialFuture: WorkbookModel[],
   limits: WorkbookHistoryLimits
 ): Pick<WorkbookHistory, "past" | "future"> {
+  const estimateWeight = createOperationWeightEstimator();
   const past = [...initialPast];
   const future = [...initialFuture];
+  const pastWeights = past.map(estimateWeight);
+  const futureWeights = future.map(estimateWeight);
   let count = past.length + future.length;
-  let weight = totalWeight(past) + totalWeight(future);
+  let weight = pastWeights.reduce((total, entryWeight) => total + entryWeight, 0)
+    + futureWeights.reduce((total, entryWeight) => total + entryWeight, 0);
 
   while (count > limits.maxEntries || weight > limits.maxWeight) {
     if (past.length >= future.length && past.length > 0) {
-      const removed = past.shift();
-      weight -= removed ? snapshotWeight(removed) : 0;
+      past.shift();
+      weight -= pastWeights.shift() ?? 0;
     } else {
-      const removed = future.pop();
-      weight -= removed ? snapshotWeight(removed) : 0;
+      future.pop();
+      weight -= futureWeights.pop() ?? 0;
     }
     count -= 1;
   }
 
   return { past, future };
+}
+
+function resolveHistoryLimits(history: WorkbookHistory): WorkbookHistoryLimits {
+  return normalizeLimits(history.limits ?? {});
 }
 
 function normalizeLimits(limits: Partial<WorkbookHistoryLimits>): WorkbookHistoryLimits {
@@ -267,8 +302,8 @@ function normalizeLimit(value: number | undefined, fallback: number, name: strin
   if (value === undefined) {
     return fallback;
   }
-  if (!Number.isFinite(value) || value < 0) {
-    throw new RangeError(`${name} must be a finite non-negative number`);
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a finite non-negative integer`);
   }
-  return Math.floor(value);
+  return value;
 }

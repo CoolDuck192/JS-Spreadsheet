@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { SheetModel, WorkbookModel } from "../../types";
-import { addSheet, createBlankWorkbook, setCellContent } from "../../lib/workbook";
+import type {
+  HistoryState,
+  SheetModel,
+  WorkbookHistoryLimits,
+  WorkbookModel
+} from "../../types";
+import {
+  addSheet,
+  commitHistory,
+  createBlankWorkbook,
+  createHistory,
+  redoHistory,
+  setCellContent,
+  undoHistory
+} from "../../lib/workbook";
 import {
   commitWorkbookHistory,
   createWorkbookHistory,
@@ -39,6 +52,50 @@ function workbookWithCells(cellCount: number): WorkbookModel {
 }
 
 describe("workbook history", () => {
+  it("accepts legacy three-field histories through typed compatibility delegates", () => {
+    const initial = createBlankWorkbook();
+    const legacyPast = Array.from({ length: 100 }, () => ({ ...initial }));
+    const legacy: HistoryState = {
+      past: legacyPast,
+      present: initial,
+      future: []
+    };
+
+    const created = createHistory(initial);
+    expect(created.limits).toEqual({ maxEntries: 100, maxWeight: 2_000_000 });
+
+    const next = { ...initial };
+    const committed = commitHistory(legacy, next);
+    expect(committed.past).toHaveLength(100);
+    expect(committed.past[0]).toBe(legacyPast[1]);
+    expect(committed.limits).toEqual({ maxEntries: 100, maxWeight: 2_000_000 });
+
+    const directlyUndone = undoHistory({
+      past: [initial],
+      present: next,
+      future: []
+    });
+    expect(directlyUndone.present).toBe(initial);
+    expect(directlyUndone.limits).toEqual({ maxEntries: 100, maxWeight: 2_000_000 });
+
+    const directlyRedone = redoHistory({
+      past: [],
+      present: initial,
+      future: [next]
+    });
+    expect(directlyRedone.present).toBe(next);
+    expect(directlyRedone.limits).toEqual({ maxEntries: 100, maxWeight: 2_000_000 });
+
+    const undone = undoHistory(committed);
+    expect(undone.present).toBe(initial);
+    const redone = redoHistory(undone);
+    expect(redone.present).toBe(next);
+    expect(getWorkbookHistoryStats(legacy)).toMatchObject({
+      retainedCount: 100,
+      retainedWeight: 200
+    });
+  });
+
   it("counts every current persisted cell and metadata collection deterministically", () => {
     const workbook = createBlankWorkbook();
     const sheet = workbook.sheets[0];
@@ -99,6 +156,47 @@ describe("workbook history", () => {
         estimateWorkbookWeight(variant)
       );
     }
+  });
+
+  it("counts nested validation, filter, and border cardinality exactly", () => {
+    const workbook = createBlankWorkbook();
+    const oneValidationValue = replaceActiveSheet(workbook, {
+      validations: { A1: { type: "list", values: ["one"] } }
+    });
+    const threeValidationValues = replaceActiveSheet(workbook, {
+      validations: { A1: { type: "list", values: ["one", "two", "three"] } }
+    });
+    const oneFilterValue = replaceActiveSheet(workbook, {
+      filters: [{
+        id: "filter-1",
+        range,
+        column: 0,
+        operator: "equals",
+        value: "one",
+        values: ["one"]
+      }]
+    });
+    const threeFilterValues = replaceActiveSheet(workbook, {
+      filters: [{
+        id: "filter-1",
+        range,
+        column: 0,
+        operator: "equals",
+        value: "one",
+        values: ["one", "two", "three"]
+      }]
+    });
+    const borderSide = { style: "thin" as const, color: "#000000" };
+    const oneBorderSide = replaceActiveSheet(workbook, {
+      formats: { A1: { borders: { top: borderSide } } }
+    });
+    const threeBorderSides = replaceActiveSheet(workbook, {
+      formats: { A1: { borders: { top: borderSide, right: borderSide, bottom: borderSide } } }
+    });
+
+    expect(estimateWorkbookWeight(threeValidationValues) - estimateWorkbookWeight(oneValidationValue)).toBe(2);
+    expect(estimateWorkbookWeight(threeFilterValues) - estimateWorkbookWeight(oneFilterValue)).toBe(2);
+    expect(estimateWorkbookWeight(threeBorderSides) - estimateWorkbookWeight(oneBorderSide)).toBe(2);
   });
 
   it("bounds retained snapshots by both count and total logical weight", () => {
@@ -171,6 +269,54 @@ describe("workbook history", () => {
     expect(getWorkbookHistoryStats(history).futureCount).toBe(0);
   });
 
+  it("clears redo when the branch commit reuses the present reference", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const first = setCellContent(initial, sheetId, "A1", 1);
+    const second = setCellContent(first, sheetId, "A1", 2);
+    let history = createWorkbookHistory(initial);
+    history = commitWorkbookHistory(history, first);
+    history = commitWorkbookHistory(history, second);
+    history = undoWorkbookHistory(history);
+
+    const branched = commitWorkbookHistory(history, history.present);
+
+    expect(branched).not.toBe(history);
+    expect(branched.present).toBe(first);
+    expect(branched.past).toEqual(history.past);
+    expect(branched.future).toEqual([]);
+  });
+
+  it("remeasures aliased nested metadata for statistics and trimming", () => {
+    const retained = replaceActiveSheet(createBlankWorkbook(), {
+      cells: { A1: 1 },
+      validations: { A1: { type: "list", values: ["one"] } }
+    });
+    const present = createBlankWorkbook();
+    const retainedWeight = estimateWorkbookWeight(retained);
+    const presentWeight = estimateWorkbookWeight(present);
+    let history = createWorkbookHistory(retained, {
+      maxWeight: retainedWeight + presentWeight
+    });
+    history = commitWorkbookHistory(history, present);
+
+    const measuredWeight = getWorkbookHistoryStats(history).pastWeight;
+    const validation = retained.sheets[0].validations.A1;
+    if (validation.type !== "list") {
+      throw new Error("Expected list validation");
+    }
+    retained.sheets[0].cells.A2 = 2;
+    (validation.values as string[]).push("two", "three");
+
+    expect(getWorkbookHistoryStats(history).pastWeight).toBe(measuredWeight + 3);
+
+    const replacement = createBlankWorkbook();
+    history = commitWorkbookHistory(history, replacement);
+
+    expect(history.past).toEqual([present]);
+    expect(getWorkbookHistoryStats(history).retainedWeight).toBe(presentWeight);
+  });
+
   it("does not retain an oversized snapshot or leave a non-adjacent undo target", () => {
     const initial = createBlankWorkbook();
     const oversized = workbookWithCells(50);
@@ -208,5 +354,40 @@ describe("workbook history", () => {
 
     history = redoWorkbookHistory(history);
     expect(history.present).toBe(edited);
+  });
+
+  it("allows zero limits while retaining the present workbook", () => {
+    const initial = createBlankWorkbook();
+    const edited = setCellContent(initial, initial.activeSheetId, "A1", 1);
+    let history = createWorkbookHistory(initial, { maxEntries: 0, maxWeight: 0 });
+
+    history = commitWorkbookHistory(history, edited);
+
+    expect(history).toMatchObject({
+      past: [],
+      present: edited,
+      future: [],
+      limits: { maxEntries: 0, maxWeight: 0 }
+    });
+    expect(getWorkbookHistoryStats(history)).toMatchObject({
+      retainedCount: 0,
+      retainedWeight: 0
+    });
+    expect(undoWorkbookHistory(history)).toBe(history);
+  });
+
+  it.each([
+    ["maxEntries", -1],
+    ["maxEntries", Number.NaN],
+    ["maxEntries", Number.POSITIVE_INFINITY],
+    ["maxEntries", 1.5],
+    ["maxWeight", -1],
+    ["maxWeight", Number.NaN],
+    ["maxWeight", Number.POSITIVE_INFINITY],
+    ["maxWeight", 1.5]
+  ] as const)("rejects invalid %s limit %s", (name, value) => {
+    const limits = { [name]: value } as Partial<WorkbookHistoryLimits>;
+
+    expect(() => createWorkbookHistory(createBlankWorkbook(), limits)).toThrow(RangeError);
   });
 });
