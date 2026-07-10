@@ -229,6 +229,9 @@ export function useGridInteraction({
       focusPendingRef.current = true;
     }
     previousEditingRef.current = editing;
+    if (editing) {
+      return;
+    }
     if (!focusPendingRef.current || !activeCell) {
       return;
     }
