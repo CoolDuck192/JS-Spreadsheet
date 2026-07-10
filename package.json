@@ -4,14 +4,27 @@
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "./dist/lib/react.js",
+  "module": "./dist/lib/react.js",
+  "types": "./dist/types/entry/react.d.ts",
+  "exports": {
+    ".": { "types": "./dist/types/entry/react.d.ts", "import": "./dist/lib/react.js" },
+    "./core": { "types": "./dist/types/entry/core.d.ts", "import": "./dist/lib/core.js" },
+    "./react": { "types": "./dist/types/entry/react.d.ts", "import": "./dist/lib/react.js" },
+    "./connectors/google": { "types": "./dist/types/entry/google.d.ts", "import": "./dist/lib/connectors/google.js" },
+    "./styles.css": "./dist/lib/styles.css"
+  },
+  "files": ["dist/lib", "dist/types", "README.md", "LICENSE"],
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty false",
+    "build": "pnpm run typecheck && pnpm run build:app",
+    "build:app": "vite build --outDir dist/app --emptyOutDir",
+    "build:lib": "tsc -p tsconfig.build.json && vite build --config vite.lib.config.ts",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,9 +33,11 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "hyperformula": "^3.3.0",
-    "lucide-react": "^1.21.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "lucide-react": "^1.21.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.2 <20",
+    "react-dom": ">=18.2 <20"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -35,6 +50,8 @@
     "@vitejs/plugin-react": "^6.0.3",
     "fast-check": "4.9.0",
     "jsdom": "^29.1.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
     "vite": "^8.1.0",
     "vitest": "^4.1.9"

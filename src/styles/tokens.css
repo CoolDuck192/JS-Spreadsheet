@@ -1,0 +1,25 @@
+.js-spreadsheet-root.js-spreadsheet-workbook,
+.js-spreadsheet-root.js-spreadsheet-data-table {
+  --js-spreadsheet-accent: #22795d;
+  --js-spreadsheet-accent-strong: #17634a;
+  --js-spreadsheet-accent-soft: #eaf7f2;
+  --js-spreadsheet-border: #cbd5e1;
+  --js-spreadsheet-border-strong: #94a3b8;
+  --js-spreadsheet-chrome: #f8fafc;
+  --js-spreadsheet-chrome-strong: #eef3f7;
+  --js-spreadsheet-text: #172033;
+  --js-spreadsheet-muted: #5f6e82;
+  --js-spreadsheet-surface: #ffffff;
+  --js-spreadsheet-surface-muted: #f8fafc;
+  --js-spreadsheet-text-muted: #5f6e82;
+  --js-spreadsheet-accent-contrast: #ffffff;
+  --js-spreadsheet-selection: #d7f4e9;
+  --js-spreadsheet-danger: #b42318;
+  --js-spreadsheet-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --js-spreadsheet-font-size: 14px;
+  font-family: var(--js-spreadsheet-font-family);
+  font-size: var(--js-spreadsheet-font-size);
+  color: var(--js-spreadsheet-text);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
