@@ -38,6 +38,7 @@ export type GridViewportCell = {
   className?: string;
   style?: CSSProperties;
   title?: string;
+  dataAttributes?: Readonly<Record<`data-${string}`, string | number | boolean | undefined>>;
   columnSpan?: number;
   rowSpan?: number;
 };

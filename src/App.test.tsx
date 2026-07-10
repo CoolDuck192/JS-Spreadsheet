@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { Spreadsheet } from "./App";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 
@@ -983,6 +983,92 @@ describe("App", () => {
     expect(within(toolbar).getByRole("tabpanel", { name: "Insert" })).toBeInTheDocument();
     expect(within(toolbar).getByRole("button", { name: "Chart" })).toBeInTheDocument();
     expect(within(toolbar).getByRole("button", { name: "Pivot table" })).toBeInTheDocument();
+  });
+
+  it("creates a structured table from the Insert ribbon and converts it back without changing values", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(<Spreadsheet storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    fireEvent.paste(screen.getByRole("grid", { name: "Spreadsheet grid" }), {
+      clipboardData: { getData: () => "Region\tSales\nWest\t10\nEast\t8" }
+    });
+    selectRange("A1 Region", "B3 8");
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    await openRibbonTab(user, "Insert");
+    await user.click(screen.getByRole("button", { name: "Table" }));
+
+    expect(screen.getByRole("tab", { name: "Table" })).toBeInTheDocument();
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        type: "transaction",
+        commands: expect.arrayContaining([expect.objectContaining({ type: "table.create" })])
+      }),
+      result: expect.objectContaining({ status: "committed" })
+    }));
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Convert to range" }));
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    expect(screen.getByRole("gridcell", { name: "A1 Region" })).toHaveTextContent("Region");
+    expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveTextContent("10");
+    expect(screen.getByRole("gridcell", { name: "B3 8" })).toHaveTextContent("8");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "table.convertToRange" }),
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("uses the active cell's table when a large selection intersects two tables", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    selectRange("D1 Department", "A1 Region");
+
+    await openRibbonTab(user, "Table");
+    expect(screen.getByLabelText("Table name")).toHaveValue("CostsTable");
+  });
+
+  it("dispatches table metadata edits through the workbook session and announces rejected drafts", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} onCommandResult={onCommandResult} />);
+
+    await openRibbonTab(user, "Table");
+    const name = screen.getByLabelText("Table name");
+    await user.clear(name);
+    await user.type(name, "RevenueTable{Enter}");
+
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: { type: "table.rename", tableId: "table-sales", name: "RevenueTable" },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+
+    await user.clear(screen.getByLabelText("Table name"));
+    await user.type(screen.getByLabelText("Table name"), "CostsTable{Enter}");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Table names must be unique");
+    expect(screen.getByLabelText("Table name")).toHaveFocus();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Table names must be unique");
+  });
+
+  it("includes the contextual Table tab in ribbon keyboard navigation and restores Home when it disappears", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    const homeTab = screen.getByRole("tab", { name: "Home" });
+    homeTab.focus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "Table" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Table" })).toHaveFocus();
+
+    await user.click(screen.getByRole("gridcell", { name: "H10" }));
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   });
 
   it("opens saved workbooks with stale active sheet ids", () => {
@@ -3058,6 +3144,62 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "C3 7" })).toHaveTextContent("7");
   });
 });
+
+function structuredTableWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  return {
+    ...workbook,
+    sheets: [{
+      ...sheet,
+      cells: {
+        ...sheet.cells,
+        A1: "Region",
+        B1: "Sales",
+        A2: "West",
+        B2: 10,
+        A3: "East",
+        B3: 8,
+        D1: "Department",
+        E1: "Cost",
+        D2: "Operations",
+        E2: 5,
+        D3: "Technology",
+        E3: 7
+      }
+    }],
+    tables: [
+      {
+        id: "table-sales",
+        name: "SalesTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "sales-region", name: "Region", sheetColumn: 0 },
+          { id: "sales-value", name: "Sales", sheetColumn: 1 }
+        ],
+        rowIds: ["sales-west", "sales-east"],
+        style: { theme: "TableStyleLight1", showRowStripes: true }
+      },
+      {
+        id: "table-costs",
+        name: "CostsTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 3 }, end: { row: 2, column: 4 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "cost-department", name: "Department", sheetColumn: 3 },
+          { id: "cost-value", name: "Cost", sheetColumn: 4 }
+        ],
+        rowIds: ["cost-operations", "cost-technology"],
+        style: { theme: "TableStyleMedium2", showRowStripes: true }
+      }
+    ]
+  };
+}
 
 type FormulaFillOperation = "Fill Down" | "Fill Right" | "AutoFill";
 

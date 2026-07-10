@@ -5,6 +5,7 @@ import { foldDeterministicText } from "../../lib/filters";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../../lib/formulaSuggestions";
 import type { GridViewportRenderContext } from "../../react/viewport/types";
 import { FormulaSuggestions, formulaSuggestionOptionId } from "../FormulaSuggestions";
+import type { StructuredTableCellProjection } from "../Grid";
 
 const AUTO_FILTER_DISPLAY_LIMIT = 200;
 
@@ -46,6 +47,7 @@ export type SpreadsheetCellProps = {
   showValidationDropdown: boolean;
   editorValue?: string;
   autoFilter?: SpreadsheetAutoFilter | null;
+  structuredTableCell?: StructuredTableCellProjection | null;
   interactionResetKey: unknown;
   onEditValueChange(value: string): void;
   onCommitEdit(address: string, value: string, move?: "down" | "up" | "right" | "left"): void;
@@ -65,6 +67,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
     showValidationDropdown,
     editorValue = "",
     autoFilter,
+    structuredTableCell,
     interactionResetKey,
     onEditValueChange,
     onCommitEdit,
@@ -362,6 +365,16 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
             </div>
           ) : null}
         </>
+      ) : null}
+      {structuredTableCell?.role === "header" && !autoFilter ? (
+        <span
+          className="structured-table-filter-affordance"
+          data-testid="structured-table-filter-affordance"
+          aria-hidden="true"
+          title="Table filter available from the Table tab"
+        >
+          <ListFilter />
+        </span>
       ) : null}
       {showValidationDropdown && validation?.type === "list" ? (
         <>

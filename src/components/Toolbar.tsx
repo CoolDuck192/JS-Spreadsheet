@@ -63,6 +63,11 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import type { BorderPreset, CellFormat, SelectionFormatSummary } from "../types";
 import type { AutoFunctionName } from "../lib/autoSum";
 import type { WorkbookFeatureConfiguration } from "../App";
+import {
+  SpreadsheetTableExportReasonProvider,
+  SpreadsheetTableTab,
+  type SpreadsheetTableTabProps
+} from "./SpreadsheetTableTab";
 
 const MIXED_SELECT_VALUE = "__mixed__";
 
@@ -120,7 +125,7 @@ const AUTO_FUNCTION_MENU_ITEMS: Array<{ value: AutoFunctionName; label: string }
   { value: "MIN", label: "Min" }
 ];
 
-const RIBBON_TABS = [
+const BASE_RIBBON_TABS = [
   { id: "file", label: "File" },
   { id: "home", label: "Home" },
   { id: "insert", label: "Insert" },
@@ -130,7 +135,9 @@ const RIBBON_TABS = [
   { id: "view", label: "View" }
 ] as const;
 
-type RibbonTabId = (typeof RIBBON_TABS)[number]["id"];
+const TABLE_RIBBON_TAB = { id: "table", label: "Table" } as const;
+
+type RibbonTabId = (typeof BASE_RIBBON_TABS)[number]["id"] | typeof TABLE_RIBBON_TAB.id;
 
 type ToolbarProps = {
   features?: WorkbookFeatureConfiguration;
@@ -224,6 +231,9 @@ type ToolbarProps = {
   onResetView: () => void;
   onPivot: () => void;
   onChart: () => void;
+  onCreateTable: () => void;
+  structuredTable?: SpreadsheetTableTabProps;
+  structuredTableExportReason?: string;
   onBold: () => void;
   onItalic: () => void;
   onWrapText: () => void;
@@ -239,8 +249,20 @@ type ToolbarProps = {
 
 export function Toolbar(props: ToolbarProps) {
   const [activeTab, setActiveTab] = useState<RibbonTabId>("home");
-  const activeTabIndex = RIBBON_TABS.findIndex((tab) => tab.id === activeTab);
-  const activeTabLabel = RIBBON_TABS[activeTabIndex]?.label ?? "Home";
+  const tableTabVisible = props.features?.structuredTables !== false && Boolean(props.structuredTable);
+  const ribbonTabs: ReadonlyArray<{ id: RibbonTabId; label: string }> = tableTabVisible
+    ? [...BASE_RIBBON_TABS, TABLE_RIBBON_TAB]
+    : BASE_RIBBON_TABS;
+  const activeTabIndex = ribbonTabs.findIndex((tab) => tab.id === activeTab);
+  const activeTabLabel = ribbonTabs[activeTabIndex]?.label ?? "Home";
+
+  useEffect(() => {
+    if (tableTabVisible || activeTab !== "table") {
+      return;
+    }
+    setActiveTab("home");
+    queueMicrotask(() => document.getElementById(ribbonTabId("home"))?.focus());
+  }, [activeTab, tableTabVisible]);
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
@@ -252,12 +274,12 @@ export function Toolbar(props: ToolbarProps) {
       event.key === "Home"
         ? 0
         : event.key === "End"
-          ? RIBBON_TABS.length - 1
+          ? ribbonTabs.length - 1
           : event.key === "ArrowRight"
-            ? (index + 1) % RIBBON_TABS.length
-            : (index - 1 + RIBBON_TABS.length) % RIBBON_TABS.length;
-    setActiveTab(RIBBON_TABS[nextIndex].id);
-    document.getElementById(ribbonTabId(RIBBON_TABS[nextIndex].id))?.focus();
+            ? (index + 1) % ribbonTabs.length
+            : (index - 1 + ribbonTabs.length) % ribbonTabs.length;
+    setActiveTab(ribbonTabs[nextIndex].id);
+    document.getElementById(ribbonTabId(ribbonTabs[nextIndex].id))?.focus();
   }
 
   return (
@@ -268,14 +290,18 @@ export function Toolbar(props: ToolbarProps) {
           <span>JavaScript Spreadsheet</span>
         </div>
         <div className="ribbon-tabs" role="tablist" aria-label="Ribbon tabs">
-          {RIBBON_TABS.map((tab, index) => {
+          {ribbonTabs.map((tab, index) => {
             const selected = tab.id === activeTab;
 
             return (
               <button
                 key={tab.id}
                 id={ribbonTabId(tab.id)}
-                className={selected ? "ribbon-tab active-ribbon-tab" : "ribbon-tab"}
+                className={[
+                  "ribbon-tab",
+                  selected ? "active-ribbon-tab" : "",
+                  tab.id === "table" ? "ribbon-tab--contextual" : ""
+                ].filter(Boolean).join(" ")}
                 type="button"
                 role="tab"
                 aria-selected={selected}
@@ -310,6 +336,14 @@ function renderRibbonTab(activeTab: RibbonTabId, props: ToolbarProps) {
 
   if (activeTab === "insert") {
     return <InsertGroup {...props} />;
+  }
+
+  if (activeTab === "table" && props.structuredTable) {
+    return (
+      <SpreadsheetTableExportReasonProvider reason={props.structuredTableExportReason}>
+        <SpreadsheetTableTab {...props.structuredTable} />
+      </SpreadsheetTableExportReasonProvider>
+    );
   }
 
   if (activeTab === "formulas") {
@@ -491,6 +525,9 @@ function InsertGroup(props: ToolbarProps) {
   return (
     <>
       <ToolbarGroup label="Tables">
+        {props.features?.structuredTables !== false ? (
+          <ToolbarButton label="Table" onClick={props.onCreateTable} icon={<TableProperties />} compact />
+        ) : null}
         <ToolbarButton label="Pivot table" onClick={props.onPivot} icon={<TableProperties />} expanded={props.pivotPanelOpen} compact />
       </ToolbarGroup>
       {props.features?.charts !== false ? <ToolbarGroup label="Charts">

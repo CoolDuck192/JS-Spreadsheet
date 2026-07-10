@@ -43,7 +43,8 @@ import type {
   ConditionalFormatRule,
   DataValidationRule,
   SheetFilter,
-  SheetModel
+  SheetModel,
+  TableStyle
 } from "../types";
 import {
   SpreadsheetCell,
@@ -65,6 +66,14 @@ export type GridScrollApi = {
   ensureCellVisible: (row: number, column: number) => void;
 };
 
+export type StructuredTableCellProjection = {
+  tableId: string;
+  columnId: string;
+  rowId?: string;
+  role: "header" | "body" | "totals";
+  style?: TableStyle;
+};
+
 type GridProps = {
   sheet: SheetModel;
   formulaEngine: FormulaEngine;
@@ -83,6 +92,8 @@ type GridProps = {
   getCellReadOnly?: (address: string) => boolean;
   getCellValidation?: (address: string) => DataValidationRule | null | undefined;
   getCellConditionalFormatRules?: (address: string) => ConditionalFormatRule[];
+  getStructuredTableCell?: (address: string) => StructuredTableCellProjection | null;
+  isStructuredTableRowVisible?: (row: number) => boolean;
   scrollRef?: RefObject<HTMLDivElement | null>;
   onSelectionChange: (range: CellRange) => void;
   onStartEdit: (address: string) => void;
@@ -132,6 +143,7 @@ type ResolvedSpreadsheetCell = {
   ruleValues: readonly (readonly string[])[];
   showValidationDropdown: boolean;
   autoFilter: SpreadsheetAutoFilter | null;
+  structuredTableCell: StructuredTableCellProjection | null;
 };
 
 export function Grid({
@@ -152,6 +164,8 @@ export function Grid({
   getCellReadOnly = () => false,
   getCellValidation = () => null,
   getCellConditionalFormatRules = () => [],
+  getStructuredTableCell = () => null,
+  isStructuredTableRowVisible = () => true,
   scrollRef,
   onSelectionChange,
   onStartEdit,
@@ -192,8 +206,8 @@ export function Grid({
     () =>
       getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
         formulaEngine.getComputedValue(sheet.id, formatCellAddress({ row, column }))
-      ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]),
-    [formulaEngine, sheet]
+      ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)] && isStructuredTableRowVisible(row)),
+    [formulaEngine, isStructuredTableRowVisible, sheet]
   );
   const viewportRows = useMemo<readonly GridViewportRow[]>(
     () =>
@@ -300,6 +314,7 @@ export function Grid({
       getCellHyperlink,
       getCellReadOnly,
       getCellValidation,
+      getStructuredTableCell,
       normalizedSelection,
       onAutoFilterColumn,
       onClearAutoFilterColumn,
@@ -334,6 +349,10 @@ export function Grid({
     const mergeInfo = getMergeInfo(sheet, row, column);
     const isMergeAnchor = mergeInfo?.role === "anchor";
     const isMergeCovered = mergeInfo?.role === "covered";
+    const structuredTableCell = isMergeCovered ? null : getStructuredTableCell(address);
+    const isStructuredTableStriped = structuredTableCell?.role === "body"
+      && structuredTableCell.style?.showRowStripes !== false
+      && row % 2 === 1;
     const format = getCellFormat(address);
     const comment = getCellComment(address)?.trim() ?? "";
     const hyperlink = isMergeCovered ? "" : getCellHyperlink(address)?.trim() ?? "";
@@ -444,6 +463,9 @@ export function Grid({
       isReadOnly ? "read-only-cell" : "",
       conditionalFormat ? "conditional-format-cell" : "",
       conditionalDataBar ? "conditional-data-bar-cell" : "",
+      structuredTableCell ? "structured-table-cell" : "",
+      structuredTableCell ? `structured-table-cell--${structuredTableCell.role}` : "",
+      isStructuredTableStriped ? "structured-table-cell--striped" : "",
       freezeTopRow && row === 0 ? "frozen-top-row-cell" : "",
       freezeFirstColumn && column === 0 ? "frozen-first-column-cell" : ""
     ]
@@ -466,6 +488,14 @@ export function Grid({
         className,
         style,
         title: title || undefined,
+        dataAttributes: structuredTableCell ? {
+          "data-structured-table-id": structuredTableCell.tableId,
+          "data-structured-table-column-id": structuredTableCell.columnId,
+          "data-structured-table-row-id": structuredTableCell.rowId,
+          "data-structured-table-role": structuredTableCell.role,
+          "data-structured-table-style": structuredTableCell.style?.theme,
+          "data-striped": isStructuredTableStriped ? "true" : undefined
+        } : undefined,
         columnSpan: isMergeAnchor ? mergeInfo.columnSpan : undefined,
         rowSpan: isMergeAnchor ? mergeInfo.rowSpan : undefined
       },
@@ -481,7 +511,8 @@ export function Grid({
       mergeInfo,
       ruleValues,
       showValidationDropdown,
-      autoFilter
+      autoFilter,
+      structuredTableCell
     };
     resolvedCellCache.set(cacheKey, resolved);
     return resolved;
@@ -544,6 +575,7 @@ export function Grid({
           showValidationDropdown={resolved.showValidationDropdown}
           editorValue={mode === "editor" ? editingCell?.value ?? "" : undefined}
           autoFilter={mode === "display" ? resolved.autoFilter : null}
+          structuredTableCell={mode === "display" ? resolved.structuredTableCell : null}
           interactionResetKey={interactionResetKey}
           onEditValueChange={onEditValueChange}
           onCommitEdit={onCommitEdit}

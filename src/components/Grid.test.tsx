@@ -1153,6 +1153,97 @@ describe("Grid", () => {
         .map((choice) => choice.textContent)
     ).toEqual(["z", "ä"]);
   });
+
+  it("projects structured-table roles, stable ids, styles, and header filter affordances onto cells", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.cells = { A1: "Region", A2: "West", A3: "Total" };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        getStructuredTableCell={(address) => {
+          if (address === "A1") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              role: "header",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          if (address === "A2") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              rowId: "row-west",
+              role: "body",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          if (address === "A3") {
+            return {
+              tableId: "table-sales",
+              columnId: "column-region",
+              role: "totals",
+              style: { theme: "TableStyleMedium2", showRowStripes: true }
+            };
+          }
+          return null;
+        }}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const header = screen.getByRole("gridcell", { name: "A1 Region" });
+    const body = screen.getByRole("gridcell", { name: "A2 West" });
+    const totals = screen.getByRole("gridcell", { name: "A3 Total" });
+    expect(header).toHaveClass("structured-table-cell", "structured-table-cell--header");
+    expect(header).toHaveAttribute("data-structured-table-id", "table-sales");
+    expect(header).toHaveAttribute("data-structured-table-style", "TableStyleMedium2");
+    expect(within(header).getByTestId("structured-table-filter-affordance")).toBeInTheDocument();
+    expect(body).toHaveClass("structured-table-cell--body", "structured-table-cell--striped");
+    expect(body).toHaveAttribute("data-structured-table-row-id", "row-west");
+    expect(totals).toHaveClass("structured-table-cell--totals");
+  });
+
+  it("combines structured-table visibility with legacy filtering and explicit hidden rows without mutating the sheet", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.cells = { A1: "Region", A2: "West", A3: "East", A4: "North" };
+    sheet.hiddenRows = { "3": true };
+    const hiddenRowsBefore = { ...sheet.hiddenRows };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        isStructuredTableRowVisible={(row) => row !== 2}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("gridcell", { name: "A2 West" })).toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A3 East" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("gridcell", { name: "A4 North" })).not.toBeInTheDocument();
+    expect(sheet.hiddenRows).toEqual(hiddenRowsBefore);
+  });
 });
 
 const BLANK_FILTER_VALUE = "\u0000js-spreadsheet:blank";

@@ -382,6 +382,7 @@ export function GridViewport({
                     aria-rowspan={cell.rowSpan}
                     className={cell.className}
                     title={cell.title}
+                    {...cell.dataAttributes}
                     tabIndex={active ? 0 : -1}
                     style={cellPositionStyle(
                       rowHeaderWidth + columnMeasurement.start,

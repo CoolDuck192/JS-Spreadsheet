@@ -255,7 +255,7 @@ function applyStructuredTotalOverrides(
     }));
   };
 
-  for (const table of workbook.tables) {
+  for (const table of workbook.tables ?? []) {
     if (!table.totalsRow) continue;
     const body = getStructuredTableBodyRange(table);
     for (const column of table.columns) {

@@ -85,6 +85,13 @@ import type {
   WorkbookSession
 } from "./core/workbook/WorkbookSession";
 import type { WorkbookCommand } from "./core/workbook/commands";
+import type { TableIssue } from "./core/commands/types";
+import {
+  getStructuredTableAtCell,
+  getStructuredTableBodyRange,
+  getStructuredTableForSelection
+} from "./core/workbook/structuredTables";
+import { isStructuredTableRowVisible as isWorkbookStructuredTableRowVisible } from "./core/workbook/structuredTableFilter";
 import type {
   SpreadsheetServices,
   WorkbookExportArtifact,
@@ -300,6 +307,11 @@ function SpreadsheetWorkbook({
   const [isNamedRangesOpen, setNamedRangesOpen] = useState(false);
   const [isGoToPanelOpen, setGoToPanelOpen] = useState(false);
   const [isFormulaAuditOpen, setFormulaAuditOpen] = useState(false);
+  const [tableCommandIssues, setTableCommandIssues] = useState<{
+    tableId?: string;
+    issues: readonly TableIssue[];
+  }>({ issues: [] });
+  const [openTableId, setOpenTableId] = useState<string | null>(null);
   const [goToDraft, setGoToDraft] = useState("");
   const [findDraft, setFindDraft] = useState("");
   const [replaceDraft, setReplaceDraft] = useState("");
@@ -388,6 +400,28 @@ function SpreadsheetWorkbook({
   const workbook = sessionSnapshot.workbook;
   const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
+  const activeTable = features?.structuredTables === false
+    ? null
+    : getStructuredTableForSelection(workbook, activeSheet.id, selection);
+  const activeTableColumnId = activeTable?.columns.find(
+    (column) => column.sheetColumn === selection.start.column
+  )?.id;
+  const activeTableExportReason = useMemo(
+    () => activeTable
+      ? session.table(activeTable.id).getSnapshot().operationStates.export.reason
+      : undefined,
+    [activeTable?.id, session]
+  );
+  const getStructuredTableCell = useCallback(
+    (address: string) => projectStructuredTableCell(workbook, activeSheet.id, address),
+    [activeSheet.id, workbook]
+  );
+  const isStructuredTableRowVisible = useCallback(
+    (row: number) => workbook.tables
+      .filter((table) => table.sheetId === activeSheet.id)
+      .every((table) => isWorkbookStructuredTableRowVisible(workbook, table, row, session.getCellEvaluation)),
+    [activeSheet.id, session.getCellEvaluation, workbook]
+  );
   const freezeTopRow = Boolean(activeSheet.freezeTopRow);
   const freezeFirstColumn = Boolean(activeSheet.freezeFirstColumn);
   const activeAddress = formatCellAddress(selection.start);
@@ -672,6 +706,58 @@ function SpreadsheetWorkbook({
     }
 
     applyFormatPainter(nextSelection);
+  }
+
+  function handleCreateStructuredTable() {
+    const normalizedSelection = normalizeRange(selection);
+    const command: WorkbookCommand = {
+      type: "transaction",
+      commands: [
+        {
+          type: "table.create",
+          sheetId: activeSheet.id,
+          range: normalizedSelection,
+          headerRow: true,
+          totalsRow: false,
+          style: { theme: "TableStyleLight1", showRowStripes: true }
+        },
+        { type: "selection.set", selection: normalizedSelection }
+      ]
+    };
+    const result = session.dispatch(command);
+    if (result.status === "rejected") {
+      const issues = result.issues ?? [{ code: "TABLE_CREATE_REJECTED", message: "Table could not be created" }];
+      setTableCommandIssues({ issues });
+      setStatus(issues[0]?.message ?? "Table could not be created");
+      return;
+    }
+    if (result.status !== "committed") {
+      setStatus("Table could not be created");
+      return;
+    }
+
+    setSelection(normalizedSelection);
+    setTableCommandIssues({ issues: [] });
+    setStatus(`Created table from ${formatSelectionAddress(normalizedSelection)}`);
+  }
+
+  function dispatchStructuredTableCommand(command: WorkbookCommand, nextStatus: string) {
+    const tableId = "tableId" in command && typeof command.tableId === "string" ? command.tableId : activeTable?.id;
+    const result = session.dispatch(command);
+    if (result.status === "rejected") {
+      const issues = result.issues ?? [{ code: "TABLE_COMMAND_REJECTED", message: "Table change was rejected" }];
+      setTableCommandIssues({ tableId, issues });
+      setStatus(issues[0]?.message ?? "Table change was rejected");
+      return false;
+    }
+    if (result.status !== "committed") {
+      setStatus("Table change could not be completed");
+      return false;
+    }
+
+    setTableCommandIssues({ tableId, issues: [] });
+    setStatus(nextStatus);
+    return true;
   }
 
   function applyFormatPainter(targetSelection: CellRange) {
@@ -2068,6 +2154,9 @@ function SpreadsheetWorkbook({
     if ((activeSheet.hiddenRows ?? {})[String(row)]) {
       return true;
     }
+    if (!isStructuredTableRowVisible(row)) {
+      return true;
+    }
     const filters = activeSheet.filters ?? [];
     if (filters.length === 0) {
       return false;
@@ -2771,6 +2860,78 @@ function SpreadsheetWorkbook({
             setGoToPanelOpen(false);
             setFormulaAuditOpen(false);
           }}
+          onCreateTable={handleCreateStructuredTable}
+          structuredTable={activeTable ? {
+            table: activeTable,
+            activeColumnId: activeTableColumnId,
+            issues: tableCommandIssues.tableId === activeTable.id ? tableCommandIssues.issues : [],
+            onRename: (name) => {
+              dispatchStructuredTableCommand(
+                { type: "table.rename", tableId: activeTable.id, name },
+                `Renamed table to ${name}`
+              );
+            },
+            onResize: (range) => {
+              dispatchStructuredTableCommand(
+                { type: "table.resize", tableId: activeTable.id, range },
+                `Resized ${activeTable.name} to ${formatSelectionAddress(range)}`
+              );
+            },
+            onHeaderRow: (enabled) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setHeaderRow", tableId: activeTable.id, enabled },
+                enabled ? "Enabled table header row" : "Disabled table header row"
+              );
+            },
+            onTotalsRow: (enabled) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setTotalsRow", tableId: activeTable.id, enabled },
+                enabled ? "Enabled table totals row" : "Disabled table totals row"
+              );
+            },
+            onTotalsFunction: (columnId, aggregate) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setTotalsFunction", tableId: activeTable.id, columnId, aggregate },
+                "Updated table totals function"
+              );
+            },
+            onStyle: (tableStyle) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setStyle", tableId: activeTable.id, style: tableStyle },
+                "Updated table style"
+              );
+            },
+            onKeyColumn: (columnId) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setKeyColumn", tableId: activeTable.id, columnId },
+                columnId ? "Updated table key column" : "Cleared table key column"
+              );
+            },
+            onCalculatedColumn: (columnId, formula) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setCalculatedColumn", tableId: activeTable.id, columnId, formula },
+                formula ? "Updated calculated column" : "Cleared calculated column"
+              );
+            },
+            onFilter: (filter) => {
+              dispatchStructuredTableCommand(
+                { type: "table.setFilter", tableId: activeTable.id, filter },
+                filter ? "Applied table filter" : "Cleared table filter"
+              );
+            },
+            onExport: () => setStatus(activeTableExportReason ?? "Table export is unavailable"),
+            onConvertToRange: () => {
+              dispatchStructuredTableCommand(
+                { type: "table.convertToRange", tableId: activeTable.id },
+                `Converted ${activeTable.name} to a range`
+              );
+            },
+            onOpenTableView: () => {
+              setOpenTableId(activeTable.id);
+              setStatus(`Opened table view for ${activeTable.name}`);
+            }
+          } : undefined}
+          structuredTableExportReason={activeTableExportReason}
           onBold={() => applyFormat({ bold: selectionFormat.bold !== true }, "Applied bold")}
           onItalic={() => applyFormat({ italic: selectionFormat.italic !== true }, "Applied italic")}
           onWrapText={() =>
@@ -2938,6 +3099,8 @@ function SpreadsheetWorkbook({
           getCellReadOnly={(address) => getCellReadOnly(workbook, activeSheet.id, address)}
           getCellValidation={(address) => activeSheet.validations[address]}
           getCellConditionalFormatRules={(address) => getCellConditionalFormatRules(workbook, activeSheet.id, address)}
+          getStructuredTableCell={getStructuredTableCell}
+          isStructuredTableRowVisible={isStructuredTableRowVisible}
           scrollRef={gridScrollRef}
           onSelectionChange={handleSelectionChange}
           onStartEdit={(address) => {
@@ -3058,6 +3221,29 @@ function SpreadsheetWorkbook({
 
 export default function App() {
   return <Spreadsheet />;
+}
+
+function projectStructuredTableCell(workbook: WorkbookModel, sheetId: string, address: string) {
+  const coordinate = parseCellAddress(address);
+  const table = getStructuredTableAtCell(workbook, sheetId, coordinate);
+  if (!table) return null;
+  const column = table.columns.find((candidate) => candidate.sheetColumn === coordinate.column);
+  if (!column) return null;
+
+  const role = table.headerRow && coordinate.row === table.range.start.row
+    ? "header" as const
+    : table.totalsRow && coordinate.row === table.range.end.row
+      ? "totals" as const
+      : "body" as const;
+  const body = role === "body" ? getStructuredTableBodyRange(table) : null;
+  const rowIndex = body ? coordinate.row - body.start.row : -1;
+  return {
+    tableId: table.id,
+    columnId: column.id,
+    rowId: rowIndex >= 0 ? table.rowIds[rowIndex] : undefined,
+    role,
+    style: table.style
+  };
 }
 
 function activeSheetToRows(sheet: WorkbookModel["sheets"][number]): string[][] {
