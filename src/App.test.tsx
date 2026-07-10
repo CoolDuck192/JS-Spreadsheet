@@ -1055,6 +1055,67 @@ describe("App", () => {
     expect(screen.getByLabelText("Status")).toHaveTextContent("Table names must be unique");
   });
 
+  it("downloads the contextual table as a native XLSX artifact and revokes its URL", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:table-xlsx");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const originalCreateElement = document.createElement.bind(document);
+    const anchors: HTMLAnchorElement[] = [];
+    vi.spyOn(document, "createElement").mockImplementation((tagName) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "a") {
+        vi.spyOn(element, "click").mockImplementation(() => undefined);
+        anchors.push(element as HTMLAnchorElement);
+      }
+      return element;
+    });
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    const exportButton = screen.getByRole("button", { name: "Export table" });
+    expect(exportButton).toBeEnabled();
+    await user.click(exportButton);
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const imported = await importWorkbookFromXlsx(await blob.arrayBuffer());
+    expect(imported.tables).toHaveLength(1);
+    expect(imported.tables[0].name).toBe("SalesTable");
+    expect(anchors[0].download).toBe("SalesTable.xlsx");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:table-xlsx");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Exported SalesTable");
+  });
+
+  it("revokes the contextual table URL and reports a download failure when the click throws", async () => {
+    const user = userEvent.setup();
+    const onError = vi.fn();
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:table-failure");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tagName) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "a") {
+        vi.spyOn(element, "click").mockImplementation(() => {
+          throw new Error("blocked download");
+        });
+      }
+      return element;
+    });
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} onError={onError} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Export table" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent("Table export failed"));
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:table-failure");
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      code: "service.export.table.failed",
+      message: "Table export failed",
+      recoverable: true
+    }));
+  });
+
   it("includes the contextual Table tab in ribbon keyboard navigation and restores Home when it disappears", async () => {
     const user = userEvent.setup();
     render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);

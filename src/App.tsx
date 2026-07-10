@@ -2499,6 +2499,20 @@ function SpreadsheetWorkbook({
       .catch(() => reportServiceFailure("service.export.xlsx.failed", "XLSX export failed"));
   }
 
+  function handleStructuredTableExport(tableId: string, tableName: string) {
+    Promise.resolve()
+      .then(() => session.table(tableId).export({
+        format: "xlsx",
+        scope: "completeDataset",
+        includeHeaders: true
+      }))
+      .then((artifact) => {
+        downloadWorkbookArtifact(artifact);
+        setStatus(`Exported ${tableName}`);
+      })
+      .catch(() => reportServiceFailure("service.export.table.failed", "Table export failed"));
+  }
+
   function reportServiceFailure(code: string, message: string) {
     setStatus(message);
     invokeHostCallback(onError, { code, message, recoverable: true });
@@ -2946,7 +2960,7 @@ function SpreadsheetWorkbook({
                 filter ? "Applied table filter" : "Cleared table filter"
               );
             },
-            onExport: () => setStatus(activeTableExportReason ?? "Table export is unavailable"),
+            onExport: () => handleStructuredTableExport(activeTable.id, activeTable.name),
             onConvertToRange: () => {
               dispatchStructuredTableCommand(
                 { type: "table.convertToRange", tableId: activeTable.id },
@@ -4159,6 +4173,9 @@ function downloadWorkbookArtifact(artifact: WorkbookExportArtifact): void {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = artifact.fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  try {
+    anchor.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

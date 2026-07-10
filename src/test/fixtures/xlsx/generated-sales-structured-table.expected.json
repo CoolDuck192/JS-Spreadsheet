@@ -1,0 +1,19 @@
+{
+  "sheetName": "Sales",
+  "tableName": "SalesTable",
+  "range": "A1:F6",
+  "headerRow": true,
+  "totalsRow": true,
+  "columns": [
+    "Order ID",
+    "Order Date",
+    "Region",
+    "Units",
+    "Unit Price",
+    "Amount"
+  ],
+  "bodyRowCount": 4,
+  "keyColumn": "Order ID",
+  "calculatedColumn": "Amount",
+  "filteredOutOrderIds": ["SO-1003"]
+}

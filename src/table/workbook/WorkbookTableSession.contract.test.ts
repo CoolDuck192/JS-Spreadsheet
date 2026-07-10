@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import type { CommandResult } from "../../core/commands/types";
 import { createWorkbookSession } from "../../core/workbook/WorkbookSession";
 import { createBlankWorkbook } from "../../lib/workbook";
@@ -54,7 +55,16 @@ defineTableSessionContract("workbook", () => {
       updates: [{ rowId: "row-ada", columnId: "column-name", patch: { formula: "=B2" } }]
     }),
     subscription: () => session.dispatch({ type: "refresh" }),
-    undo: () => session.dispatch({ type: "undo" })
+    undo: () => session.dispatch({ type: "undo" }),
+    export: async () => {
+      const artifact = await session.export({ format: "csv", scope: "completeDataset" });
+      expect(artifact).toMatchObject({
+        bytes: expect.any(Uint8Array),
+        mediaType: "text/csv;charset=utf-8",
+        fileName: "People.csv"
+      });
+      return { status: "committed" as const, revision: session.getSnapshot().revision };
+    }
   };
   return {
     session,

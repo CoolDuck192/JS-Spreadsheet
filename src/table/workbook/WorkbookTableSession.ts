@@ -14,6 +14,7 @@ import {
 } from "../../lib/workbook";
 import { formatCellAddress } from "../../lib/addressing";
 import { formatDisplayValue } from "../../lib/displayFormat";
+import { exportStructuredTableToXlsx } from "../../lib/xlsx";
 import {
   resolveTableOperationStates,
   type TableCapabilities
@@ -64,7 +65,7 @@ const WORKBOOK_TABLE_CAPABILITIES = Object.freeze({
   formula: "fullLocalDataset",
   subscription: true,
   undo: { executor: "client", scope: "completeDataset" },
-  export: false
+  export: { executor: "client", scope: "completeDataset" }
 } satisfies TableCapabilities);
 
 const OPERATION_STATES = resolveTableOperationStates(WORKBOOK_TABLE_CAPABILITIES, {});
@@ -236,8 +237,53 @@ export function createWorkbookTableSession(
     async redo() {
       return session.dispatch({ type: "redo" });
     },
-    async export(_options: ExportOptions): Promise<ExportArtifact> {
-      throw new Error("Workbook table export is not available until native XLSX table export is enabled");
+    async export(options: ExportOptions): Promise<ExportArtifact> {
+      if (destroyed) {
+        throw tableExportError("TABLE_SESSION_DESTROYED", "Workbook table session is destroyed");
+      }
+      const parent = workbookSession.getSnapshot();
+      const table = parent.workbook.tables.find((candidate) => candidate.id === tableId);
+      if (!table) throw tableExportError("TABLE_NOT_FOUND", "Structured table does not exist");
+      const fileName = exportFileName(options.fileName, table.name, options.format);
+
+      if (options.format === "xlsx") {
+        if (options.scope !== "completeDataset") {
+          throw tableExportError(
+            "TABLE_EXPORT_SCOPE_UNSUPPORTED",
+            "Native XLSX table export requires the complete dataset"
+          );
+        }
+        const bytes = await exportStructuredTableToXlsx(parent.workbook, tableId);
+        return {
+          bytes: copyBytes(bytes),
+          mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          fileName
+        };
+      }
+
+      const snapshot = getSnapshot();
+      const columns = exportColumns(table, snapshot.state);
+      const rowIds = options.scope === "currentView"
+        ? snapshot.rows.flatMap((row) => row.kind === "data" ? [row.id] : [])
+        : [...table.rowIds];
+      const lines: string[] = [];
+      if (options.includeHeaders !== false) {
+        lines.push(columns.map((column) => csvEscape(injectionSafeText(column.name))).join(","));
+      }
+      for (const rowId of rowIds) {
+        lines.push(columns.map((column) => {
+          const cell = getCell(rowId, column.id);
+          const text = shouldEscapeFormulaInjection(cell)
+            ? injectionSafeText(cell.displayValue)
+            : cell.displayValue;
+          return csvEscape(text);
+        }).join(","));
+      }
+      return {
+        bytes: copyBytes(new TextEncoder().encode(lines.length === 0 ? "" : `${lines.join("\r\n")}\r\n`)),
+        mediaType: "text/csv;charset=utf-8",
+        fileName
+      };
     },
     destroy() {
       if (destroyed) return;
@@ -599,4 +645,74 @@ function rejected(
 
 function unsupported(message: string): CommandResult {
   return rejected("unsupported", "TABLE_OPERATION_UNSUPPORTED", message);
+}
+
+function exportColumns(
+  table: StructuredTable,
+  state: TableViewState
+): readonly StructuredTableColumn[] {
+  const byId = new Map(table.columns.map((column) => [column.id, column]));
+  const orderedIds = [
+    ...state.columnOrder,
+    ...table.columns.map((column) => column.id).filter((id) => !state.columnOrder.includes(id))
+  ];
+  return orderedIds.flatMap((id) => {
+    const column = byId.get(id);
+    return column && state.columnVisibility[id] !== false ? [column] : [];
+  });
+}
+
+function shouldEscapeFormulaInjection(cell: TableCellSnapshot): boolean {
+  return cell.formula !== undefined
+    ? typeof cell.evaluatedValue === "string"
+    : typeof cell.storedValue === "string";
+}
+
+function injectionSafeText(value: string): string {
+  if (value.startsWith("'")) return value;
+  const first = value[0];
+  if (first === "\t" || first === "\r" || first === "\n") return `'${value}`;
+  const firstNonWhitespace = value.trimStart()[0];
+  return firstNonWhitespace === "="
+    || firstNonWhitespace === "+"
+    || firstNonWhitespace === "-"
+    || firstNonWhitespace === "@"
+    ? `'${value}`
+    : value;
+}
+
+function csvEscape(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function exportFileName(
+  requested: string | undefined,
+  tableName: string,
+  format: ExportOptions["format"]
+): string {
+  const requestedName = requested?.trim();
+  const lastPathSegment = (requestedName || tableName).split(/[\\/]/).filter(Boolean).at(-1) ?? tableName;
+  const withoutExtension = lastPathSegment.toLowerCase().endsWith(`.${format}`)
+    ? lastPathSegment.slice(0, -(format.length + 1))
+    : lastPathSegment;
+  let safeBase = withoutExtension
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001f<>:"/\\|?*]/g, "_")
+    .replace(/[. ]+$/g, "")
+    .trim();
+  if (!safeBase || safeBase === "." || safeBase === "..") safeBase = tableName;
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(safeBase)) safeBase = `_${safeBase}`;
+  safeBase = [...safeBase].slice(0, 200).join("");
+  return `${safeBase}.${format}`;
+}
+
+function copyBytes(bytes: Uint8Array): Uint8Array {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
+function tableExportError(code: string, message: string): Error {
+  const issue = { code, message };
+  return Object.assign(new Error(message), { code, issue });
 }

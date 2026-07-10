@@ -10,15 +10,29 @@ import type {
   NamedRange,
   SheetModel,
   SheetProtection,
+  StructuredTable,
   WorkbookModel
 } from "../types";
 import { columnIndexToName, formatCellAddress, parseCellAddress, parseRangeAddress } from "./addressing";
+import { extractFormulaReferences } from "./formulaReferences";
 import { DEFAULT_ROW_HEIGHT } from "./sheetDimensions";
+import { validateXlsxArchive } from "./xlsxSecurity";
+import {
+  patchNativeTableXml,
+  prepareNativeTableXmlForExcelJs,
+  readNativeTableXml
+} from "./xlsxTableXml";
+import {
+  addStructuredTablesToWorksheet,
+  importStructuredTablesFromWorksheet,
+  type XlsxImportOptions
+} from "./xlsxTables";
 
 const DEFAULT_ROWS = 100;
 const DEFAULT_COLUMNS = 26;
 const COLUMN_WIDTH_SCALE = 8;
 const XLSX_AUTHOR = "JavaScript Spreadsheet";
+const XLSX_FIXED_DATE = new Date("2026-01-01T00:00:00.000Z");
 const XLSX_NUMBER_FORMATS: Record<NonNullable<CellFormat["numberFormat"]>, string> = {
   general: "General",
   number: "#,##0.########",
@@ -33,6 +47,8 @@ export async function exportWorkbookToXlsx(workbook: WorkbookModel): Promise<Arr
   const ExcelJS = await loadExcelJs();
   const excelWorkbook = new ExcelJS.Workbook();
   excelWorkbook.creator = XLSX_AUTHOR;
+  excelWorkbook.created = XLSX_FIXED_DATE;
+  excelWorkbook.modified = XLSX_FIXED_DATE;
 
   const worksheetNamesBySheetId = new Map<string, string>();
   for (const sheet of workbook.sheets) {
@@ -40,20 +56,36 @@ export async function exportWorkbookToXlsx(workbook: WorkbookModel): Promise<Arr
     const worksheet = excelWorkbook.addWorksheet(worksheetName);
     worksheetNamesBySheetId.set(sheet.id, worksheetName);
     await sheetToWorksheet(sheet, worksheet);
+    addStructuredTablesToWorksheet(workbook, sheet, worksheet);
   }
   addNamedRangesToExcelWorkbook(workbook.namedRanges ?? [], excelWorkbook, worksheetNamesBySheetId);
   applyActiveSheetToExcelWorkbook(workbook, excelWorkbook);
 
-  return toArrayBuffer(await excelWorkbook.xlsx.writeBuffer());
+  const serialized = copyToUint8Array(await excelWorkbook.xlsx.writeBuffer());
+  return toArrayBuffer(patchNativeTableXml(serialized, workbook.tables, workbook));
 }
 
-export async function importWorkbookFromXlsx(data: ArrayBuffer | Uint8Array): Promise<WorkbookModel> {
+export async function importWorkbookFromXlsx(
+  data: ArrayBuffer | Uint8Array,
+  options: XlsxImportOptions = {}
+): Promise<WorkbookModel> {
+  const bytes = copyToUint8Array(data);
+  const validation = validateXlsxArchive(bytes);
+  if (!validation.ok) throw issueError(validation.issue);
+  const xmlMetadata = readNativeTableXml(bytes);
+  const excelJsBytes = prepareNativeTableXmlForExcelJs(bytes);
   const ExcelJS = await loadExcelJs();
   const excelWorkbook = new ExcelJS.Workbook();
-  await excelWorkbook.xlsx.load(toArrayBuffer(data) as ExcelJS.Buffer);
+  await excelWorkbook.xlsx.load(toArrayBuffer(excelJsBytes) as ExcelJS.Buffer);
 
   const worksheets = excelWorkbook.worksheets.length > 0 ? excelWorkbook.worksheets : [excelWorkbook.addWorksheet("Sheet1")];
+  const tablesByWorksheet = await Promise.all(worksheets.map((worksheet, index) =>
+    importStructuredTablesFromWorksheet(worksheet, `sheet-${index + 1}`, xmlMetadata, options)
+  ));
   const sheets = worksheets.map((worksheet, index) => worksheetToSheet(worksheet, index));
+  const tables = tablesByWorksheet.flat();
+  assertUniqueImportedTableNames(tables);
+  removeFilterDerivedHiddenRows(sheets, tables);
   const sheetIdsByName = new Map(sheets.map((sheet) => [sheet.name, sheet.id]));
   const namedRanges = excelDefinedNamesToNamedRanges(excelWorkbook.definedNames.model, sheetIdsByName);
   const activeSheetIndex = excelWorkbookActiveSheetIndex(excelWorkbook, sheets.length);
@@ -64,8 +96,33 @@ export async function importWorkbookFromXlsx(data: ArrayBuffer | Uint8Array): Pr
     activeSheetId: activeSheet?.id ?? sheets[0].id,
     sheets,
     namedRanges,
-    tables: []
+    tables
   };
+}
+
+export async function exportStructuredTableToXlsx(
+  workbook: WorkbookModel,
+  tableId: string
+): Promise<Uint8Array> {
+  const table = workbook.tables.find((candidate) => candidate.id === tableId);
+  if (!table) throw xlsxExportError("TABLE_NOT_FOUND", "Structured table does not exist");
+  const sheet = workbook.sheets.find((candidate) => candidate.id === table.sheetId);
+  if (!sheet) throw xlsxExportError("TABLE_SHEET_NOT_FOUND", "Structured table worksheet does not exist");
+  assertTableHasNoExternalDependencies(workbook, sheet, table);
+
+  const projectedSheet = projectSheetToTable(sheet, table.range);
+  const projection: WorkbookModel = {
+    version: 2,
+    activeSheetId: projectedSheet.id,
+    sheets: [projectedSheet],
+    namedRanges: [],
+    tables: [{
+      ...table,
+      columns: table.columns.map((column) => ({ ...column })),
+      rowIds: [...table.rowIds]
+    }]
+  };
+  return copyToUint8Array(await exportWorkbookToXlsx(projection));
 }
 
 function applyActiveSheetToExcelWorkbook(workbook: WorkbookModel, excelWorkbook: ExcelJS.Workbook): void {
@@ -1426,6 +1483,207 @@ function safeWorksheetName(name: string, workbook: ExcelJS.Workbook): string {
   }
 
   return candidate;
+}
+
+function assertUniqueImportedTableNames(tables: readonly StructuredTable[]): void {
+  const names = new Set<string>();
+  for (const table of tables) {
+    const key = table.name.normalize("NFKC").toLocaleLowerCase("en-US");
+    if (names.has(key)) {
+      throw xlsxExportError("XLSX_TABLE_NAME_DUPLICATE", `Duplicate native table name ${table.name}`);
+    }
+    names.add(key);
+  }
+}
+
+function removeFilterDerivedHiddenRows(sheets: SheetModel[], tables: readonly StructuredTable[]): void {
+  for (const table of tables) {
+    if (!table.filter) continue;
+    const sheet = sheets.find((candidate) => candidate.id === table.sheetId);
+    if (!sheet?.hiddenRows) continue;
+    const hiddenRows = { ...sheet.hiddenRows };
+    const bodyStart = table.range.start.row + Number(table.headerRow);
+    const bodyEnd = table.range.end.row - Number(table.totalsRow);
+    for (let row = bodyStart; row <= bodyEnd; row += 1) delete hiddenRows[String(row)];
+    sheet.hiddenRows = hiddenRows;
+  }
+}
+
+function assertTableHasNoExternalDependencies(
+  workbook: WorkbookModel,
+  sheet: SheetModel,
+  table: StructuredTable
+): void {
+  const namedRanges = new Set(workbook.namedRanges.map((range) => range.name.normalize("NFKC").toLocaleLowerCase("en-US")));
+  for (const [address, content] of Object.entries(sheet.cells)) {
+    if (typeof content !== "string" || !content.startsWith("=")) continue;
+    let coordinate;
+    try {
+      coordinate = parseCellAddress(address);
+    } catch {
+      continue;
+    }
+    if (!rangeContainsCoordinate(table.range, coordinate)) continue;
+    if (
+      hasUnquotedSheetQualifier(content)
+      || formulaUsesNamedRange(content, namedRanges)
+      || formulaUsesAnotherStructuredTable(content, table.name)
+    ) {
+      throw xlsxExportError(
+        "TABLE_EXPORT_EXTERNAL_DEPENDENCY",
+        "Table formulas depend on another sheet or workbook name; export the full workbook instead"
+      );
+    }
+    if (extractFormulaReferences(content).some(({ range }) => !rangeContainsRange(table.range, range))) {
+      throw xlsxExportError(
+        "TABLE_EXPORT_EXTERNAL_DEPENDENCY",
+        "Table formulas refer to cells outside the table; export the full workbook instead"
+      );
+    }
+  }
+}
+
+function hasUnquotedSheetQualifier(formula: string): boolean {
+  let quoted = false;
+  for (let index = 0; index < formula.length; index += 1) {
+    if (formula[index] === '"') {
+      if (quoted && formula[index + 1] === '"') {
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (!quoted && formula[index] === "!") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function formulaUsesNamedRange(formula: string, namedRanges: ReadonlySet<string>): boolean {
+  if (namedRanges.size === 0) return false;
+  let quoted = false;
+  for (let index = 0; index < formula.length;) {
+    const character = formula[index];
+    if (character === '"') {
+      if (quoted && formula[index + 1] === '"') index += 2;
+      else {
+        quoted = !quoted;
+        index += 1;
+      }
+      continue;
+    }
+    if (quoted || !/^[\p{ID_Start}_]$/u.test(character)) {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < formula.length && /^[\p{ID_Continue}_.]$/u.test(formula[end])) end += 1;
+    const identifier = formula.slice(index, end).normalize("NFKC").toLocaleLowerCase("en-US");
+    if (namedRanges.has(identifier)) return true;
+    index = end;
+  }
+  return false;
+}
+
+function formulaUsesAnotherStructuredTable(formula: string, currentTableName: string): boolean {
+  const current = currentTableName.normalize("NFKC").toLocaleLowerCase("en-US");
+  let quoted = false;
+  for (let index = 0; index < formula.length;) {
+    const character = formula[index];
+    if (character === '"') {
+      if (quoted && formula[index + 1] === '"') index += 2;
+      else {
+        quoted = !quoted;
+        index += 1;
+      }
+      continue;
+    }
+    if (quoted || (!/^[\p{ID_Start}_]$/u.test(character) && character !== "\\")) {
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < formula.length && /^[\p{ID_Continue}_.]$/u.test(formula[end])) end += 1;
+    if (formula[end] === "[") {
+      const qualifier = formula.slice(index, end).normalize("NFKC").toLocaleLowerCase("en-US");
+      if (qualifier !== current) return true;
+    }
+    index = end;
+  }
+  return false;
+}
+
+function projectSheetToTable(sheet: SheetModel, range: CellRange): SheetModel {
+  const recordInRange = <T>(record: Readonly<Record<string, T>> | undefined): Record<string, T> => {
+    const result: Record<string, T> = {};
+    for (const [address, value] of Object.entries(record ?? {})) {
+      try {
+        if (rangeContainsCoordinate(range, parseCellAddress(address))) result[address] = value;
+      } catch {
+        // Invalid persisted addresses are omitted from the narrow projection.
+      }
+    }
+    return result;
+  };
+  const indexedInRange = <T>(record: Readonly<Record<string, T>> | undefined, axis: "row" | "column") => {
+    const result: Record<string, T> = {};
+    const low = axis === "row" ? range.start.row : range.start.column;
+    const high = axis === "row" ? range.end.row : range.end.column;
+    for (const [index, value] of Object.entries(record ?? {})) {
+      const numeric = Number(index);
+      if (Number.isInteger(numeric) && numeric >= low && numeric <= high) result[index] = value;
+    }
+    return result;
+  };
+  return {
+    ...sheet,
+    rowCount: Math.max(range.end.row + 1, 1),
+    columnCount: Math.max(range.end.column + 1, 1),
+    cells: recordInRange(sheet.cells),
+    formats: recordInRange(sheet.formats),
+    comments: recordInRange(sheet.comments),
+    hyperlinks: recordInRange(sheet.hyperlinks),
+    validations: recordInRange(sheet.validations),
+    columnWidths: indexedInRange(sheet.columnWidths, "column"),
+    rowHeights: indexedInRange(sheet.rowHeights, "row"),
+    hiddenColumns: indexedInRange(sheet.hiddenColumns, "column"),
+    hiddenRows: indexedInRange(sheet.hiddenRows, "row"),
+    conditionalFormats: sheet.conditionalFormats.filter((rule) => rangeContainsRange(range, rule.range)),
+    autoFilterRange: undefined,
+    filters: [],
+    charts: [],
+    merges: sheet.merges.filter((merge) => rangeContainsRange(range, merge.range)),
+    protection: {
+      ...sheet.protection,
+      lockedCells: recordInRange(sheet.protection.lockedCells),
+      unlockedCells: recordInRange(sheet.protection.unlockedCells)
+    }
+  };
+}
+
+function rangeContainsCoordinate(range: CellRange, coordinate: { row: number; column: number }): boolean {
+  const normalized = normalizeRange(range);
+  return coordinate.row >= normalized.start.row && coordinate.row <= normalized.end.row
+    && coordinate.column >= normalized.start.column && coordinate.column <= normalized.end.column;
+}
+
+function rangeContainsRange(container: CellRange, candidate: CellRange): boolean {
+  return rangeContainsCoordinate(container, candidate.start) && rangeContainsCoordinate(container, candidate.end);
+}
+
+function issueError(issue: { code: string; message: string }): Error {
+  return Object.assign(new Error(issue.message), { code: issue.code, issue });
+}
+
+function xlsxExportError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+function copyToUint8Array(output: ArrayBuffer | Uint8Array): Uint8Array {
+  const source = output instanceof Uint8Array ? output : new Uint8Array(output);
+  const copy = new Uint8Array(source.byteLength);
+  copy.set(source);
+  return copy;
 }
 
 function toArrayBuffer(output: ArrayBuffer | Uint8Array): ArrayBuffer {

@@ -2,7 +2,11 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { StructuredTable } from "../types";
-import { SpreadsheetTableTab, type SpreadsheetTableTabProps } from "./SpreadsheetTableTab";
+import {
+  SpreadsheetTableExportReasonProvider,
+  SpreadsheetTableTab,
+  type SpreadsheetTableTabProps
+} from "./SpreadsheetTableTab";
 
 function createTable(overrides: Partial<StructuredTable> = {}): StructuredTable {
   return {
@@ -127,6 +131,32 @@ describe("SpreadsheetTableTab", () => {
     expect(props.onConvertToRange).toHaveBeenCalledOnce();
     expect(props.onOpenTableView).toHaveBeenCalledOnce();
     expect(props.onExport).not.toHaveBeenCalled();
+  });
+
+  it("enables contextual export only when the provider reports a wired adapter", async () => {
+    const user = userEvent.setup();
+    const props = createProps();
+    const { rerender } = render(
+      <SpreadsheetTableExportReasonProvider>
+        <SpreadsheetTableTab {...props} />
+      </SpreadsheetTableExportReasonProvider>
+    );
+
+    const exportButton = screen.getByRole("button", { name: "Export table" });
+    expect(exportButton).toBeEnabled();
+    expect(exportButton).not.toHaveAttribute("aria-describedby");
+    await user.click(exportButton);
+    expect(props.onExport).toHaveBeenCalledOnce();
+
+    rerender(
+      <SpreadsheetTableExportReasonProvider reason="Export is temporarily unavailable">
+        <SpreadsheetTableTab {...props} />
+      </SpreadsheetTableExportReasonProvider>
+    );
+    expect(screen.getByRole("button", { name: "Export table" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export table" })).toHaveAccessibleDescription(
+      "Export is temporarily unavailable"
+    );
   });
 
   it("resets local drafts when committed metadata or the active table changes", async () => {

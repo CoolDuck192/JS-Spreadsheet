@@ -17,7 +17,7 @@ import { CalculatedColumnPanel } from "./CalculatedColumnPanel";
 import { StructuredTableFilterPanel } from "./StructuredTableFilterPanel";
 
 const DEFAULT_EXPORT_REASON = "Export is not supported by this table";
-const SpreadsheetTableExportReasonContext = createContext(DEFAULT_EXPORT_REASON);
+const SpreadsheetTableExportReasonContext = createContext<string | undefined>(DEFAULT_EXPORT_REASON);
 
 const TABLE_STYLES = [
   { value: "TableStyleLight1", label: "Light 1" },
@@ -59,7 +59,7 @@ export type SpreadsheetTableTabProps = {
 
 export function SpreadsheetTableExportReasonProvider({ reason, children }: { reason?: string; children: ReactNode }) {
   return (
-    <SpreadsheetTableExportReasonContext.Provider value={reason || DEFAULT_EXPORT_REASON}>
+    <SpreadsheetTableExportReasonContext.Provider value={reason}>
       {children}
     </SpreadsheetTableExportReasonContext.Provider>
   );
@@ -262,10 +262,16 @@ export function SpreadsheetTableTab({
         <button type="button" aria-expanded={openPanel === "filter"} onClick={() => setOpenPanel((current) => current === "filter" ? null : "filter")}>
           Filter table
         </button>
-        <button type="button" aria-label="Export table" aria-describedby={exportReasonId} onClick={onExport} disabled>
+        <button
+          type="button"
+          aria-label="Export table"
+          aria-describedby={exportReason ? exportReasonId : undefined}
+          onClick={onExport}
+          disabled={Boolean(exportReason)}
+        >
           Export table
         </button>
-        <span id={exportReasonId} className="visually-hidden">{exportReason}</span>
+        {exportReason ? <span id={exportReasonId} className="visually-hidden">{exportReason}</span> : null}
         <button type="button" onClick={onConvertToRange}>Convert to range</button>
         <button type="button" onClick={onOpenTableView}>Open table view</button>
       </div>

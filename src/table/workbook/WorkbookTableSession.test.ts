@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createBlankWorkbook,
   getCellComment,
@@ -302,7 +302,205 @@ describe("WorkbookTableSession", () => {
       reason: "unsupported"
     });
   });
+
+  it("exports injection-safe UTF-8 CSV for the current view and complete dataset", async () => {
+    const parent = createWorkbookSession({ workbook: exportWorkbookFixture() });
+    const table = parent.table("table-export");
+
+    const current = await table.export({
+      format: "csv",
+      scope: "currentView",
+      fileName: " ../unsafe:name?.csv "
+    });
+    const complete = await table.export({ format: "csv", scope: "completeDataset" });
+
+    const header = "Formula Result,Leading Space,Minus Text,At Text,Tab Text,CR Text,LF Text,Safe Apostrophe,Comma,Quote,Unicode Space,Number,Date\r\n";
+    const firstRow = [
+      "'=1+1",
+      "' +cmd",
+      "'-2+3",
+      "'@SUM",
+      "'\tplain",
+      "\"'\rplain\"",
+      "\"'\nplain\"",
+      "'=already-safe",
+      "\"a,b\"",
+      "\"a\"\"b\"",
+      "'\u2003=unicode",
+      "-42",
+      "\"Jan 15, 2026\""
+    ].join(",") + "\r\n";
+    const secondRow = [
+      "done",
+      "plain",
+      "text",
+      "safe",
+      "tabless",
+      "crless",
+      "lfless",
+      "apostrophe",
+      "comma-less",
+      "quote-less",
+      "unicode-less",
+      "7",
+      "\"Jan 16, 2026\""
+    ].join(",") + "\r\n";
+
+    expect(current.bytes).toBeInstanceOf(Uint8Array);
+    expect(current).toMatchObject({
+      mediaType: "text/csv;charset=utf-8",
+      fileName: "unsafe_name_.csv"
+    });
+    expect(new TextDecoder().decode(current.bytes)).toBe(header + firstRow);
+    expect(new TextDecoder().decode(complete.bytes)).toBe(header + firstRow + secondRow);
+    expect([...complete.bytes]).toEqual([...new TextEncoder().encode(header + firstRow + secondRow)]);
+
+    parent.destroy();
+  });
+
+  it("exports stable native XLSX bytes only for the complete dataset", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+
+    await expect(table.export({ format: "xlsx", scope: "currentView" })).rejects.toMatchObject({
+      code: "TABLE_EXPORT_SCOPE_UNSUPPORTED",
+      issue: { code: "TABLE_EXPORT_SCOPE_UNSUPPORTED" }
+    });
+
+    const first = await table.export({ format: "xlsx", scope: "completeDataset" });
+    const second = await table.export({ format: "xlsx", scope: "completeDataset" });
+    expect(first).toMatchObject({
+      bytes: expect.any(Uint8Array),
+      mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      fileName: "People.xlsx"
+    });
+    expect(first.bytes.slice(0, 2)).toEqual(new Uint8Array([0x50, 0x4b]));
+    expect(first.bytes).toEqual(second.bytes);
+
+    parent.destroy();
+  });
+
+  it("keeps Blob, document, and object URLs outside the session export boundary", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    const originalBlob = Object.getOwnPropertyDescriptor(globalThis, "Blob");
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const blobConstructed = vi.fn();
+    const createObjectUrl = vi.fn(() => { throw new Error("DOM boundary crossed"); });
+    const originalCreateObjectUrl = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+
+    Object.defineProperty(globalThis, "Blob", {
+      configurable: true,
+      value: class ForbiddenBlob {
+        constructor() {
+          blobConstructed();
+          throw new Error("Blob boundary crossed");
+        }
+      }
+    });
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      get() { throw new Error("document boundary crossed"); }
+    });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl });
+
+    try {
+      const csv = await table.export({ format: "csv", scope: "completeDataset" });
+      const xlsx = await table.export({ format: "xlsx", scope: "completeDataset" });
+      expect(csv.bytes).toBeInstanceOf(Uint8Array);
+      expect(xlsx.bytes).toBeInstanceOf(Uint8Array);
+      expect(blobConstructed).not.toHaveBeenCalled();
+      expect(createObjectUrl).not.toHaveBeenCalled();
+    } finally {
+      restoreGlobal("Blob", originalBlob);
+      restoreGlobal("document", originalDocument);
+      restoreProperty(URL, "createObjectURL", originalCreateObjectUrl);
+      parent.destroy();
+    }
+  });
+
+  it("propagates table-only XLSX external-dependency rejection", async () => {
+    const workbook = workbookFixture({ B2: "=D1" });
+    const parent = createWorkbookSession({ workbook });
+
+    await expect(parent.table("table-people").export({
+      format: "xlsx",
+      scope: "completeDataset"
+    })).rejects.toMatchObject({ code: "TABLE_EXPORT_EXTERNAL_DEPENDENCY" });
+
+    parent.destroy();
+  });
 });
+
+function exportWorkbookFixture(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const columns = [
+    ["formula-result", "Formula Result", "text"],
+    ["leading-space", "Leading Space", "text"],
+    ["minus-text", "Minus Text", "text"],
+    ["at-text", "At Text", "text"],
+    ["tab-text", "Tab Text", "text"],
+    ["cr-text", "CR Text", "text"],
+    ["lf-text", "LF Text", "text"],
+    ["safe-apostrophe", "Safe Apostrophe", "text"],
+    ["comma", "Comma", "text"],
+    ["quote", "Quote", "text"],
+    ["unicode-space", "Unicode Space", "text"],
+    ["number", "Number", "number"],
+    ["date", "Date", "date"]
+  ] as const;
+  const table: StructuredTable = {
+    id: "table-export",
+    name: "ExportTable",
+    sheetId: "sheet-1",
+    range: { start: { row: 0, column: 0 }, end: { row: 2, column: columns.length - 1 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: columns.map(([id, name, dataType], sheetColumn) => ({ id, name, dataType, sheetColumn })),
+    rowIds: ["row-first", "row-second"],
+    filter: {
+      kind: "comparison",
+      columnId: "number",
+      operator: "eq",
+      value: { type: "number", value: -42 }
+    }
+  };
+  const cells = Object.fromEntries(columns.map(([, name], column) => [
+    `${String.fromCharCode(65 + column)}1`,
+    name
+  ]));
+  Object.assign(cells, {
+    A2: '=\"=1+1\"', B2: " +cmd", C2: "-2+3", D2: "@SUM", E2: "\tplain",
+    F2: "\rplain", G2: "\nplain", H2: "'=already-safe", I2: "a,b", J2: 'a"b',
+    K2: "\u2003=unicode", L2: -42, M2: 46037,
+    A3: '=\"done\"', B3: "plain", C3: "text", D3: "safe", E3: "tabless",
+    F3: "crless", G3: "lfless", H3: "apostrophe", I3: "comma-less", J3: "quote-less",
+    K3: "unicode-less", L3: 7, M3: 46038
+  });
+  return {
+    ...workbook,
+    activeSheetId: "sheet-1",
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      id: "sheet-1",
+      rowCount: 3,
+      columnCount: columns.length,
+      cells,
+      formats: { M2: { numberFormat: "date" }, M3: { numberFormat: "date" } }
+    }]
+  };
+}
+
+function restoreGlobal(name: string, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+  else Reflect.deleteProperty(globalThis, name);
+}
+
+function restoreProperty(target: object, name: string, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) Object.defineProperty(target, name, descriptor);
+  else Reflect.deleteProperty(target, name);
+}
 
 function workbookFixture(cellOverrides: Record<string, string | number> = {}): WorkbookModel {
   const workbook = createBlankWorkbook();
