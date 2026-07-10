@@ -245,16 +245,41 @@ describe("formulaReferences", () => {
     });
   });
 
+  it("does not reject external- or 3-D-shaped text inside formula string literals", () => {
+    expect(rewriteFormulaForRectangularRowEdit(
+      '=IF(B2,"[note] ratio a:b! and ""[escaped]""","")',
+      {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 1,
+        tableColumnEnd: 2,
+        row: 1,
+        count: 1,
+        operation: "insert",
+        sheetBounds: { rowCount: 100, columnCount: 26 }
+      }
+    )).toEqual({
+      ok: true,
+      formula: '=IF(B3,"[note] ratio a:b! and ""[escaped]""","")'
+    });
+  });
+
   it("rejects external and 3-D references with a typed issue", () => {
-    expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", {
+    const context = {
       formulaSheetId: "Data",
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
       row: 1,
       count: 1,
-      operation: "insert",
+      operation: "insert" as const,
       sheetBounds: { rowCount: 100, columnCount: 26 }
-    })).toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    };
+    expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(Jan:Mar!B2)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM('Jan''A':'Mar''B'!B2)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 });

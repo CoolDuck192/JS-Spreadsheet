@@ -88,7 +88,7 @@ export function rewriteFormulaForRectangularRowEdit(
   context: RectangularRowEditContext
 ): FormulaRewriteResult {
   if (!formula.startsWith("=") || context.count <= 0) return { ok: true, formula };
-  if (/\[[^\]]+\]/.test(formula) || /(?:'[^']+'|[\p{ID_Start}_][\p{ID_Continue}_.]*):(?:'[^']+'|[\p{ID_Start}_][\p{ID_Continue}_.]*)!/u.test(formula)) {
+  if (containsUnsupportedRectangularReference(formula)) {
     return {
       ok: false,
       issue: {
@@ -104,6 +104,20 @@ export function rewriteFormulaForRectangularRowEdit(
     return rewriteRectangularReferenceToken(token, context);
   }).join("");
   return { ok: true, formula: rewritten };
+}
+
+function containsUnsupportedRectangularReference(formula: string): boolean {
+  let unsupported = false;
+  transformUnquotedFormulaSegments(formula, (segment) => {
+    if (
+      /\[[^\]]+\]/.test(segment)
+      || /(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*):(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*)!/u.test(segment)
+    ) {
+      unsupported = true;
+    }
+    return segment;
+  });
+  return unsupported;
 }
 
 export function translateFormulaReferences(content: string, offset: FormulaReferenceOffset): string {

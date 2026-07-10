@@ -78,7 +78,8 @@ function patchTableXml(bytes) {
   const document = parser.parseFromString(strFromU8(bytes), "application/xml");
   const table = document.documentElement;
   const namespace = table.namespaceURI;
-  const amountColumn = elements(table, "tableColumn").find((node) => node.getAttribute("name") === "Amount");
+  const tableColumns = elements(table, "tableColumn");
+  const amountColumn = tableColumns.find((node) => node.getAttribute("name") === "Amount");
   if (!amountColumn) {
     throw new Error("Amount table column is missing");
   }
@@ -90,13 +91,18 @@ function patchTableXml(bytes) {
   if (!autoFilter) {
     throw new Error("Table autoFilter is missing");
   }
+  const regionColumnIndex = tableColumns.findIndex((node) => node.getAttribute("name") === "Region");
+  if (regionColumnIndex < 0) {
+    throw new Error("Region table column is missing");
+  }
+  const regionColumnId = String(regionColumnIndex);
   for (const existing of elements(autoFilter, "filterColumn")) {
-    if (existing.getAttribute("colId") === "2") {
+    if (existing.getAttribute("colId") === regionColumnId) {
       autoFilter.removeChild(existing);
     }
   }
   const filterColumn = document.createElementNS(namespace, "filterColumn");
-  filterColumn.setAttribute("colId", "2");
+  filterColumn.setAttribute("colId", regionColumnId);
   const filters = document.createElementNS(namespace, "filters");
   for (const value of ["East", "West"]) {
     const filter = document.createElementNS(namespace, "filter");

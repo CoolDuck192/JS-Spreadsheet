@@ -5,6 +5,48 @@ import { createBlankWorkbook, setCellContent } from "./workbook";
 import type { WorkbookModel } from "../types";
 
 describe("formula engine at scale", () => {
+  it("leaves static structured totals untouched for unrelated cell edits", () => {
+    let workbook = structuredTotalWorkbook();
+    const sheetId = workbook.activeSheetId;
+    const engine = createFormulaEngine(workbook);
+    const setCellContents = vi.spyOn(HyperFormula.prototype, "setCellContents");
+    const batch = vi.spyOn(HyperFormula.prototype, "batch");
+    try {
+      workbook = setCellContent(workbook, sheetId, "Z1", "unrelated");
+      engine.update(workbook);
+
+      expect(engine.getComputedValue(sheetId, "A4")).toBe(30);
+      expect(setCellContents.mock.calls).toEqual([
+        [{ sheet: 0, col: 25, row: 0 }, "unrelated"]
+      ]);
+      expect(batch).toHaveBeenCalledTimes(1);
+    } finally {
+      setCellContents.mockRestore();
+      batch.mockRestore();
+      engine.destroy();
+    }
+  });
+
+  it("recomputes formula-backed structured totals after an external precedent changes", () => {
+    let workbook = structuredTotalWorkbook("=Z1*2");
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "Z1", 5);
+    const engine = createFormulaEngine(workbook);
+    const batch = vi.spyOn(HyperFormula.prototype, "batch");
+    try {
+      expect(engine.getComputedValue(sheetId, "A4")).toBe(30);
+
+      workbook = setCellContent(workbook, sheetId, "Z1", 7);
+      engine.update(workbook);
+
+      expect(engine.getComputedValue(sheetId, "A4")).toBe(34);
+      expect(batch).toHaveBeenCalledTimes(2);
+    } finally {
+      batch.mockRestore();
+      engine.destroy();
+    }
+  });
+
   it("builds 100k rows without crashing and updates single cells incrementally", () => {
     // Build a 100k-row x 3-col sheet directly on the model (setCellContent per cell
     // copies the record each time, so construct the cells object in one shot).
@@ -77,3 +119,25 @@ describe("formula engine at scale", () => {
     engine.destroy();
   });
 });
+
+function structuredTotalWorkbook(firstValue: string | number = 10): WorkbookModel {
+  let workbook = createBlankWorkbook();
+  const sheetId = workbook.activeSheetId;
+  workbook = setCellContent(workbook, sheetId, "A1", "Amount");
+  workbook = setCellContent(workbook, sheetId, "A2", firstValue);
+  workbook = setCellContent(workbook, sheetId, "A3", 20);
+  workbook = setCellContent(workbook, sheetId, "A4", "=SUBTOTAL(109,A2:A3)");
+  return {
+    ...workbook,
+    tables: [{
+      id: "table-1",
+      name: "Amounts",
+      sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 3, column: 0 } },
+      headerRow: true,
+      totalsRow: true,
+      columns: [{ id: "amount", name: "Amount", sheetColumn: 0, totalsFunction: "sum" }],
+      rowIds: ["row-1", "row-2"]
+    }]
+  };
+}
