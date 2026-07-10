@@ -259,6 +259,26 @@ describe("WorkbookCommand", () => {
     ]);
   });
 
+  it("rewrites calculated formula metadata through dispatched row deletion", () => {
+    const workbook = calculatedRowDeleteDispatchWorkbook();
+
+    const deletedRows = apply(workbook, {
+      type: "rows.delete",
+      sheetId: workbook.activeSheetId,
+      index: 1,
+      count: 2
+    });
+
+    expect(deletedRows.status).toBe("applied");
+    if (deletedRows.status !== "applied") return;
+    expect(deletedRows.workbook.tables[0].range).toEqual({
+      start: { row: 2, column: 0 },
+      end: { row: 4, column: 1 }
+    });
+    expect(deletedRows.workbook.tables[0].columns.find((column) => column.id === "row-total")?.calculatedFormula)
+      .toBe("=A4*2");
+  });
+
   it("clears and replaces direct formats without removing conditional formats", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
@@ -455,6 +475,35 @@ function calculatedDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
         A1: "Key", B1: "B", C1: "C", D1: "D", E1: "Total",
         A2: "B", B2: 2, C2: 3, D2: 4, E2: "=B2*$C$2",
         A3: "A", B3: 5, C3: 3, D3: 6, E3: "=B3*$C$2"
+      }
+    }]
+  };
+}
+
+function calculatedRowDeleteDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-row-delete-dispatch",
+    name: "RowDeleteDispatchTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 4, column: 0 }, end: { row: 6, column: 1 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "row-label", name: "Label", sheetColumn: 0 },
+      { id: "row-total", name: "Total", sheetColumn: 1, calculatedFormula: "=A6*2" }
+    ],
+    rowIds: ["row-delete-1", "row-delete-2"]
+  };
+  return {
+    ...workbook,
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A5: "Label", B5: "Total",
+        A6: 2, B6: "=A6*2",
+        A7: 3, B7: "=A7*2"
       }
     }]
   };

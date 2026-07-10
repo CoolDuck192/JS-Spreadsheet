@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { WorkbookModel } from "../../types";
+import { describe, expect, it, vi } from "vitest";
+import type { StructuredTable, WorkbookModel } from "../../types";
 import type { FormulaEngine } from "../../lib/formulaEngine";
 import {
   addSheet,
@@ -452,6 +452,72 @@ describe("WorkbookSession", () => {
       changed: false
     });
     expect(diagnostics[0].metadata).not.toHaveProperty("errorType");
+  });
+
+  it("undoes and redoes a table-aware insertion without regenerating ids", () => {
+    const createId = vi.fn()
+      .mockReturnValueOnce("table-column-new-1")
+      .mockReturnValueOnce("table-column-new-2");
+    const initial = structuredWorkbook();
+    const initialBytes = JSON.stringify(initial);
+    const session = createWorkbookSession({ workbook: initial, createId });
+
+    const result = session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "columns.insert",
+          sheetId: initial.activeSheetId,
+          index: 2,
+          count: 2,
+          expandTableIds: ["table-sales"]
+        },
+        {
+          type: "selection.set",
+          selection: { start: { row: 0, column: 2 }, end: { row: 99, column: 3 } }
+        }
+      ]
+    });
+
+    expect(result.status).toBe("committed");
+    const inserted = session.getSnapshot().workbook;
+    const insertedBytes = JSON.stringify(inserted);
+    expect(createId).toHaveBeenCalledTimes(2);
+
+    expect(session.dispatch({ type: "history.undo" })).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot().workbook).toEqual(initial);
+    expect(JSON.stringify(session.getSnapshot().workbook)).toBe(initialBytes);
+    expect(session.getSnapshot()).toMatchObject({ canUndo: false, canRedo: true });
+    expect(createId).toHaveBeenCalledTimes(2);
+    expect(session.dispatch({ type: "history.redo" })).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot().workbook).toEqual(inserted);
+    expect(JSON.stringify(session.getSnapshot().workbook)).toBe(insertedBytes);
+    expect(session.getSnapshot()).toMatchObject({ canUndo: true, canRedo: false });
+    expect(createId).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps selection, revision, history, and ids unchanged when structure rejects", () => {
+    const createId = vi.fn(() => "unused-table-column");
+    const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    const result = session.dispatch({
+      type: "columns.delete",
+      sheetId: before.workbook.activeSheetId,
+      index: 0,
+      count: 2
+    });
+
+    expect(result).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot()).toMatchObject({
+      revision: before.revision,
+      selection: before.selection,
+      canUndo: before.canUndo,
+      canRedo: before.canRedo
+    });
+    expect(session.getSnapshot().workbook).toBe(before.workbook);
+    expect(session.getSnapshot()).toBe(before);
+    expect(createId).not.toHaveBeenCalled();
   });
 
   it("preserves safe exception detail in diagnostics while keeping rejections generic", () => {
@@ -1030,6 +1096,41 @@ type TrackingEngine = {
   updates: WorkbookModel[];
   destroyed: number;
 };
+
+function structuredWorkbook(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-sales",
+    name: "SalesTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "sales-region", name: "Region", sheetColumn: 0, dataType: "text" },
+      { id: "sales-amount", name: "Amount", sheetColumn: 1, dataType: "number" }
+    ],
+    rowIds: ["sales-row-1", "sales-row-2"],
+    keyColumnId: "sales-region",
+    sort: [{ columnId: "sales-amount", direction: "desc" }]
+  };
+  return {
+    ...workbook,
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        ...workbook.sheets[0].cells,
+        A1: "Region",
+        B1: "Amount",
+        A2: "West",
+        B2: 10,
+        A3: "East",
+        B3: 20
+      }
+    }],
+    tables: [table]
+  };
+}
 
 function createTrackingFormulaEngineFactory(records: TrackingEngine[]): (workbook: WorkbookModel) => FormulaEngine {
   return (workbook) => {

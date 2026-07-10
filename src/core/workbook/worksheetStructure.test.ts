@@ -683,9 +683,25 @@ describe("worksheet structure reducer", () => {
       expectedColumns: [["column-a", 1], ["column-b", 2], ["column-c", 3]]
     },
     {
+      case: "ending exactly at a table start",
+      workbook: threeColumnCalculatedWorkbook(3),
+      index: 1,
+      count: 2,
+      expectedRange: range(0, 1, 3, 3),
+      expectedColumns: [["column-a", 1], ["column-b", 2], ["column-c", 3]]
+    },
+    {
       case: "wholly after a table",
       workbook: threeColumnCalculatedWorkbook(),
       index: 5,
+      count: 1,
+      expectedRange: range(0, 0, 3, 2),
+      expectedColumns: [["column-a", 0], ["column-b", 1], ["column-c", 2]]
+    },
+    {
+      case: "starting exactly at a table exclusive end",
+      workbook: threeColumnCalculatedWorkbook(),
+      index: 3,
       count: 1,
       expectedRange: range(0, 0, 3, 2),
       expectedColumns: [["column-a", 0], ["column-b", 1], ["column-c", 2]]
@@ -852,6 +868,7 @@ describe("worksheet structure reducer", () => {
 
   it.each([
     { case: "inserts inside the table", type: "rows.insert" as const, index: 5, count: 1 },
+    { case: "inserts at the inclusive table end", type: "rows.insert" as const, index: 6, count: 1 },
     { case: "deletes into the table from above", type: "rows.delete" as const, index: 3, count: 2 },
     { case: "deletes out of the table to below", type: "rows.delete" as const, index: 6, count: 2 }
   ])("rejects atomically when a generic row edit $case", ({ type, index, count }) => {
