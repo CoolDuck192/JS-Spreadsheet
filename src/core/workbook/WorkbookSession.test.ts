@@ -454,6 +454,36 @@ describe("WorkbookSession", () => {
     expect(diagnostics[0].metadata).not.toHaveProperty("errorType");
   });
 
+  it("preserves safe exception detail in diagnostics while keeping rejections generic", () => {
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    const session = createWorkbookSession({
+      workbook: createBlankWorkbook(),
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+    const sheetId = session.getSnapshot().workbook.activeSheetId;
+
+    const result = session.dispatch({
+      type: "rows.resize",
+      sheetId,
+      rows: [-1],
+      height: 32
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "unsupported",
+      issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].metadata).toMatchObject({
+      outcome: "rejected",
+      errorType: "Error",
+      errorFingerprint: expect.stringMatching(/^[0-9a-f]{8}$/),
+      errorStackFrame: expect.stringContaining("commands.ts")
+    });
+    expect(JSON.stringify(result)).not.toContain("Index must be");
+  });
+
   it("keeps reducer rejections generic when exception metadata cannot be inspected", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;

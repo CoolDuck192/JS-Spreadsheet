@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StructuredTable } from "../../types";
 import { createBlankWorkbook, getCellContent, setCellContent, setSheetProtection } from "../../lib/workbook";
 import { isWorksheetStructureCommand, reduceWorksheetStructureCommand } from "./worksheetStructure";
@@ -6,6 +6,10 @@ import { isWorksheetStructureCommand, reduceWorksheetStructureCommand } from "./
 const services = { createId: vi.fn((kind: string) => `${kind}-generated`) };
 
 describe("worksheet structure reducer", () => {
+  beforeEach(() => {
+    services.createId.mockClear();
+  });
+
   it.each([
     { type: "columns.insert", index: 27, count: 1 },
     { type: "columns.delete", index: 25, count: 2 },
