@@ -185,6 +185,53 @@ describe("Grid", () => {
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(1600);
   });
 
+  it("renders bounded row and column windows for a 100,000 by 10,000 sheet", () => {
+    const target = { row: 5_000, column: 5_000 };
+    const targetAddress = formatCellAddress(target);
+    const sheet: SheetModel = {
+      ...createFixtureSheet().sheet,
+      rowCount: 100_000,
+      columnCount: 10_000,
+      cells: { [targetAddress]: "Two-axis target" }
+    };
+    const workbook: WorkbookModel = {
+      version: 1,
+      activeSheetId: sheet.id,
+      sheets: [sheet],
+      namedRanges: []
+    };
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: target, end: target }}
+        editingCell={null}
+        showHeaders={false}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 480 },
+      scrollTop: { configurable: true, writable: true, value: target.row * 28 },
+      scrollLeft: { configurable: true, writable: true, value: target.column * 96 }
+    });
+
+    fireEvent.scroll(grid);
+
+    expect(screen.getByRole("gridcell", { name: `${targetAddress} Two-axis target` })).toBeInTheDocument();
+    expect(screen.getAllByRole("gridcell").length).toBeLessThan(600);
+  });
+
   it("bounds a 10,000-column sheet while scrolling horizontally and retaining the frozen first column", () => {
     const distantColumn = 5_000;
     const hiddenColumn = distantColumn + 1;
@@ -240,12 +287,13 @@ describe("Grid", () => {
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(20);
   });
 
-  it("keeps full-axis selection and editor geometry after horizontal scrolling", () => {
+  it("keeps selection and editor geometry correct after two-axis scrolling", () => {
+    const targetRow = 120;
     const targetColumn = 120;
-    const targetAddress = formatCellAddress({ row: 0, column: targetColumn });
+    const targetAddress = formatCellAddress({ row: targetRow, column: targetColumn });
     const sheet: SheetModel = {
       ...createFixtureSheet().sheet,
-      rowCount: 2,
+      rowCount: 500,
       columnCount: 200,
       cells: { [targetAddress]: "=S" },
       columnWidths: { "0": 120, "2": 140 },
@@ -259,8 +307,8 @@ describe("Grid", () => {
     };
     const scrollRef = createRef<HTMLDivElement>();
     const selection = {
-      start: { row: 0, column: targetColumn },
-      end: { row: 0, column: targetColumn }
+      start: { row: targetRow, column: targetColumn },
+      end: { row: targetRow, column: targetColumn }
     };
     const { container, rerender } = render(
       <Grid
@@ -281,13 +329,20 @@ describe("Grid", () => {
     );
     const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
     Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
       clientWidth: { configurable: true, value: 480 },
+      scrollTop: { configurable: true, writable: true, value: targetRow * 28 },
       scrollLeft: { configurable: true, writable: true, value: 11_000 }
     });
     fireEvent.scroll(grid);
 
     const expectedLeft = 48 + 120 + 140 + (targetColumn - 3) * 96;
-    expect(container.querySelector(".selection-outline")).toHaveStyle({ left: `${expectedLeft}px`, width: "96px" });
+    expect(container.querySelector(".selection-outline")).toHaveStyle({
+      top: `${28 + targetRow * 28}px`,
+      left: `${expectedLeft}px`,
+      width: "96px",
+      height: "28px"
+    });
 
     rerender(
       <Grid
@@ -364,13 +419,17 @@ describe("Grid", () => {
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(40);
   });
 
-  it("uses full column measurements when ensuring a distant cell is visible", () => {
+  it("ensureCellVisible reaches a distant row and column using full measurements", () => {
+    const targetRow = 150;
     const targetColumn = 150;
+    const targetAddress = formatCellAddress({ row: targetRow, column: targetColumn });
     const sheet: SheetModel = {
       ...createFixtureSheet().sheet,
-      rowCount: 2,
+      rowCount: 200,
       columnCount: 200,
+      cells: { [targetAddress]: "Ensure target" },
       columnWidths: { [String(targetColumn)]: 160 },
+      rowHeights: { [String(targetRow)]: 60 },
       hiddenColumns: { "1": true }
     };
     const workbook: WorkbookModel = {
@@ -410,11 +469,13 @@ describe("Grid", () => {
       scrollLeft: { configurable: true, writable: true, value: 0 }
     });
 
-    scrollApi!.ensureCellVisible(0, targetColumn);
+    scrollApi!.ensureCellVisible(targetRow, targetColumn);
 
     const targetStart = (targetColumn - 1) * 96;
+    expect(grid.scrollTop).toBe(targetRow * 28 + 60 + 28 - 280);
     expect(grid.scrollLeft).toBe(targetStart + 160 + 48 - 480);
     fireEvent.scroll(grid);
+    expect(screen.getByRole("gridcell", { name: `${targetAddress} Ensure target` })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: `Column ${formatCellAddress({ row: 0, column: targetColumn }).replace(/1$/, "")}` })).toBeInTheDocument();
   });
 

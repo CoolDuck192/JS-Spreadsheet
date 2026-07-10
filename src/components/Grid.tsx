@@ -14,7 +14,8 @@ import {
 } from "../lib/filters";
 import type { FormulaEngine } from "../lib/formulaEngine";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "../lib/formulaSuggestions";
-import { findVisibleRange, measureAxis, type AxisMeasurement } from "../core/viewport/axis";
+import type { AxisMeasurement } from "../core/viewport/axis";
+import { useTwoAxisVirtualizer } from "../react/viewport/useTwoAxisVirtualizer";
 import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
@@ -23,8 +24,6 @@ import {
 } from "../lib/sheetDimensions";
 import { validateCellCandidate } from "../lib/validation";
 
-const DEFAULT_VIEWPORT_HEIGHT = 560;
-const DEFAULT_VIEWPORT_WIDTH = 960;
 const ROW_OVERSCAN = 16;
 const COLUMN_OVERSCAN = 2;
 const ROW_HEADER_WIDTH = 48;
@@ -100,7 +99,8 @@ type DragMode =
 
 type OverlayRect = { top: number; left: number; width: number; height: number };
 
-type ColumnMeasurement = AxisMeasurement<number>;
+type RowMeasurement = { row: number; height: number; start: number; end: number };
+type ColumnMeasurement = AxisMeasurement<string>;
 type ColumnTrack =
   | { kind: "column"; measurement: ColumnMeasurement }
   | { kind: "spacer"; key: string; width: number };
@@ -154,13 +154,8 @@ export function Grid({
   const [dragMode, setDragMode] = useState<DragMode | null>(null);
   const [autoFillDrag, setAutoFillDrag] = useState<{ source: CellRange; target: CellRange } | null>(null);
   const [resizeDraft, setResizeDraft] = useState<ResizeDraft | null>(null);
-  const [viewport, setViewport] = useState({
-    scrollTop: 0,
-    scrollLeft: 0,
-    height: DEFAULT_VIEWPORT_HEIGHT,
-    width: DEFAULT_VIEWPORT_WIDTH
-  });
-  const scrollFrameRef = useRef<number | null>(null);
+  const internalScrollRef = useRef<HTMLDivElement>(null);
+  const resolvedScrollRef = scrollRef ?? internalScrollRef;
   const dragModeRef = useRef<DragMode | null>(null);
   const autoFillDragRef = useRef<{ source: CellRange; target: CellRange } | null>(null);
   const pointerClientRef = useRef<{ x: number; y: number } | null>(null);
@@ -172,18 +167,79 @@ export function Grid({
     () => Array.from({ length: sheet.columnCount }, (_, column) => columnWidth(sheet, column, resizeDraft)),
     [sheet, resizeDraft]
   );
-  // Layout x-offsets of the visible columns, in unzoomed content pixels past the
-  // row header. Drives pointer->cell math and the selection overlays.
-  const columnMeasurements = useMemo(
+  const filteredRows = useMemo(
     () =>
-      measureAxis(
-        sheet.columnCount,
-        (column) => column,
-        (column) => columnWidths[column],
-        (column) => Boolean((sheet.hiddenColumns ?? {})[String(column)])
-      ),
-    [columnWidths, sheet]
+      getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
+        formulaEngine.getComputedValue(sheet.id, formatCellAddress({ row, column }))
+      ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]),
+    [formulaEngine, sheet]
   );
+  const filteredRowSet = useMemo(() => new Set(filteredRows), [filteredRows]);
+  const getRowKey = useCallback((row: number) => String(row), []);
+  const getColumnKey = useCallback((column: number) => String(column), []);
+  const getRowSize = useCallback((row: number) => rowHeight(sheet, row, resizeDraft), [resizeDraft, sheet]);
+  const getColumnSize = useCallback((column: number) => columnWidths[column], [columnWidths]);
+  const isRowHidden = useCallback((row: number) => !filteredRowSet.has(row), [filteredRowSet]);
+  const isColumnHidden = useCallback(
+    (column: number) => Boolean((sheet.hiddenColumns ?? {})[String(column)]),
+    [sheet.hiddenColumns]
+  );
+  const zoom = (zoomLevel || 100) / 100;
+  const virtualizer = useTwoAxisVirtualizer({
+    scrollRef: resolvedScrollRef,
+    rowCount: sheet.rowCount,
+    columnCount: sheet.columnCount,
+    getRowKey,
+    getColumnKey,
+    getRowSize,
+    getColumnSize,
+    isRowHidden,
+    isColumnHidden,
+    rowOverscan: ROW_OVERSCAN,
+    columnOverscan: COLUMN_OVERSCAN,
+    rowViewportInset: showHeaders ? COLUMN_HEADER_HEIGHT : 0,
+    columnViewportInset: showHeaders ? ROW_HEADER_WIDTH : 0,
+    scale: zoom,
+    resetKey: sheet.id
+  });
+  const rowMeasurements = useMemo<RowMeasurement[]>(
+    () =>
+      virtualizer.rowMeasurements.map((measurement) => ({
+        row: measurement.index,
+        height: measurement.size,
+        start: measurement.start,
+        end: measurement.end
+      })),
+    [virtualizer.rowMeasurements]
+  );
+  const visibleRowMeasurements = useMemo<RowMeasurement[]>(
+    () =>
+      virtualizer.visibleRows.map((measurement) => ({
+        row: measurement.index,
+        height: measurement.size,
+        start: measurement.start,
+        end: measurement.end
+      })),
+    [virtualizer.visibleRows]
+  );
+  const frozenTopRow =
+    freezeTopRow &&
+    filteredRowSet.has(0) &&
+    !visibleRowMeasurements.some((measurement) => measurement.row === 0);
+  const rows = frozenTopRow
+    ? [{ row: 0, height: rowHeight(sheet, 0, resizeDraft) }, ...visibleRowMeasurements]
+    : visibleRowMeasurements;
+  const topSpacerHeight = Math.max(
+    0,
+    (visibleRowMeasurements[0]?.start ?? 0) - (frozenTopRow ? rowHeight(sheet, 0, resizeDraft) : 0)
+  );
+  const bottomSpacerHeight = Math.max(
+    0,
+    virtualizer.totalHeight - (visibleRowMeasurements.at(-1)?.end ?? 0)
+  );
+  // Full measurements remain available for hit testing and overlay geometry;
+  // only the hook's visible slices are fed into the row/cell renderer.
+  const columnMeasurements = virtualizer.columnMeasurements;
   const columnLayout = useMemo(
     () =>
       columnMeasurements.map((measurement) => ({
@@ -197,49 +253,7 @@ export function Grid({
     () => new Map(columnMeasurements.map((measurement) => [measurement.index, measurement])),
     [columnMeasurements]
   );
-  const filteredRows = useMemo(
-    () =>
-      getVisibleRows(sheet.rowCount, sheet.filters ?? [], (row, column) =>
-        formulaEngine.getComputedValue(sheet.id, formatCellAddress({ row, column }))
-      ).filter((row) => !(sheet.hiddenRows ?? {})[String(row)]),
-    [formulaEngine, sheet]
-  );
-  const rowMeasurements = useMemo(() => measureRows(sheet, filteredRows, resizeDraft), [filteredRows, resizeDraft, sheet]);
-  const firstVisibleIndex = Math.max(0, findFirstVisibleRow(rowMeasurements, viewport.scrollTop) - ROW_OVERSCAN);
-  const lastVisibleIndex = Math.min(
-    rowMeasurements.length,
-    findLastVisibleRow(rowMeasurements, viewport.scrollTop + viewport.height) + ROW_OVERSCAN + 1
-  );
-  const visibleRowMeasurements = rowMeasurements.slice(firstVisibleIndex, Math.max(firstVisibleIndex + 1, lastVisibleIndex));
-  const frozenTopRow =
-    freezeTopRow &&
-    filteredRows.includes(0) &&
-    firstVisibleIndex > 0 &&
-    !visibleRowMeasurements.some((measurement) => measurement.row === 0);
-  const rows = frozenTopRow
-    ? [{ row: 0, height: rowHeight(sheet, 0, resizeDraft) }, ...visibleRowMeasurements]
-    : visibleRowMeasurements;
-  const topSpacerHeight = Math.max(
-    0,
-    (rowMeasurements[firstVisibleIndex]?.start ?? 0) - (frozenTopRow ? rowHeight(sheet, 0, resizeDraft) : 0)
-  );
-  const bottomSpacerHeight = Math.max(0, (rowMeasurements.at(-1)?.end ?? 0) - (visibleRowMeasurements.at(-1)?.end ?? 0));
-  const zoom = (zoomLevel || 100) / 100;
-  const viewportContentLeft = Math.max(0, viewport.scrollLeft / zoom - (showHeaders ? ROW_HEADER_WIDTH : 0));
-  const viewportContentRight = Math.max(
-    viewportContentLeft,
-    (viewport.scrollLeft + viewport.width) / zoom - (showHeaders ? ROW_HEADER_WIDTH : 0)
-  );
-  const visibleColumnRange = findVisibleRange(
-    columnMeasurements,
-    viewportContentLeft,
-    viewportContentRight,
-    COLUMN_OVERSCAN
-  );
-  const visibleColumnMeasurements = useMemo(
-    () => columnMeasurements.slice(visibleColumnRange.first, visibleColumnRange.last),
-    [columnMeasurements, visibleColumnRange.first, visibleColumnRange.last]
-  );
+  const visibleColumnMeasurements = virtualizer.visibleColumns;
   const editingColumn = editingCell ? addressToCoord(editingCell.address).column : null;
   const renderedColumnMeasurements = useMemo(
     () =>
@@ -252,10 +266,9 @@ export function Grid({
       }),
     [columnMeasurementsByIndex, editingColumn, freezeFirstColumn, sheet.merges, visibleColumnMeasurements]
   );
-  const totalColumnWidth = columnMeasurements.at(-1)?.end ?? 0;
   const columnTracks = useMemo(
-    () => buildColumnTracks(renderedColumnMeasurements, totalColumnWidth),
-    [renderedColumnMeasurements, totalColumnWidth]
+    () => buildColumnTracks(renderedColumnMeasurements, virtualizer.totalWidth),
+    [renderedColumnMeasurements, virtualizer.totalWidth]
   );
   const isWholeSheetSelected =
     normalizedSelection.start.row === 0 &&
@@ -418,7 +431,7 @@ export function Grid({
   // Maps a client-space point to the sheet cell underneath it, clamped to the
   // sheet bounds, accounting for scroll position, sticky headers, and zoom.
   const cellAtClientPoint = useCallback((clientX: number, clientY: number): { row: number; column: number } | null => {
-    const element = scrollRef?.current;
+    const element = resolvedScrollRef.current;
     if (!element) {
       return null;
     }
@@ -491,7 +504,7 @@ export function Grid({
     }
 
     return { row: frozenRowHit ? 0 : row, column: frozenColumnHit ? 0 : column };
-  }, [scrollRef]);
+  }, [resolvedScrollRef]);
 
   const updateDragTargetFromPointer = useCallback(() => {
     const pointer = pointerClientRef.current;
@@ -627,44 +640,6 @@ export function Grid({
   const editingRow = editingCell ? addressToCoord(editingCell.address).row : -1;
 
   useEffect(() => {
-    setViewport({
-      scrollTop: 0,
-      scrollLeft: 0,
-      height: scrollRef?.current?.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
-      width: scrollRef?.current?.clientWidth || DEFAULT_VIEWPORT_WIDTH
-    });
-    if (scrollRef?.current) {
-      scrollRef.current.scrollTop = 0;
-      scrollRef.current.scrollLeft = 0;
-    }
-  }, [scrollRef, sheet.id]);
-
-  useEffect(() => {
-    const element = scrollRef?.current;
-    if (!element || typeof ResizeObserver === "undefined") {
-      return undefined;
-    }
-    const observer = new ResizeObserver(() => {
-      const height = element.clientHeight || DEFAULT_VIEWPORT_HEIGHT;
-      const width = element.clientWidth || DEFAULT_VIEWPORT_WIDTH;
-      setViewport((current) =>
-        current.height === height && current.width === width ? current : { ...current, height, width }
-      );
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [scrollRef]);
-
-  useEffect(
-    () => () => {
-      if (scrollFrameRef.current !== null) {
-        cancelAnimationFrame(scrollFrameRef.current);
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
     if (!resizeDraft) {
       return undefined;
     }
@@ -718,7 +693,7 @@ export function Grid({
 
     let rafId: number | null = null;
     const autoScrollLoop = () => {
-      const element = scrollRef?.current;
+      const element = resolvedScrollRef.current;
       const pointer = pointerClientRef.current;
       if (element && pointer) {
         const rect = element.getBoundingClientRect();
@@ -763,42 +738,12 @@ export function Grid({
         cancelAnimationFrame(rafId);
       }
     };
-  }, [finalizeDrag, isPointerDragActive, scrollRef, updateDragTargetFromPointer]);
+  }, [finalizeDrag, isPointerDragActive, resolvedScrollRef, updateDragTargetFromPointer]);
 
-  const ensureCellVisible = useCallback((row: number, column: number) => {
-    const element = scrollRef?.current;
-    if (!element) {
-      return;
-    }
-    const current = latestRef.current;
-    const zoom = (current.zoomLevel || 100) / 100;
-    const headerWidth = current.showHeaders ? ROW_HEADER_WIDTH : 0;
-    const headerHeight = current.showHeaders ? COLUMN_HEADER_HEIGHT : 0;
-    const rowRect = rowRangeRect(current.rowMeasurements, row, row);
-    const columnRect = columnRangeRect(current.columnLayout, column, column);
-    if (rowRect) {
-      const top = (headerHeight + rowRect.top) * zoom;
-      const bottom = (headerHeight + rowRect.top + rowRect.height) * zoom;
-      const viewTop = element.scrollTop + headerHeight * zoom;
-      const viewBottom = element.scrollTop + element.clientHeight;
-      if (top < viewTop) {
-        element.scrollTop = Math.max(0, top - headerHeight * zoom);
-      } else if (bottom > viewBottom) {
-        element.scrollTop = bottom - element.clientHeight;
-      }
-    }
-    if (columnRect) {
-      const left = (headerWidth + columnRect.left) * zoom;
-      const right = (headerWidth + columnRect.left + columnRect.width) * zoom;
-      const viewLeft = element.scrollLeft + headerWidth * zoom;
-      const viewRight = element.scrollLeft + element.clientWidth;
-      if (left < viewLeft) {
-        element.scrollLeft = Math.max(0, left - headerWidth * zoom);
-      } else if (right > viewRight) {
-        element.scrollLeft = right - element.clientWidth;
-      }
-    }
-  }, [scrollRef]);
+  const ensureCellVisible = useCallback(
+    (row: number, column: number) => virtualizer.ensureCellVisible(row, column),
+    [virtualizer.ensureCellVisible]
+  );
 
   useEffect(() => {
     onRegisterScrollApi?.({ ensureCellVisible });
@@ -846,7 +791,7 @@ export function Grid({
 
   return (
     <div
-      ref={scrollRef}
+      ref={resolvedScrollRef}
       className={gridClassName}
       role="grid"
       aria-label="Spreadsheet grid"
@@ -858,36 +803,7 @@ export function Grid({
       aria-colcount={sheet.columnCount}
       tabIndex={0}
       onKeyDown={onKeyCommand}
-      onScroll={(event) => {
-        // Leading + trailing throttle: respond to the first scroll event of a frame
-        // immediately, coalesce the rest into one trailing update. A fast fling
-        // renders once per frame instead of once per scroll event.
-        const element = event.currentTarget;
-        const applyViewport = () => {
-          const nextViewport = {
-            scrollTop: element.scrollTop,
-            scrollLeft: element.scrollLeft,
-            height: element.clientHeight || DEFAULT_VIEWPORT_HEIGHT,
-            width: element.clientWidth || DEFAULT_VIEWPORT_WIDTH
-          };
-          setViewport((current) =>
-            current.scrollTop === nextViewport.scrollTop &&
-            current.scrollLeft === nextViewport.scrollLeft &&
-            current.height === nextViewport.height &&
-            current.width === nextViewport.width
-              ? current
-              : nextViewport
-          );
-        };
-        if (scrollFrameRef.current !== null) {
-          return;
-        }
-        applyViewport();
-        scrollFrameRef.current = requestAnimationFrame(() => {
-          scrollFrameRef.current = null;
-          applyViewport();
-        });
-      }}
+      onScroll={virtualizer.onScroll}
       onPaste={(event) => {
         event.preventDefault();
         onPasteText(event.clipboardData.getData("text/plain") || event.clipboardData.getData("Text"));
@@ -1982,7 +1898,7 @@ function expandRangeToMerges(range: CellRange, merges: SheetModel["merges"]): Ce
 
 function rangeOverlayRect(
   range: CellRange,
-  measurements: ReturnType<typeof measureRows>,
+  measurements: readonly RowMeasurement[],
   columnLayout: Array<{ column: number; left: number; width: number }>,
   headerWidth: number,
   headerHeight: number
@@ -2001,7 +1917,7 @@ function rangeOverlayRect(
 }
 
 function rowRangeRect(
-  measurements: ReturnType<typeof measureRows>,
+  measurements: readonly RowMeasurement[],
   startRow: number,
   endRow: number
 ): { top: number; height: number } | null {
@@ -2233,31 +2149,6 @@ function sumRowHeights(sheet: SheetModel, startRow: number, endRow: number): num
     height += rowHeight(sheet, row, null);
   }
   return height;
-}
-
-function measureRows(sheet: SheetModel, rows: number[], resizeDraft: ResizeDraft | null) {
-  let cursor = 0;
-  return rows.map((row) => {
-    const height = rowHeight(sheet, row, resizeDraft);
-    const measurement = {
-      row,
-      height,
-      start: cursor,
-      end: cursor + height
-    };
-    cursor += height;
-    return measurement;
-  });
-}
-
-function findFirstVisibleRow(rows: ReturnType<typeof measureRows>, scrollTop: number): number {
-  const index = rows.findIndex((row) => row.end >= scrollTop);
-  return index < 0 ? Math.max(rows.length - 1, 0) : index;
-}
-
-function findLastVisibleRow(rows: ReturnType<typeof measureRows>, viewportBottom: number): number {
-  const index = rows.findIndex((row) => row.start > viewportBottom);
-  return index < 0 ? rows.length - 1 : Math.max(0, index - 1);
 }
 
 function addressToCoord(address: string) {
