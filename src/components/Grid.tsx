@@ -1039,6 +1039,12 @@ export function Grid({
           y: event.clientY
         });
       }}
+      onReadOnlyCellEditAttempt={(cell) => {
+        const resolved = resolveCell(cell.rowId, cell.columnId);
+        if (resolved.mergeInfo?.role !== "covered") {
+          onStartEdit(resolved.address);
+        }
+      }}
       getColumnHeaderState={(column) => {
         const index = parseSheetIndex(column.id, "column:");
         const selected =

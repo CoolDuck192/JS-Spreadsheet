@@ -61,6 +61,7 @@ export function GridViewport({
   onUnhandledKeyDown,
   onCellMouseEnter,
   onCellContextMenu,
+  onReadOnlyCellEditAttempt,
   getColumnHeaderState,
   getRowHeaderState,
   onColumnHeaderMouseDown,
@@ -419,6 +420,8 @@ export function GridViewport({
                     onDoubleClick={() => {
                       if (cell.editable) {
                         onInteraction({ type: "edit-start", cell: cell.ref, initialRawText: cell.displayValue });
+                      } else {
+                        onReadOnlyCellEditAttempt?.(cell.ref);
                       }
                     }}
                   >
