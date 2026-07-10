@@ -1,7 +1,9 @@
 import { DetailedCellError, HyperFormula } from "hyperformula";
 import type { CellContent, CellRange, NamedRange, SheetModel, WorkbookModel } from "../types";
-import { parseCellAddress } from "./addressing";
+import { formatCellAddress, parseCellAddress } from "./addressing";
 import { getCellContent } from "./workbook";
+import { getStructuredTableBodyRange } from "../core/workbook/structuredTables";
+import { isStructuredTableRowVisible } from "../core/workbook/structuredTableFilter";
 
 export type ComputedCellValue = CellContent | { kind: "error"; code: string };
 
@@ -19,6 +21,7 @@ type EngineState = {
   workbook: WorkbookModel;
   hyperFormula: HyperFormula;
   sheetIds: Map<string, number>;
+  overriddenTotals: ReadonlySet<string>;
 };
 
 // Excel's grid limits. HyperFormula's defaults (40,000 rows) crash on larger sheets.
@@ -121,6 +124,8 @@ function updateEngineState(state: EngineState, nextWorkbook: WorkbookModel): Eng
     return buildEngineState(nextWorkbook);
   }
 
+  restoreStructuredTotalCells(state.hyperFormula, state.sheetIds, nextWorkbook, state.overriddenTotals);
+
   const changedSheets = nextWorkbook.sheets.filter((sheet, index) => {
     const previousSheet = previous.sheets[index];
     return previousSheet !== sheet && previousSheet.cells !== sheet.cells;
@@ -139,7 +144,8 @@ function updateEngineState(state: EngineState, nextWorkbook: WorkbookModel): Eng
     });
   }
 
-  return { ...state, workbook: nextWorkbook };
+  const overriddenTotals = applyStructuredTotalOverrides(state.hyperFormula, state.sheetIds, nextWorkbook);
+  return { ...state, workbook: nextWorkbook, overriddenTotals };
 }
 
 function requiresFullRebuild(previous: WorkbookModel, next: WorkbookModel): boolean {
@@ -205,7 +211,125 @@ function buildEngineState(workbook: WorkbookModel): EngineState {
     }
   }
 
-  return { workbook, hyperFormula, sheetIds };
+  const overriddenTotals = applyStructuredTotalOverrides(hyperFormula, sheetIds, workbook);
+  return { workbook, hyperFormula, sheetIds, overriddenTotals };
+}
+
+function restoreStructuredTotalCells(
+  hyperFormula: HyperFormula,
+  sheetIds: ReadonlyMap<string, number>,
+  workbook: WorkbookModel,
+  overriddenTotals: ReadonlySet<string>
+): void {
+  if (overriddenTotals.size === 0) return;
+  hyperFormula.batch(() => {
+    for (const key of overriddenTotals) {
+      const separator = key.indexOf("\u0000");
+      const sheetId = key.slice(0, separator);
+      const address = key.slice(separator + 1);
+      const engineSheetId = sheetIds.get(sheetId);
+      if (engineSheetId === undefined) continue;
+      const coord = parseCellAddress(address);
+      hyperFormula.setCellContents(
+        { sheet: engineSheetId, col: coord.column, row: coord.row },
+        getCellContent(workbook, sheetId, address)
+      );
+    }
+  });
+}
+
+function applyStructuredTotalOverrides(
+  hyperFormula: HyperFormula,
+  sheetIds: ReadonlyMap<string, number>,
+  workbook: WorkbookModel
+): ReadonlySet<string> {
+  const overrides: Array<{ sheetId: string; address: string; value: ComputedCellValue }> = [];
+  const evaluate = (sheetId: string, address: string): ComputedCellValue => {
+    const engineSheetId = sheetIds.get(sheetId);
+    if (engineSheetId === undefined) return null;
+    const coord = parseCellAddress(address);
+    return toComputedCellValue(hyperFormula.getCellValue({
+      sheet: engineSheetId,
+      col: coord.column,
+      row: coord.row
+    }));
+  };
+
+  for (const table of workbook.tables) {
+    if (!table.totalsRow) continue;
+    const body = getStructuredTableBodyRange(table);
+    for (const column of table.columns) {
+      const aggregate = column.totalsFunction;
+      if (!aggregate || aggregate === "none") continue;
+      const visibleValues: ComputedCellValue[] = [];
+      if (body) {
+        for (let row = body.start.row; row <= body.end.row; row += 1) {
+          if (isStructuredTableRowVisible(workbook, table, row, evaluate)) {
+            visibleValues.push(evaluate(
+              table.sheetId,
+              formatCellAddress({ row, column: column.sheetColumn })
+            ));
+          }
+        }
+      }
+      overrides.push({
+        sheetId: table.sheetId,
+        address: formatCellAddress({ row: table.range.end.row, column: column.sheetColumn }),
+        value: aggregateStructuredValues(aggregate, visibleValues)
+      });
+    }
+  }
+
+  hyperFormula.batch(() => {
+    for (const override of overrides) {
+      const engineSheetId = sheetIds.get(override.sheetId);
+      if (engineSheetId === undefined) continue;
+      const coord = parseCellAddress(override.address);
+      const content = override.value !== null && typeof override.value === "object"
+        ? `=${override.value.code}`
+        : override.value;
+      hyperFormula.setCellContents(
+        { sheet: engineSheetId, col: coord.column, row: coord.row },
+        content
+      );
+    }
+  });
+  return new Set(overrides.map((override) => totalOverrideKey(override.sheetId, override.address)));
+}
+
+function aggregateStructuredValues(
+  aggregate: NonNullable<WorkbookModel["tables"][number]["columns"][number]["totalsFunction"]>,
+  values: readonly ComputedCellValue[]
+): ComputedCellValue {
+  if (aggregate === "count") {
+    return values.filter((value) => value !== null && value !== "").length;
+  }
+  if (aggregate === "countNumbers") {
+    return values.filter((value) => typeof value === "number" && Number.isFinite(value)).length;
+  }
+  const firstError = values.find((value): value is Extract<ComputedCellValue, object> => typeof value === "object");
+  if (firstError) return firstError;
+  const numbers = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  switch (aggregate) {
+    case "none": return null;
+    case "sum": return numbers.reduce((total, value) => total + value, 0);
+    case "average": return numbers.length === 0
+      ? { kind: "error", code: "#DIV/0!" }
+      : numbers.reduce((total, value) => total + value, 0) / numbers.length;
+    case "min": return numbers.length === 0 ? 0 : Math.min(...numbers);
+    case "max": return numbers.length === 0 ? 0 : Math.max(...numbers);
+    case "standardDeviation":
+    case "variance": {
+      if (numbers.length < 2) return { kind: "error", code: "#DIV/0!" };
+      const mean = numbers.reduce((total, value) => total + value, 0) / numbers.length;
+      const variance = numbers.reduce((total, value) => total + (value - mean) ** 2, 0) / (numbers.length - 1);
+      return aggregate === "variance" ? variance : Math.sqrt(variance);
+    }
+  }
+}
+
+function totalOverrideKey(sheetId: string, address: string): string {
+  return `${sheetId}\u0000${address}`;
 }
 
 function sheetToRaggedMatrix(sheet: SheetModel): CellContent[][] {

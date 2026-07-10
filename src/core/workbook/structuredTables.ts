@@ -16,6 +16,12 @@ import { translateFormulaReferences } from "../../lib/formulaReferences";
 import { getCellContent, getCellReadOnly } from "../../lib/workbook";
 import type { FilterExpression, TableSort } from "../../table/core/query";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
+import {
+  deleteStructuredTableRows,
+  insertStructuredTableRows,
+  setStructuredTableCalculatedColumn,
+  sortStructuredTableRows
+} from "./structuredTableRows";
 
 export type StructuredTableCommand =
   | {
@@ -126,13 +132,24 @@ export function reduceStructuredTableCommand(
       return setStyle(workbook, command.tableId, command.style);
     case "table.setKeyColumn":
       return setKeyColumn(workbook, command.tableId, command.columnId);
+    case "table.setCalculatedColumn":
+      return setStructuredTableCalculatedColumn(
+        workbook,
+        command.tableId,
+        command.columnId,
+        command.formula,
+        services
+      );
+    case "table.setFilter":
+      return setFilter(workbook, command.tableId, command.filter);
+    case "table.sort":
+      return sortStructuredTableRows(workbook, command.tableId, command.sorting, services);
+    case "table.insertRows":
+      return insertStructuredTableRows(workbook, command.tableId, command, services);
+    case "table.deleteRows":
+      return deleteStructuredTableRows(workbook, command.tableId, command.rowIds, services);
     case "table.convertToRange":
       return convertToRange(workbook, command.tableId);
-    case "table.setCalculatedColumn":
-    case "table.setFilter":
-    case "table.sort":
-    case "table.insertRows":
-    case "table.deleteRows":
     case "table.editCells":
       return reject(workbook, "TABLE_COMMAND_UNSUPPORTED", "Structured table command is not available yet");
   }
@@ -398,6 +415,22 @@ function setKeyColumn(
   if (table.keyColumnId === columnId) return { status: "unchanged", workbook };
   const { keyColumnId: _current, ...base } = table;
   return commitTable(workbook, columnId === undefined ? base : { ...base, keyColumnId: columnId });
+}
+
+function setFilter(
+  workbook: WorkbookModel,
+  tableId: string,
+  filter: FilterExpression | undefined
+): StructuredTableReduction {
+  const table = getStructuredTable(workbook, tableId);
+  if (!table) return tableNotFound(workbook);
+  const columnIds = new Set(table.columns.map((column) => column.id));
+  if (filter && !everyFilterColumn(filter, columnIds)) {
+    return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Filter column does not belong to the table");
+  }
+  if (JSON.stringify(table.filter) === JSON.stringify(filter)) return { status: "unchanged", workbook };
+  const { filter: _current, ...base } = table;
+  return commitTable(workbook, filter === undefined ? base : { ...base, filter });
 }
 
 function convertToRange(workbook: WorkbookModel, tableId: string): StructuredTableReduction {

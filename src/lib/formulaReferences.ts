@@ -1,4 +1,5 @@
 import type { CellRange } from "../types";
+import type { TableIssue } from "../core/commands/types";
 import { columnIndexToName, columnNameToIndex, formatCellAddress, normalizeRange } from "./addressing";
 
 export type FormulaReferenceOffset = {
@@ -19,6 +20,21 @@ export type FormulaStructureContext = {
   index: number;
   count: number;
 };
+
+export type RectangularRowEditContext = {
+  formulaSheetId: string;
+  editedSheetId: string;
+  tableColumnStart: number;
+  tableColumnEnd: number;
+  row: number;
+  count: number;
+  operation: "insert" | "delete";
+  sheetBounds: { rowCount: number; columnCount: number };
+};
+
+export type FormulaRewriteResult =
+  | { ok: true; formula: string }
+  | { ok: false; issue: TableIssue };
 
 type ParsedFormulaCellReference = {
   columnLock: string;
@@ -65,6 +81,29 @@ export function rewriteFormulaForStructure(formula: string, context: FormulaStru
         : token.raw
     )
     .join("");
+}
+
+export function rewriteFormulaForRectangularRowEdit(
+  formula: string,
+  context: RectangularRowEditContext
+): FormulaRewriteResult {
+  if (!formula.startsWith("=") || context.count <= 0) return { ok: true, formula };
+  if (/\[[^\]]+\]/.test(formula) || /(?:'[^']+'|[\p{ID_Start}_][\p{ID_Continue}_.]*):(?:'[^']+'|[\p{ID_Start}_][\p{ID_Continue}_.]*)!/u.test(formula)) {
+    return {
+      ok: false,
+      issue: {
+        code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+        message: "External and 3-D references cannot be rewritten for a table row edit"
+      }
+    };
+  }
+
+  const tokens = tokenizeFormulaReferences(formula);
+  const rewritten = tokens.map((token) => {
+    if (token.kind === "raw" || !rectangularReferenceTargetsEditedSheet(token, context)) return token.raw;
+    return rewriteRectangularReferenceToken(token, context);
+  }).join("");
+  return { ok: true, formula: rewritten };
 }
 
 export function translateFormulaReferences(content: string, offset: FormulaReferenceOffset): string {
@@ -484,6 +523,119 @@ function shiftReferenceIndex(value: number, context: FormulaStructureContext): n
     return null;
   }
   return value >= end ? value - context.count : value;
+}
+
+function rectangularReferenceTargetsEditedSheet(
+  token: FormulaReferenceToken,
+  context: RectangularRowEditContext
+): boolean {
+  const target = (token.sheetName ?? context.formulaSheetId).normalize("NFKC").toLowerCase();
+  return target === context.editedSheetId.normalize("NFKC").toLowerCase();
+}
+
+function rewriteRectangularReferenceToken(
+  token: FormulaReferenceToken,
+  context: RectangularRowEditContext
+): string {
+  const originalEnd = token.end ?? token.start;
+  const lowColumn = Math.min(token.start.column, originalEnd.column);
+  const highColumn = Math.max(token.start.column, originalEnd.column);
+  if (highColumn < context.tableColumnStart || lowColumn > context.tableColumnEnd) return token.raw;
+
+  const slices: Array<{ startColumn: number; endColumn: number; affected: boolean }> = [];
+  if (lowColumn < context.tableColumnStart) {
+    slices.push({
+      startColumn: lowColumn,
+      endColumn: Math.min(highColumn, context.tableColumnStart - 1),
+      affected: false
+    });
+  }
+  const insideStart = Math.max(lowColumn, context.tableColumnStart);
+  const insideEnd = Math.min(highColumn, context.tableColumnEnd);
+  if (insideStart <= insideEnd) {
+    slices.push({ startColumn: insideStart, endColumn: insideEnd, affected: true });
+  }
+  if (highColumn > context.tableColumnEnd) {
+    slices.push({
+      startColumn: Math.max(lowColumn, context.tableColumnEnd + 1),
+      endColumn: highColumn,
+      affected: false
+    });
+  }
+
+  const members = slices.flatMap((slice) => {
+    const rowInterval = slice.affected
+      ? rewriteRowInterval(token.start.row, originalEnd.row, context)
+      : { start: token.start.row, end: originalEnd.row };
+    if (!rowInterval) return [];
+    const start = withRectangularCoordinates(token.start, slice.startColumn, rowInterval.start);
+    const end = withRectangularCoordinates(originalEnd, slice.endColumn, rowInterval.end);
+    return [formatRectangularMember(token.sheetPrefix, start, end)];
+  });
+  if (members.length === 0) return `${token.sheetPrefix}#REF!`;
+  if (members.length === 1) return members[0];
+  return `(${members.join(",")})`;
+}
+
+function rewriteRowInterval(
+  startRow: number,
+  endRow: number,
+  context: RectangularRowEditContext
+): { start: number; end: number } | null {
+  const ascending = startRow <= endRow;
+  const low = Math.min(startRow, endRow);
+  const high = Math.max(startRow, endRow);
+  let nextLow: number;
+  let nextHigh: number;
+  if (context.operation === "insert") {
+    if (high < context.row) {
+      nextLow = low;
+      nextHigh = high;
+    } else if (low >= context.row) {
+      nextLow = low + context.count;
+      nextHigh = high + context.count;
+    } else {
+      nextLow = low;
+      nextHigh = high + context.count;
+    }
+  } else {
+    const deleteEnd = context.row + context.count - 1;
+    if (high < context.row) {
+      nextLow = low;
+      nextHigh = high;
+    } else if (low > deleteEnd) {
+      nextLow = low - context.count;
+      nextHigh = high - context.count;
+    } else {
+      const survivesAbove = low < context.row;
+      const survivesBelow = high > deleteEnd;
+      if (!survivesAbove && !survivesBelow) return null;
+      nextLow = survivesAbove ? low : context.row;
+      nextHigh = survivesBelow ? high - context.count : context.row - 1;
+      if (nextLow > nextHigh) return null;
+    }
+  }
+  return ascending ? { start: nextLow, end: nextHigh } : { start: nextHigh, end: nextLow };
+}
+
+function withRectangularCoordinates(
+  reference: ParsedFormulaCellReference,
+  column: number,
+  row: number
+): ParsedFormulaCellReference {
+  return { ...reference, column, row };
+}
+
+function formatRectangularMember(
+  sheetPrefix: string,
+  start: ParsedFormulaCellReference,
+  end: ParsedFormulaCellReference
+): string {
+  const startText = formatParsedCellReference(start);
+  const endText = formatParsedCellReference(end);
+  return start.row === end.row && start.column === end.column
+    ? `${sheetPrefix}${startText}`
+    : `${sheetPrefix}${startText}:${endText}`;
 }
 
 function formatParsedCellReference(reference: ParsedFormulaCellReference): string {

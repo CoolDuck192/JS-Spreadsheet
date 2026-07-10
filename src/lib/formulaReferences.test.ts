@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractFormulaReferences,
+  rewriteFormulaForRectangularRowEdit,
   rewriteFormulaForStructure,
   translateFormulaReferences
 } from "./formulaReferences";
@@ -185,5 +186,75 @@ describe("formulaReferences", () => {
         count: 1
       })
     ).toBe("=SUM(Data!A1:D3)+SUM(A1:C3)");
+  });
+
+  it("rewrites only the table-column slice of rectangular row inserts", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      row: 2,
+      count: 1,
+      operation: "insert" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(B2:C4)+$B$4+D4", context)).toEqual({
+      ok: true,
+      formula: "=SUM(B2:C5)+$B$5+D4"
+    });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(A2:C4)", context)).toEqual({
+      ok: true,
+      formula: "=SUM((A2:A4,B2:C5))"
+    });
+  });
+
+  it("shrinks or invalidates affected table-column slices on deletion", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      row: 1,
+      count: 2,
+      operation: "delete" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(B2:C4)+B2+B4", context)).toEqual({
+      ok: true,
+      formula: "=SUM(B2:C2)+#REF!+B2"
+    });
+  });
+
+  it("preserves quoted text, function names, scientific notation, and other sheets", () => {
+    expect(rewriteFormulaForRectangularRowEdit(
+      '=LOG10(B2)+1E10+"B2"+\'Rates 2026\'!B2',
+      {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 1,
+        tableColumnEnd: 2,
+        row: 1,
+        count: 1,
+        operation: "insert",
+        sheetBounds: { rowCount: 100, columnCount: 26 }
+      }
+    )).toEqual({
+      ok: true,
+      formula: '=LOG10(B3)+1E10+"B2"+\'Rates 2026\'!B2'
+    });
+  });
+
+  it("rejects external and 3-D references with a typed issue", () => {
+    expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      row: 1,
+      count: 1,
+      operation: "insert",
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    })).toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 });
