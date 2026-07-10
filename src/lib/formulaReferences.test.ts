@@ -3,7 +3,8 @@ import {
   extractFormulaReferences,
   rewriteFormulaForRectangularRowEdit,
   rewriteFormulaForStructure,
-  translateFormulaReferences
+  translateFormulaReferences,
+  translateFormulaRowsWithinColumns
 } from "./formulaReferences";
 
 describe("formulaReferences", () => {
@@ -21,6 +22,34 @@ describe("formulaReferences", () => {
     expect(translateFormulaReferences('=IF(A1>0,"A1 ok","B2 no")', { rowOffset: 1, columnOffset: 0 })).toBe(
       '=IF(A2>0,"A1 ok","B2 no")'
     );
+  });
+
+  it("preserves external workbook references while translating same-sheet rows", () => {
+    expect(translateFormulaRowsWithinColumns(
+      "=[Book.xlsx]Sheet1!A3+A3",
+      { rowOffset: 1, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
+    )).toBe("=[Book.xlsx]Sheet1!A3+A4");
+  });
+
+  it("emits REF for negative range endpoints during bounded row translation", () => {
+    expect(translateFormulaRowsWithinColumns(
+      "=SUM(A1:B3)+Sheet1!A1",
+      { rowOffset: -2, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
+    )).toBe("=SUM(#REF!)+#REF!");
+  });
+
+  it("preserves mixed in-table and out-of-table ranges during bounded row translation", () => {
+    expect(translateFormulaRowsWithinColumns(
+      "=SUM($D3:A$3)",
+      { rowOffset: 1, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
+    )).toBe("=SUM($D3:A$3)");
+  });
+
+  it("translates reversed ranges wholly inside the bounded columns while honoring row locks", () => {
+    expect(translateFormulaRowsWithinColumns(
+      "=SUM($B3:A$3)",
+      { rowOffset: 1, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
+    )).toBe("=SUM($B4:A$3)");
   });
 
   it("extracts unique local references while ignoring quoted and cross-sheet references", () => {
@@ -153,7 +182,7 @@ describe("formulaReferences", () => {
 
   it("shrinks row ranges and invalidates only fully deleted references", () => {
     expect(
-      rewriteFormulaForStructure("=SUM($A$2:$A$6)+SUM(B3:B6)+SUM(C3:C4)+D4", {
+      rewriteFormulaForStructure("=SUM($A$2:$A$6)+SUM(B3:B6)+SUM(C3:C4)+D4+Data!E4", {
         formulaSheetName: "Data",
         editedSheetName: "Data",
         axis: "row",
@@ -161,7 +190,7 @@ describe("formulaReferences", () => {
         index: 2,
         count: 2
       })
-    ).toBe("=SUM($A$2:$A$4)+SUM(B3:B4)+SUM(#REF!)+#REF!");
+    ).toBe("=SUM($A$2:$A$4)+SUM(B3:B4)+SUM(#REF!)+#REF!+#REF!");
   });
 
   it("shrinks column ranges and preserves qualified ranges on other sheets", () => {
@@ -188,7 +217,7 @@ describe("formulaReferences", () => {
     ).toBe("=SUM(Data!A1:D3)+SUM(A1:C3)");
   });
 
-  it("rewrites only the table-column slice of rectangular row inserts", () => {
+  it("rewrites table-contained row inserts and rejects mixed-column ranges that require a union", () => {
     const context = {
       formulaSheetId: "Data",
       editedSheetId: "Data",
@@ -203,9 +232,12 @@ describe("formulaReferences", () => {
       ok: true,
       formula: "=SUM(B2:C5)+$B$5+D4"
     });
-    expect(rewriteFormulaForRectangularRowEdit("=SUM(A2:C4)", context)).toEqual({
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(A2:C4)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(A2:C2)", context)).toEqual({
       ok: true,
-      formula: "=SUM((A2:A4,B2:C5))"
+      formula: "=SUM(A2:C2)"
     });
   });
 
@@ -224,6 +256,12 @@ describe("formulaReferences", () => {
       ok: true,
       formula: "=SUM(B2:C2)+#REF!+B2"
     });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(Data!B2:B3)", context)).toEqual({
+      ok: true,
+      formula: "=SUM(#REF!)"
+    });
+    expect(rewriteFormulaForRectangularRowEdit("=SUM(A2:C4)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
   it("preserves quoted text, function names, scientific notation, and other sheets", () => {

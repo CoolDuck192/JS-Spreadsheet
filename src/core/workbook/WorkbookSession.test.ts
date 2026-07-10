@@ -239,6 +239,62 @@ describe("WorkbookSession", () => {
     expect(diagnostics[0]).toMatchObject({ category: "validation", metadata: { outcome: "rejected" } });
   });
 
+  it("preserves a transaction rejection when scratch projection cleanup throws", () => {
+    const diagnostics: WorkbookDiagnosticEvent[] = [];
+    let factoryCalls = 0;
+    const session = createWorkbookSession({
+      workbook: createBlankWorkbook(),
+      formulaEngineFactory(workbook) {
+        factoryCalls += 1;
+        const engine = createRawFormulaEngine(workbook);
+        return factoryCalls === 2
+          ? {
+              ...engine,
+              destroy() {
+                throw new Error("scratch cleanup failed");
+              }
+            }
+          : engine;
+      },
+      onDiagnostic: (event) => diagnostics.push(event)
+    });
+    const initial = session.getSnapshot();
+    const sheetId = initial.workbook.activeSheetId;
+
+    let result: ReturnType<typeof session.dispatch> | undefined;
+    expect(() => {
+      result = session.dispatch({
+        type: "transaction",
+        commands: [
+          {
+            type: "range.validation.set",
+            sheetId,
+            range: origin,
+            rule: { type: "list", values: ["allowed"] }
+          },
+          { type: "cell.set", sheetId, address: "A1", input: "blocked" }
+        ]
+      });
+    }).not.toThrow();
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "validation.failed",
+        message: "Choose one of: allowed",
+        sheetId,
+        address: "A1"
+      }]
+    });
+    expect(session.getSnapshot()).toBe(initial);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      category: "validation",
+      metadata: { outcome: "rejected", changed: false }
+    });
+  });
+
   it("lets later transaction children validate against earlier formula dependencies", () => {
     const session = createWorkbookSession({ workbook: createBlankWorkbook() });
     const sheetId = session.getSnapshot().workbook.activeSheetId;

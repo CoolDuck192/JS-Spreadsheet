@@ -209,7 +209,11 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       reductionFailure = { cause };
       applied = invalidCommandResult();
     } finally {
-      scratchEngine?.destroy();
+      try {
+        scratchEngine?.destroy();
+      } catch {
+        // Host cleanup must not replace the command result or its diagnostic.
+      }
     }
 
     if (applied.status === "rejected") {

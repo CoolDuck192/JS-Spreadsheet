@@ -60,7 +60,45 @@ describe("structured table rows", () => {
       { columnId: "column-name", direction: "asc" }
     ], servicesFor(sortable));
     expect(sorted.status).toBe("committed");
-    expect(getCellContent(sorted.workbook, "sheet-1", "B4")).toBe("=A3+D3+1");
+    expect(getCellContent(sorted.workbook, "sheet-1", "B4")).toBe("=A4+D3+1");
+  });
+
+  it("preserves row locks while translating in-table relative references during sorting", () => {
+    const workbook = rowFixture({
+      A3: "Zed",
+      B3: "=A3+$A3+A$3+$A$3+D3+Other!A3"
+    });
+
+    const sorted = sortStructuredTableRows(workbook, "table-1", [
+      { columnId: "column-name", direction: "asc" }
+    ], servicesFor(workbook));
+
+    expect(sorted.status).toBe("committed");
+    expect(getCellContent(sorted.workbook, "sheet-1", "B4")).toBe(
+      "=A4+$A4+A$3+$A$3+D3+Other!A3"
+    );
+  });
+
+  it("preserves mixed table ranges as evaluable formulas during sorting", () => {
+    const workbook = rowFixture({
+      A3: "=SUM(B3:D3)",
+      B3: 20,
+      C3: 4,
+      D3: 5
+    });
+
+    const sorted = sortStructuredTableRows(workbook, "table-1", [
+      { columnId: "column-score", direction: "asc" }
+    ], servicesFor(workbook));
+
+    expect(sorted.status).toBe("committed");
+    expect(getCellContent(sorted.workbook, "sheet-1", "A4")).toBe("=SUM(B3:D3)");
+    const engine = createFormulaEngine(sorted.workbook);
+    try {
+      expect(engine.getComputedValue("sheet-1", "A4")).toBe(12);
+    } finally {
+      engine.destroy();
+    }
   });
 
   it("moves unsupported external body formulas without rewriting or blocking the row edit", () => {

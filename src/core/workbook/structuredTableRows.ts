@@ -10,7 +10,8 @@ import { compareDeterministicText } from "../../lib/filters";
 import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
 import {
   rewriteFormulaForRectangularRowEdit,
-  translateFormulaReferences
+  translateFormulaReferences,
+  translateFormulaRowsWithinColumns
 } from "../../lib/formulaReferences";
 import {
   getStructuredTable,
@@ -218,7 +219,7 @@ export function sortStructuredTableRows(
     sourceRow: record.sourceRow,
     targetRow: body.start.row + index
   }));
-  let next = remapTableRows(workbook, table, mappings, body.start.row, body.end.row);
+  let next = remapTableRows(workbook, table, mappings, body.start.row, body.end.row, true);
   const nextTable = {
     ...table,
     rowIds: records.map(({ rowId }) => rowId),
@@ -385,11 +386,12 @@ function remapTableRows(
   table: StructuredTable,
   mappings: readonly RowMapping[],
   clearStartRow: number,
-  clearEndRow: number
+  clearEndRow: number,
+  translateMovedFormulas = false
 ): WorkbookModel {
   const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === table.sheetId);
   const sheet = workbook.sheets[sheetIndex];
-  const remap = <T>(record: Readonly<Record<string, T>>): Record<string, T> => {
+  const remap = <T>(record: Readonly<Record<string, T>>, translateFormulas = false): Record<string, T> => {
     const next = { ...record };
     for (let row = clearStartRow; row <= clearEndRow; row += 1) {
       for (let column = table.range.start.column; column <= table.range.end.column; column += 1) {
@@ -400,14 +402,23 @@ function remapTableRows(
       for (let column = table.range.start.column; column <= table.range.end.column; column += 1) {
         const source = formatCellAddress({ row: mapping.sourceRow, column });
         if (!Object.prototype.hasOwnProperty.call(record, source)) continue;
-        next[formatCellAddress({ row: mapping.targetRow, column })] = record[source];
+        let value = record[source];
+        if (translateFormulas && typeof value === "string" && value.startsWith("=")) {
+          value = translateFormulaRowsWithinColumns(value, {
+            rowOffset: mapping.targetRow - mapping.sourceRow,
+            formulaSheetName: sheet.name,
+            columnStart: table.range.start.column,
+            columnEnd: table.range.end.column
+          }) as T;
+        }
+        next[formatCellAddress({ row: mapping.targetRow, column })] = value;
       }
     }
     return next;
   };
   const nextSheet: SheetModel = {
     ...sheet,
-    cells: remap(sheet.cells),
+    cells: remap(sheet.cells, translateMovedFormulas),
     formats: remap(sheet.formats),
     validations: remap(sheet.validations),
     comments: remap(sheet.comments),
