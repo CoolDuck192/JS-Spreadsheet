@@ -4,7 +4,7 @@ import {
   type Document as XmlDocument,
   type Element as XmlElement
 } from "@xmldom/xmldom";
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { strFromU8, strToU8, zipSync } from "fflate";
 import type { FilterExpression, QueryScalar } from "../table/core/query";
 import type {
   StructuredTable,
@@ -14,7 +14,10 @@ import type {
 } from "../types";
 import { formatCellAddress } from "./addressing";
 import { a1FormulaToStructured } from "./structuredFormula";
-import { validateXlsxArchive } from "./xlsxSecurity";
+import {
+  extractValidatedXlsxEntries,
+  validateXlsxArchive
+} from "./xlsxSecurity";
 
 export type NativeTableXmlMetadata = {
   name: string;
@@ -56,12 +59,11 @@ const AGGREGATE_TO_NATIVE: Readonly<Record<TableAggregate, string>> = {
 };
 
 export function readNativeTableXml(data: Uint8Array): readonly NativeTableXmlMetadata[] {
-  assertSafeArchive(data);
-  const entries = unzipSync(data);
-  return Object.keys(entries)
+  const entries = validatedEntries(data);
+  return [...entries.keys()]
     .filter((name) => TABLE_ENTRY_PATTERN.test(name))
     .sort(naturalEntryOrder)
-    .map((name) => readTableDocument(strFromU8(entries[name])));
+    .map((name) => readTableDocument(strFromU8(entries.get(name)!)));
 }
 
 export function patchNativeTableXml(
@@ -69,17 +71,16 @@ export function patchNativeTableXml(
   tables: readonly StructuredTable[],
   workbook?: WorkbookModel
 ): Uint8Array {
-  assertSafeArchive(data);
-  const entries = unzipSync(data);
+  const entries = new Map(validatedEntries(data));
   const byName = new Map(tables.map((table) => [normalizeName(table.name), table]));
 
-  for (const entryName of Object.keys(entries).filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
-    const document = parseXml(strFromU8(entries[entryName]));
+  for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
     const root = xmlRoot(document);
     const table = byName.get(normalizeName(root.getAttribute("name") ?? ""));
     if (!table) continue;
     patchTableDocument(document, table, workbook);
-    entries[entryName] = strToU8(new XMLSerializer().serializeToString(document));
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
   }
 
   const output = zipEntries(entries);
@@ -93,15 +94,14 @@ export function patchNativeTableXml(
  * model; the original XML is read first and remains the metadata authority.
  */
 export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
-  assertSafeArchive(data);
-  const entries = unzipSync(data);
-  for (const entryName of Object.keys(entries).filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
-    const document = parseXml(strFromU8(entries[entryName]));
+  const entries = new Map(validatedEntries(data));
+  for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const column of allElementsByLocalName(document, "tableColumn")) {
       removeDirectChildren(column, "calculatedColumnFormula");
       removeDirectChildren(column, "totalsRowFormula");
     }
-    entries[entryName] = strToU8(new XMLSerializer().serializeToString(document));
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
   }
   const output = zipEntries(entries);
   assertSafeArchive(output);
@@ -474,10 +474,16 @@ function assertSafeArchive(data: Uint8Array): void {
   if (!result.ok) throw issueError(result.issue);
 }
 
-function zipEntries(entries: Readonly<Record<string, Uint8Array>>): Uint8Array {
+function validatedEntries(data: Uint8Array): ReadonlyMap<string, Uint8Array> {
+  const result = extractValidatedXlsxEntries(data);
+  if (!result.ok) throw issueError(result.issue);
+  return result.entries;
+}
+
+function zipEntries(entries: ReadonlyMap<string, Uint8Array>): Uint8Array {
   const zippedEntries: Record<string, [Uint8Array, { mtime: Date; level: 6 }]> = {};
-  for (const name of Object.keys(entries).sort()) {
-    zippedEntries[name] = [entries[name], { mtime: FIXED_ZIP_DATE, level: 6 }];
+  for (const name of [...entries.keys()].sort()) {
+    zippedEntries[name] = [entries.get(name)!, { mtime: FIXED_ZIP_DATE, level: 6 }];
   }
   return zipSync(zippedEntries);
 }

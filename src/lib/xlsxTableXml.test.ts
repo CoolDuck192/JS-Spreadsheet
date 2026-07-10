@@ -8,7 +8,11 @@ import {
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import type { StructuredTable } from "../types";
-import { patchNativeTableXml, readNativeTableXml } from "./xlsxTableXml";
+import {
+  patchNativeTableXml,
+  prepareNativeTableXmlForExcelJs,
+  readNativeTableXml
+} from "./xlsxTableXml";
 
 const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-table.xlsx");
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
@@ -63,6 +67,44 @@ function tableXml(data: Uint8Array, name = "xl/tables/table1.xml") {
   return strFromU8(unzipSync(data)[name]);
 }
 
+function readU32(bytes: Uint8Array, offset: number): number {
+  return (
+    (bytes[offset] |
+      (bytes[offset + 1] << 8) |
+      (bytes[offset + 2] << 16) |
+      (bytes[offset + 3] << 24)) >>>
+    0
+  );
+}
+
+function writeU16(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+}
+
+function writeU32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+  bytes[offset + 2] = (value >>> 16) & 0xff;
+  bytes[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function withEocdLikeZipComment(data: Uint8Array): Uint8Array {
+  let eocdOffset = data.length - 22;
+  while (eocdOffset >= 0 && readU32(data, eocdOffset) !== 0x06054b50) {
+    eocdOffset -= 1;
+  }
+  if (eocdOffset < 0) throw new Error("EOCD not found in test archive");
+
+  const comment = new Uint8Array(24);
+  writeU32(comment, 0, 0x06054b50);
+  const result = new Uint8Array(data.length + comment.length);
+  result.set(data);
+  result.set(comment, data.length);
+  writeU16(result, eocdOffset + 20, comment.length);
+  return result;
+}
+
 function parseXml(xml: string) {
   const errors: string[] = [];
   const document = new DOMParser({ onError: (_level, message) => errors.push(message) }).parseFromString(
@@ -78,6 +120,30 @@ function firstByLocalName(document: XmlDocument | XmlElement, name: string) {
 }
 
 describe("xlsxTableXml", () => {
+  it("reads native table XML from the validated archive view when a ZIP comment resembles an EOCD", async () => {
+    const source = await fixture();
+    const commented = withEocdLikeZipComment(source);
+
+    expect(readNativeTableXml(commented)).toEqual(readNativeTableXml(source));
+  });
+
+  it("patches the validated archive view when a ZIP comment resembles an EOCD", async () => {
+    const source = await fixture();
+    const commented = withEocdLikeZipComment(source);
+
+    expect(readNativeTableXml(patchNativeTableXml(commented, []))).toEqual(
+      readNativeTableXml(source)
+    );
+  });
+
+  it("prepares the validated archive view when a ZIP comment resembles an EOCD", async () => {
+    const source = await fixture();
+    const commented = withEocdLikeZipComment(source);
+    const prepared = prepareNativeTableXmlForExcelJs(commented);
+
+    expect(unzipSync(prepared)["xl/workbook.xml"]).toBeDefined();
+  });
+
   it("reads calculated columns, filters, and totals from the deterministic fixture", async () => {
     expect(readNativeTableXml(await fixture())).toEqual([
       {

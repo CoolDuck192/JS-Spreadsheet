@@ -519,6 +519,53 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("returns a typed rejection when a custom command ID is reused after acknowledgement", async () => {
+    let serverRow = employees[0];
+    let serverRevision = "1";
+    const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+      serverRow = { ...serverRow, name: "Grace" };
+      serverRevision = "2";
+      return batch.map((mutation) => ({
+        clientMutationId: mutation.clientMutationId,
+        status: "committed" as const,
+        revision: serverRevision,
+        row: serverRow,
+        rowVersion: "row-2"
+      }));
+    });
+    const session = createRemoteTableSession({
+      source: createTestRemoteSource({
+        query: async (request) => offsetResult(serverRevision, [serverRow], request),
+        mutate,
+        compareRevisions: numericRevisionComparator
+      }),
+      columns,
+      commandIdFactory: () => "duplicate-command"
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Grace" }]
+    })).toEqual({ status: "pending", operationId: "duplicate-command" });
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
+    await waitUntilReady(session);
+    expect(session.getDiagnostics().journalEntries).toBe(1);
+
+    await expect(session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Marie" }]
+    })).resolves.toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "REMOTE_MUTATION_PROTOCOL_ERROR" }]
+    });
+    expect(mutate).toHaveBeenCalledTimes(1);
+
+    session.destroy();
+  });
+
   it("undoes an acknowledged value batch with original values and latest row versions", async () => {
     let serverRow = employees[0];
     let serverRevision = "1";

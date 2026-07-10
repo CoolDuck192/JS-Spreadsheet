@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   WorkbookTableRow as CoreWorkbookTableRow,
@@ -33,5 +34,20 @@ describe("public entrypoints", () => {
     expectTypeOf<XlsxImportOptions>().toMatchTypeOf<{
       tableKeys?: Readonly<Record<string, { columnName: string }>>;
     }>();
+  });
+
+  it("maps typed subpaths for legacy TypeScript resolution", async () => {
+    const manifest = JSON.parse(await readFile(
+      new URL("../../package.json", import.meta.url),
+      "utf8"
+    ));
+
+    expect(manifest.typesVersions).toEqual({
+      "*": {
+        core: ["dist/types/entry/core.d.ts"],
+        react: ["dist/types/entry/react.d.ts"],
+        "connectors/google": ["dist/types/entry/google.d.ts"]
+      }
+    });
   });
 });

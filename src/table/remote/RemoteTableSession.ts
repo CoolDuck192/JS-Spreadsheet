@@ -611,7 +611,8 @@ class RemoteTableSessionImpl<
     }
     const preflight = this.mutationController.preflight(commandId, prepared);
     if (preflight) return preflight;
-    this.executeJournaledMutation(commandId, prepared, journalChanges);
+    const journalIssue = this.executeJournaledMutation(commandId, prepared, journalChanges);
+    if (journalIssue) return journalIssue;
     return { status: "pending", operationId: commandId };
   }
 
@@ -669,7 +670,8 @@ class RemoteTableSessionImpl<
     }
     const preflight = this.mutationController.preflight(commandId, prepared);
     if (preflight) return preflight;
-    this.executeJournaledMutation(commandId, prepared, journalChanges);
+    const journalIssue = this.executeJournaledMutation(commandId, prepared, journalChanges);
+    if (journalIssue) return journalIssue;
     return { status: "pending", operationId: commandId };
   }
 
@@ -677,13 +679,19 @@ class RemoteTableSessionImpl<
     operationId: string,
     prepared: readonly PreparedRemoteMutation[],
     changes: readonly RemoteOperationJournalChange[]
-  ): void {
+  ): Extract<CommandResult, { status: "rejected" }> | null {
     const mutations = this.mutationController;
-    if (!mutations) return;
+    if (!mutations) return null;
     const journaled = this.options.source.undoMode === "compensating"
       && this.getSnapshot().operationStates.undo.enabled;
     const abortController = journaled ? new AbortController() : undefined;
-    if (abortController) this.operationJournal.begin(operationId, abortController, changes);
+    if (abortController) {
+      try {
+        this.operationJournal.begin(operationId, abortController, changes);
+      } catch (error) {
+        return validationResult("REMOTE_MUTATION_PROTOCOL_ERROR", errorMessage(error));
+      }
+    }
     void mutations.execute(operationId, prepared, abortController ? { abortController } : {}).then((result) => {
       if (this.operationJournal.isTombstoned(operationId)) {
         this.operationJournal.reconcileTombstone(operationId);
@@ -705,6 +713,7 @@ class RemoteTableSessionImpl<
         this.publishJournalChange();
       }
     });
+    return null;
   }
 
   private handleMutationAcknowledged(acknowledgement: RemoteMutationAcknowledgement): void {

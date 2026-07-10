@@ -40,6 +40,10 @@ type ValidationResult =
   | { ok: true }
   | { ok: false; issue: TableIssue };
 
+export type XlsxEntryExtractionResult =
+  | { ok: true; entries: ReadonlyMap<string, Uint8Array> }
+  | { ok: false; issue: TableIssue };
+
 type CentralDirectoryEntry = {
   name: string;
   flags: number;
@@ -919,6 +923,22 @@ export function validateXlsxArchive(
   data: Uint8Array,
   limitOverrides?: Partial<XlsxSecurityLimits>
 ): ValidationResult {
+  const result = inspectXlsxArchive(data, limitOverrides, false);
+  return result.ok ? { ok: true } : result;
+}
+
+export function extractValidatedXlsxEntries(
+  data: Uint8Array,
+  limitOverrides?: Partial<XlsxSecurityLimits>
+): XlsxEntryExtractionResult {
+  return inspectXlsxArchive(data, limitOverrides, true);
+}
+
+function inspectXlsxArchive(
+  data: Uint8Array,
+  limitOverrides: Partial<XlsxSecurityLimits> | undefined,
+  extractAllEntries: boolean
+): XlsxEntryExtractionResult {
   try {
     const limits = mergeLimits(limitOverrides);
     if (data.byteLength > limits.maxArchiveBytes) {
@@ -933,11 +953,14 @@ export function validateXlsxArchive(
     const bytes = data.slice();
     const archive = parseArchive(bytes, limits);
     const documents = new Map<string, XmlDocument>();
+    const extractedEntries = new Map<string, Uint8Array>();
     const xmlCounts = { elements: 0, attributes: 0 };
 
     for (const entry of archive.entries) {
-      if (!isXmlPart(entry.name)) continue;
+      if (!extractAllEntries && !isXmlPart(entry.name)) continue;
       const xmlBytes = inflateEntry(archive, entry);
+      if (extractAllEntries) extractedEntries.set(entry.name, xmlBytes);
+      if (!isXmlPart(entry.name)) continue;
       const document = parseSafeXml(
         decodeXml(xmlBytes, entry.name),
         entry.name,
@@ -948,7 +971,7 @@ export function validateXlsxArchive(
     }
 
     validateContentTypesAndRelationships(archive, documents);
-    return { ok: true };
+    return { ok: true, entries: extractedEntries };
   } catch (error) {
     if (error instanceof XlsxSecurityError) {
       return {

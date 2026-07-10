@@ -7,6 +7,13 @@
   "main": "./dist/lib/react.js",
   "module": "./dist/lib/react.js",
   "types": "./dist/types/entry/react.d.ts",
+  "typesVersions": {
+    "*": {
+      "core": ["dist/types/entry/core.d.ts"],
+      "react": ["dist/types/entry/react.d.ts"],
+      "connectors/google": ["dist/types/entry/google.d.ts"]
+    }
+  },
   "exports": {
     ".": { "types": "./dist/types/entry/react.d.ts", "import": "./dist/lib/react.js" },
     "./core": { "types": "./dist/types/entry/core.d.ts", "import": "./dist/lib/core.js" },
