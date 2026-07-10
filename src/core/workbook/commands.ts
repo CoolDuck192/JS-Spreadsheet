@@ -26,8 +26,6 @@ import {
   clearSheetFilters,
   copyRichRange,
   defineNamedRange,
-  deleteColumns,
-  deleteRows,
   deleteSheet,
   deleteSheetChart,
   duplicateSheet,
@@ -38,8 +36,6 @@ import {
   getCellReadOnly,
   getCellValidation,
   getSheetFilters,
-  insertColumns,
-  insertRows,
   mergeCells,
   moveRichRange,
   moveSheet,
@@ -82,6 +78,11 @@ import {
   reduceStructuredTableCommand,
   type StructuredTableCommand
 } from "./structuredTables";
+import {
+  isWorksheetStructureCommand,
+  reduceWorksheetStructureCommand,
+  type WorksheetStructureCommand
+} from "./worksheetStructure";
 
 export type SerializableRichClipboardRange = {
   readonly range: CellRange;
@@ -146,8 +147,7 @@ export type WorkbookCommand =
       target: CellCoord;
       matrix: readonly (readonly string[])[];
     }
-  | { type: "rows.insert" | "rows.delete"; sheetId: string; index: number; count: number }
-  | { type: "columns.insert" | "columns.delete"; sheetId: string; index: number; count: number }
+  | WorksheetStructureCommand
   | { type: "rows.resize"; sheetId: string; rows: readonly number[]; height: number }
   | { type: "columns.resize"; sheetId: string; columns: readonly number[]; width: number }
   | { type: "rows.hidden.set"; sheetId: string; rows: readonly number[]; hidden: boolean }
@@ -224,6 +224,18 @@ export function applyWorkbookMutation(
       }
     }
     return applied(reduction.workbook);
+  }
+  if (isWorksheetStructureCommand(command)) {
+    const reduction = reduceWorksheetStructureCommand(workbook, command, {
+      createId: context.createId ?? createRandomId
+    });
+    return reduction.status === "committed"
+      ? applied(reduction.workbook)
+      : {
+          status: "rejected",
+          reason: reduction.reason,
+          issues: reduction.issues
+        };
   }
   switch (command.type) {
     case "cell.set": {
@@ -513,18 +525,6 @@ export function applyWorkbookMutation(
       );
       return validatedMutation(candidate, command.sheetId, addresses, context);
     }
-    case "rows.insert":
-      checkedStructure(command.index, command.count);
-      return applied(insertRows(workbook, command.sheetId, command.index, command.count));
-    case "rows.delete":
-      checkedStructure(command.index, command.count);
-      return applied(deleteRows(workbook, command.sheetId, command.index, command.count));
-    case "columns.insert":
-      checkedStructure(command.index, command.count);
-      return applied(insertColumns(workbook, command.sheetId, command.index, command.count));
-    case "columns.delete":
-      checkedStructure(command.index, command.count);
-      return applied(deleteColumns(workbook, command.sheetId, command.index, command.count));
     case "rows.resize": {
       checkedDimension(command.height);
       let candidate = workbook;
@@ -799,13 +799,6 @@ function checkedIndexes(indexes: readonly number[]): readonly number[] {
 function checkedIndex(index: number): void {
   if (!Number.isInteger(index) || index < 0) {
     throw new Error("Index must be a non-negative integer");
-  }
-}
-
-function checkedStructure(index: number, count: number): void {
-  checkedIndex(index);
-  if (!Number.isInteger(count) || count <= 0) {
-    throw new Error("Count must be a positive integer");
   }
 }
 

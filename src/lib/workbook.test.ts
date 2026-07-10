@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CellRange } from "../types";
+import type { CellRange, StructuredTable } from "../types";
 import { createFormulaEngine } from "./formulaEngine";
 import {
   addSheetChart,
@@ -467,6 +467,31 @@ describe("workbook", () => {
     expect(getCellContent(deleted, sheetId, "B1")).toBe("10");
     expect(getCellContent(deleted, sheetId, "C1")).toBe("=B1*2");
     expect(getCellFormat(deleted, sheetId, "B1")).toEqual({ backgroundColor: "#eaf7f2" });
+  });
+
+  it.each([
+    ["insertRows", insertRows],
+    ["deleteRows", deleteRows],
+    ["insertColumns", insertColumns],
+    ["deleteColumns", deleteColumns]
+  ] as const)("%s refuses structured-table worksheet edits", (_name, edit) => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    const table: StructuredTable = {
+      id: "table-1",
+      name: "TableOne",
+      sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+      headerRow: true,
+      totalsRow: false,
+      columns: [{ id: "table-column-1", name: "Name", sheetColumn: 0 }],
+      rowIds: ["table-row-1"]
+    };
+    workbook = { ...workbook, tables: [table] };
+
+    expect(() => edit(workbook, sheetId, 0, 1)).toThrow(
+      "Use WorkbookSession.dispatch for structured-table worksheet edits"
+    );
   });
 
   it("does not rewrite LOG10, scientific notation, or quoted A1-like text during row insertion", () => {

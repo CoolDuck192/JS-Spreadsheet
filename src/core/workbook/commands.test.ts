@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { StructuredTable } from "../../types";
 import {
   addConditionalFormatRule,
@@ -167,6 +167,50 @@ describe("WorkbookCommand", () => {
     expectTypeOf(envelope.intent).toMatchTypeOf<WorkbookCommand>();
     expectTypeOf(result).toMatchTypeOf<CommandResult>();
     expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
+  });
+
+  it("routes invalid worksheet structure commands to an actionable reducer rejection", () => {
+    const workbook = createBlankWorkbook();
+    const createId = vi.fn(() => "unused-id");
+
+    const result = applyWorkbookMutation(workbook, {
+      type: "columns.insert",
+      sheetId: workbook.activeSheetId,
+      index: 27,
+      count: 1
+    }, {
+      createId,
+      evaluateCell(candidate, sheetId, address) {
+        return getCellContent(candidate, sheetId, address);
+      }
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "SHEET_STRUCTURE_OUT_OF_BOUNDS",
+        message: "Structure edit is outside the worksheet"
+      }]
+    });
+    expect(createId).not.toHaveBeenCalled();
+  });
+
+  it("routes valid table-free worksheet structure commands through the reducer", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+
+    const result = apply(workbook, {
+      type: "columns.insert",
+      sheetId,
+      index: 0,
+      count: 1
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(getCellContent(result.workbook, sheetId, "B1")).toBe("Name");
   });
 
   it("clears and replaces direct formats without removing conditional formats", () => {

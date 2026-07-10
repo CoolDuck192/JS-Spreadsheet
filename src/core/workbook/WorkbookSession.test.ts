@@ -416,29 +416,42 @@ describe("WorkbookSession", () => {
     expect(JSON.stringify(diagnostics[0])).not.toContain("secret-value");
   });
 
-  it("preserves safe exception detail in diagnostics while keeping rejections generic", () => {
+  it("rejects invalid worksheet structure commands atomically with actionable issues", () => {
     const diagnostics: WorkbookDiagnosticEvent[] = [];
+    let createdIds = 0;
     const session = createWorkbookSession({
       workbook: createBlankWorkbook(),
+      createId(kind) {
+        createdIds += 1;
+        return `${kind}-${createdIds}`;
+      },
       onDiagnostic: (event) => diagnostics.push(event)
     });
-    const sheetId = session.getSnapshot().workbook.activeSheetId;
+    const initial = session.getSnapshot();
+    const sheetId = initial.workbook.activeSheetId;
+    let notifications = 0;
+    session.subscribe(() => notifications += 1);
 
     const result = session.dispatch({ type: "rows.insert", sheetId, index: -1, count: 1 });
 
     expect(result).toEqual({
       status: "rejected",
-      reason: "unsupported",
-      issues: [{ code: "command.invalid", message: "Command could not be applied" }]
+      reason: "validation",
+      issues: [{
+        code: "SHEET_STRUCTURE_INDEX_INVALID",
+        message: "Structure index must be a non-negative integer"
+      }]
     });
+    expect(session.getSnapshot()).toBe(initial);
+    expect(notifications).toBe(0);
+    expect(createdIds).toBe(0);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].metadata).toMatchObject({
+      commandType: "rows.insert",
       outcome: "rejected",
-      errorType: "Error",
-      errorFingerprint: expect.stringMatching(/^[0-9a-f]{8}$/),
-      errorStackFrame: expect.stringContaining("commands.ts")
+      changed: false
     });
-    expect(JSON.stringify(result)).not.toContain("Index must be");
+    expect(diagnostics[0].metadata).not.toHaveProperty("errorType");
   });
 
   it("keeps reducer rejections generic when exception metadata cannot be inspected", () => {
