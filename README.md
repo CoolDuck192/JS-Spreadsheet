@@ -5,6 +5,9 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 ## Features
 
 - Excel-like grid with row and column headers.
+- Embeddable React `DataTable` for local records, host-authoritative remote APIs,
+  and live structured workbook tables, with typed columns, virtualization,
+  editing, query tools, conflict handling, undo, and CSV/XLSX export.
 - Cell editing, formula bar, keyboard navigation, keyboard shortcuts for common formatting/link/filter actions, range selection, row/column/sheet header selection, merged cells, protected sheets, read-only cells, plain external paste plus internal cut/copy/paste with formulas, formatting, validation, comments, hyperlinks, paste values, paste formats, and transpose paste, fill-down, fill-right, AutoFill handle number/date/month/weekday series and formula extension with copied formatting/validation, undo, redo, clear all/contents/formats/conditional formats/hyperlinks/validation, toolbar and context-menu row/column insert/delete, manual and auto-fit row/column sizing, row/column hide and unhide, sheet tab hide and restore, freeze panes, reset view, worksheet gridline/header/formula-bar/formula-text/sheet-tab visibility, worksheet zoom controls, and print-ready worksheet output.
 - Data workflow tools for AutoSum and quick Sum/Average/Count/Min/Max formula insertion, formula auditing for same-sheet precedents/dependents with jump navigation, Go To navigation for references and named ranges, named ranges from the name box with a manager for selecting/deleting names, cell comments with context-menu clearing, cell hyperlinks, find/replace, remove duplicates, selected-range filtering, header AutoFilter menus with unique-value filtering and sort actions, header-aware AutoFilter table sorting A-Z or Z-A, and live selection summaries for count, sum, average, min, and max.
 - HyperFormula-powered formulas, including supported Excel-style functions such as `SUM`, `AVERAGE`, `IF`, references, ranges, and formula errors.
@@ -129,7 +132,11 @@ Embedders can supply their own token source instead by implementing the `TokenPr
 
 ## Embedding
 
-`src/index.ts` exports the app as a library: the default export is the `<Spreadsheet />` component, alongside headless workbook, engine, xlsx, pivot, and Google Sheets functions. A dedicated Vite library build target is on the roadmap. See [docs/embedding.md](docs/embedding.md) for how to consume the repo as a source dependency.
+Build the typed library with `corepack pnpm run build:lib`. React hosts use
+`js-spreadsheet/react` (or the root alias), framework-independent code uses
+`js-spreadsheet/core`, and both UI surfaces use `js-spreadsheet/styles.css`.
+See [docs/embedding.md](docs/embedding.md) for local rows, remote APIs, workbook
+tables, package entrypoints, lifecycle rules, and XLSX identity behavior.
 
 ## License
 
