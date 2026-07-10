@@ -40,11 +40,15 @@ export function commitWorkbookHistory(
 ): WorkbookHistory {
   const limits = resolveHistoryLimits(history);
   if (history.present === workbook) {
-    if (history.future.length === 0) {
+    const retained = trimRetainedSnapshots(history.past, [], limits);
+    if (
+      history.future.length === 0
+      && hasResolvedLimits(history.limits, limits)
+      && hasSameSnapshotReferences(history.past, retained.past)
+    ) {
       return history;
     }
 
-    const retained = trimRetainedSnapshots(history.past, [], limits);
     return {
       ...history,
       ...retained,
@@ -289,6 +293,22 @@ function trimRetainedSnapshots(
 
 function resolveHistoryLimits(history: WorkbookHistory): WorkbookHistoryLimits {
   return normalizeLimits(history.limits ?? {});
+}
+
+function hasResolvedLimits(
+  current: WorkbookHistoryLimits | undefined,
+  resolved: WorkbookHistoryLimits
+): boolean {
+  return current?.maxEntries === resolved.maxEntries
+    && current.maxWeight === resolved.maxWeight;
+}
+
+function hasSameSnapshotReferences(
+  left: readonly WorkbookModel[],
+  right: readonly WorkbookModel[]
+): boolean {
+  return left.length === right.length
+    && left.every((workbook, index) => workbook === right[index]);
 }
 
 function normalizeLimits(limits: Partial<WorkbookHistoryLimits>): WorkbookHistoryLimits {

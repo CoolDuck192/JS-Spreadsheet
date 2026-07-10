@@ -287,6 +287,36 @@ describe("workbook history", () => {
     expect(branched.future).toEqual([]);
   });
 
+  it("remeasures and trims shared retained content on a same-reference commit", () => {
+    const initial = replaceActiveSheet(createBlankWorkbook(), {
+      cells: { A1: 1 }
+    });
+    const sharedSheet = initial.sheets[0];
+    const present = { ...initial };
+    const maxWeight = estimateWorkbookWeight(initial);
+    let history = createWorkbookHistory(initial, { maxWeight });
+    history = commitWorkbookHistory(history, present);
+
+    expect(history.future).toEqual([]);
+    expect(history.past).toEqual([initial]);
+    expect(history.present.sheets[0]).toBe(sharedSheet);
+
+    sharedSheet.validations.A1 = {
+      type: "list",
+      values: ["one", "two", "three"]
+    };
+    expect(getWorkbookHistoryStats(history).pastWeight).toBeGreaterThan(maxWeight);
+
+    const trimmed = commitWorkbookHistory(history, history.present);
+
+    expect(trimmed).not.toBe(history);
+    expect(trimmed.present).toBe(present);
+    expect(trimmed.present.sheets[0]).toBe(sharedSheet);
+    expect(trimmed.past).toEqual([]);
+    expect(trimmed.future).toEqual([]);
+    expect(getWorkbookHistoryStats(trimmed).retainedWeight).toBeLessThanOrEqual(maxWeight);
+  });
+
   it("remeasures aliased nested metadata for statistics and trimming", () => {
     const retained = replaceActiveSheet(createBlankWorkbook(), {
       cells: { A1: 1 },
