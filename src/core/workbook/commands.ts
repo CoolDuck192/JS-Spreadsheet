@@ -16,6 +16,8 @@ import {
   addSheet,
   autoFillRange,
   clearCellComments,
+  clearConditionalFormatRules,
+  clearDirectCellFormats,
   clearCellFormats,
   clearCellHyperlinks,
   clearRange,
@@ -42,6 +44,7 @@ import {
   moveRichRange,
   moveSheet,
   pasteRichRange,
+  pasteMatrix,
   previewRichPaste,
   removeConditionalFormatRule,
   removeDuplicateRows,
@@ -91,6 +94,8 @@ export type WorkbookCommand =
       mode: "contents" | "formats" | "comments" | "hyperlinks" | "all";
     }
   | { type: "range.format"; sheetId: string; range: CellRange; format: Partial<CellFormat> }
+  | { type: "range.directFormat.clear"; sheetId: string; range: CellRange }
+  | { type: "range.format.replace"; sheetId: string; range: CellRange; format: Partial<CellFormat> }
   | { type: "range.borders"; sheetId: string; range: CellRange; preset: BorderPreset }
   | { type: "range.validation.set"; sheetId: string; range: CellRange; rule: DataValidationRule }
   | { type: "range.validation.clear"; sheetId: string; range: CellRange }
@@ -101,6 +106,7 @@ export type WorkbookCommand =
       rule: ConditionalFormatRule;
     }
   | { type: "range.conditionalFormat.remove"; sheetId: string; ruleId: string }
+  | { type: "range.conditionalFormat.clear"; sheetId: string; range: CellRange }
   | { type: "range.readOnly.set"; sheetId: string; range: CellRange; readOnly: boolean }
   | { type: "range.merge" | "range.unmerge"; sheetId: string; range: CellRange }
   | { type: "range.fill"; sheetId: string; range: CellRange; direction: "down" | "right" }
@@ -127,6 +133,12 @@ export type WorkbookCommand =
       targetSheetId: string;
       target: CellCoord;
     }
+  | {
+      type: "clipboard.pasteMatrix";
+      sheetId: string;
+      target: CellCoord;
+      matrix: readonly (readonly string[])[];
+    }
   | { type: "rows.insert" | "rows.delete"; sheetId: string; index: number; count: number }
   | { type: "columns.insert" | "columns.delete"; sheetId: string; index: number; count: number }
   | { type: "rows.resize"; sheetId: string; rows: readonly number[]; height: number }
@@ -134,6 +146,16 @@ export type WorkbookCommand =
   | { type: "rows.hidden.set"; sheetId: string; rows: readonly number[]; hidden: boolean }
   | { type: "columns.hidden.set"; sheetId: string; columns: readonly number[]; hidden: boolean }
   | { type: "sheet.add"; name?: string }
+  | {
+      type: "sheet.createFromMatrix";
+      sheetId: string;
+      name: string;
+      rows: readonly (readonly string[])[];
+      formats?: readonly Readonly<{ range: CellRange; format: Partial<CellFormat> }>[];
+      columnWidths?: readonly number[];
+      freeze?: Readonly<{ rows: 0 | 1; columns: 0 | 1 }>;
+    }
+  | { type: "sheet.replaceWithRows"; sheetId: string; rows: readonly (readonly string[])[] }
   | { type: "sheet.rename"; sheetId: string; name: string }
   | { type: "sheet.duplicate" | "sheet.delete" | "sheet.activate"; sheetId: string }
   | { type: "sheet.move"; sheetId: string; targetIndex: number }
@@ -242,24 +264,53 @@ export function applyWorkbookMutation(
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
       return permission ?? applied(setCellFormat(workbook, command.sheetId, range, command.format));
     }
+    case "range.directFormat.clear": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      return permission ?? applied(clearDirectCellFormats(workbook, command.sheetId, range));
+    }
+    case "range.format.replace": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      if (permission) {
+        return permission;
+      }
+      const cleared = clearDirectCellFormats(workbook, command.sheetId, range);
+      return applied(setCellFormat(cleared, command.sheetId, range, command.format));
+    }
     case "range.borders": {
       const range = checkedRange(command.range);
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
       return permission ?? applied(setCellBorders(workbook, command.sheetId, range, command.preset));
     }
-    case "range.validation.set":
-      return applied(setCellValidation(
-        workbook,
-        command.sheetId,
-        checkedRange(command.range),
-        command.rule
-      ));
-    case "range.validation.clear":
-      return applied(setCellValidation(workbook, command.sheetId, checkedRange(command.range), null));
-    case "range.conditionalFormat.add":
-      return applied(addConditionalFormat(workbook, command.sheetId, command.range, command.rule));
-    case "range.conditionalFormat.remove":
-      return applied(removeConditionalFormatRule(workbook, command.sheetId, command.ruleId));
+    case "range.validation.set": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      return permission ?? applied(setCellValidation(workbook, command.sheetId, range, command.rule));
+    }
+    case "range.validation.clear": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      return permission ?? applied(setCellValidation(workbook, command.sheetId, range, null));
+    }
+    case "range.conditionalFormat.add": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      return permission ?? applied(addConditionalFormat(workbook, command.sheetId, range, command.rule));
+    }
+    case "range.conditionalFormat.remove": {
+      const sheet = workbook.sheets.find((candidate) => candidate.id === command.sheetId);
+      const rule = sheet?.conditionalFormats.find((candidate) => candidate.id === command.ruleId);
+      const permission = rule
+        ? writableAddresses(workbook, command.sheetId, getRangeAddresses(rule.range))
+        : null;
+      return permission ?? applied(removeConditionalFormatRule(workbook, command.sheetId, command.ruleId));
+    }
+    case "range.conditionalFormat.clear": {
+      const range = checkedRange(command.range);
+      const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
+      return permission ?? applied(clearConditionalFormatRules(workbook, command.sheetId, range));
+    }
     case "range.readOnly.set":
       return applied(setRangeReadOnly(
         workbook,
@@ -365,6 +416,22 @@ export function applyWorkbookMutation(
         ? sourceValidation
         : validatedMutation(candidate, command.targetSheetId, targetAddresses, context);
     }
+    case "clipboard.pasteMatrix": {
+      const target = checkedCoordinate(command.target);
+      const matrix = cloneStringMatrix(command.matrix);
+      const addresses = matrixAddresses(target, matrix);
+      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      if (permission) {
+        return permission;
+      }
+      const candidate = pasteMatrix(
+        workbook,
+        command.sheetId,
+        formatCellAddress(target),
+        matrix
+      );
+      return validatedMutation(candidate, command.sheetId, addresses, context);
+    }
     case "rows.insert":
       checkedStructure(command.index, command.count);
       return applied(insertRows(workbook, command.sheetId, command.index, command.count));
@@ -409,6 +476,35 @@ export function applyWorkbookMutation(
     }
     case "sheet.add":
       return applied(addSheet(workbook, command.name));
+    case "sheet.createFromMatrix": {
+      if (!command.sheetId.trim()) {
+        return rejectedUnsupported("sheet.id.invalid", "Generated sheet id is required");
+      }
+      const rows = cloneStringMatrix(command.rows);
+      let candidate = addSheet(workbook, command.name);
+      if (candidate.activeSheetId !== command.sheetId) {
+        return rejectedUnsupported("sheet.id.conflict", "Generated sheet id is stale");
+      }
+      candidate = pasteMatrix(candidate, command.sheetId, "A1", rows);
+      for (const entry of command.formats ?? []) {
+        candidate = setCellFormat(candidate, command.sheetId, checkedRange(entry.range), entry.format);
+      }
+      for (const [column, width] of (command.columnWidths ?? []).entries()) {
+        checkedDimension(width);
+        candidate = setColumnWidth(candidate, command.sheetId, column, width);
+      }
+      if (command.freeze) {
+        checkedFreezeCount(command.freeze.rows);
+        checkedFreezeCount(command.freeze.columns);
+        candidate = setSheetFreezePanes(candidate, command.sheetId, {
+          freezeTopRow: command.freeze.rows === 1,
+          freezeFirstColumn: command.freeze.columns === 1
+        });
+      }
+      return applied(candidate);
+    }
+    case "sheet.replaceWithRows":
+      return applied(replaceSheetWithRows(workbook, command.sheetId, cloneStringMatrix(command.rows)));
     case "sheet.rename":
       return applied(renameSheet(workbook, command.sheetId, command.name));
     case "sheet.duplicate":
@@ -518,6 +614,10 @@ export function collectCommandDiagnostics(command: WorkbookCommand): {
       cellCount += 1;
     } else if (current.type === "clipboard.paste") {
       cellCount += current.payload.cells.reduce((count, row) => count + row.length, 0);
+    } else if (current.type === "clipboard.pasteMatrix") {
+      cellCount += current.matrix.reduce((count, row) => count + row.length, 0);
+    } else if (current.type === "sheet.createFromMatrix" || current.type === "sheet.replaceWithRows") {
+      cellCount += current.rows.reduce((count, row) => count + row.length, 0);
     } else if (current.type === "namedRange.define") {
       addRange(current.namedRange.range);
     }
@@ -564,7 +664,7 @@ function validatedMutation(
         reason: "validation",
         issues: [{
           code: "validation.failed",
-          message: "Cell value does not satisfy validation",
+          message: result.message,
           sheetId,
           address
         }]
@@ -638,6 +738,71 @@ function checkedFreezeCount(value: number): void {
   if (value !== 0 && value !== 1) {
     throw new Error("Freeze count must be zero or one");
   }
+}
+
+function cloneStringMatrix(matrix: readonly (readonly string[])[]): string[][] {
+  return matrix.map((row) => row.map((value) => String(value)));
+}
+
+function matrixAddresses(target: CellCoord, matrix: readonly (readonly string[])[]): string[] {
+  const addresses: string[] = [];
+  for (let rowOffset = 0; rowOffset < matrix.length; rowOffset += 1) {
+    for (let columnOffset = 0; columnOffset < matrix[rowOffset].length; columnOffset += 1) {
+      addresses.push(formatCellAddress({
+        row: target.row + rowOffset,
+        column: target.column + columnOffset
+      }));
+    }
+  }
+  return addresses;
+}
+
+function replaceSheetWithRows(
+  workbook: WorkbookModel,
+  sheetId: string,
+  rows: readonly (readonly string[])[]
+): WorkbookModel {
+  const rowCount = Math.max(100, rows.length);
+  const columnCount = Math.max(26, ...rows.map((row) => row.length));
+  const cells: Record<string, string> = {};
+  rows.forEach((row, rowIndex) => {
+    row.forEach((value, columnIndex) => {
+      if (value !== "") {
+        cells[formatCellAddress({ row: rowIndex, column: columnIndex })] = value;
+      }
+    });
+  });
+
+  const next = updateSheetModel(workbook, sheetId, (sheet) => ({
+    ...sheet,
+    rowCount,
+    columnCount,
+    cells,
+    formats: {},
+    columnWidths: {},
+    rowHeights: {},
+    hiddenColumns: {},
+    hiddenRows: {},
+    freezeTopRow: false,
+    freezeFirstColumn: false,
+    comments: {},
+    hyperlinks: {},
+    validations: {},
+    conditionalFormats: [],
+    autoFilterRange: undefined,
+    filters: [],
+    charts: [],
+    merges: [],
+    protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
+  }));
+  const namedRanges = (next.namedRanges ?? []).filter((namedRange) => namedRange.sheetId !== sheetId);
+  return namedRanges.length === (next.namedRanges ?? []).length
+    ? next
+    : { ...next, namedRanges };
+}
+
+function rejectedUnsupported(code: string, message: string): WorkbookMutationResult {
+  return { status: "rejected", reason: "unsupported", issues: [{ code, message }] };
 }
 
 function mutableClipboard(clipboard: SerializableRichClipboardRange): RichClipboardRange {

@@ -32,7 +32,6 @@ import type {
   CellRange,
   DataValidationRule,
   FilterOperator,
-  HistoryState,
   MixedFormatValue,
   SelectionFormatSummary,
   SheetChartType,
@@ -82,11 +81,9 @@ import {
   clearHiddenRowsAndColumns,
   clearSheetFilter,
   clearSheetFilters,
-  commitHistory,
   copyRange,
   copyRichRange,
   createBlankWorkbook,
-  createHistory,
   defineNamedRange,
   deleteSheetChart,
   deleteSheet,
@@ -113,7 +110,6 @@ import {
   pasteMatrix,
   pasteRichRange,
   previewRichPaste,
-  redoHistory,
   removeConditionalFormatRule,
   removeDuplicateRows,
   removeNamedRange,
@@ -137,7 +133,6 @@ import {
   sortRange,
   unhideAllSheets,
   unmergeCells,
-  undoHistory
 } from "./lib/workbook";
 import type { FormulaEngine } from "./lib/formulaEngine";
 import type { PasteRichRangeOptions, RichClipboardRange, RichPasteMode } from "./lib/workbook";
@@ -352,8 +347,6 @@ function SpreadsheetWorkbook({
     session.getSnapshot,
     session.getSnapshot
   );
-  const [history, setHistory] = useState(() => createHistory(sessionSnapshot.workbook));
-  const [selection, setSelection] = useState<CellRange>(sessionSnapshot.selection);
   const [editingCell, setEditingCell] = useState<{ address: string; value: string } | null>(null);
   const [formulaDraft, setFormulaDraft] = useState("");
   const [nameBoxDraft, setNameBoxDraft] = useState("");
@@ -436,16 +429,8 @@ function SpreadsheetWorkbook({
     }
   }, [onError, services]);
 
-  useEffect(() => {
-    if (history.present === sessionSnapshot.workbook) {
-      return;
-    }
-    setHistory(createHistory(sessionSnapshot.workbook));
-    setSelection(sessionSnapshot.selection);
-    setEditingCell(null);
-  }, [history.present, sessionSnapshot.revision, sessionSnapshot.selection, sessionSnapshot.workbook]);
-
-  const workbook = history.present;
+  const workbook = sessionSnapshot.workbook;
+  const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
   const freezeTopRow = Boolean(activeSheet.freezeTopRow);
   const freezeFirstColumn = Boolean(activeSheet.freezeFirstColumn);
@@ -531,36 +516,45 @@ function SpreadsheetWorkbook({
     };
   }, [cellContextMenu]);
 
-  function commitWorkbook(nextWorkbook: WorkbookModel, nextStatus = "Saved") {
-    const nextHistory = commitHistory(history, nextWorkbook);
-    if (nextHistory === history) {
-      return;
+  function dispatchCommand(command: WorkbookCommand, nextStatus?: string): WorkbookCommandResult {
+    const result = session.dispatch(command);
+    if (result.status === "committed") {
+      if (result.changed && nextStatus) {
+        setStatus(nextStatus);
+      }
+      return result;
     }
-    const result = session.dispatch({
+    if (result.status === "conflict") {
+      setStatus(`Workbook changed; retry from revision ${result.revision}`);
+      return result;
+    }
+    if (result.status === "pending") {
+      setStatus(`Workbook operation ${result.operationId} is pending`);
+      return result;
+    }
+    const issue = result.issues?.[0];
+    setStatus(
+      issue?.code === "permission.readOnly" && issue.address
+        ? `${issue.address} is read-only`
+        : issue?.message ?? "Workbook change was rejected"
+    );
+    return result;
+  }
+
+  function setSelection(nextSelection: CellRange): WorkbookCommandResult {
+    return dispatchCommand({ type: "selection.set", selection: nextSelection });
+  }
+
+  function commitWorkbook(nextWorkbook: WorkbookModel, nextStatus = "Saved") {
+    return dispatchCommand({
       type: "workbook.replace",
       workbook: nextWorkbook,
       history: "commit"
-    });
-    if (result.status !== "committed") {
-      setStatus("Workbook change was rejected");
-      return;
-    }
-    setHistory(nextHistory);
-    setStatus(nextStatus);
+    }, nextStatus);
   }
 
-  function applyHistoryTransition(nextHistory: HistoryState, nextStatus: string) {
-    if (nextHistory === history) {
-      return;
-    }
-    const result = session.dispatch({
-      type: nextStatus === "Undone" ? "history.undo" : "history.redo"
-    });
-    if (result.status !== "committed") {
-      return;
-    }
-    setHistory(nextHistory);
-    setStatus(nextStatus);
+  function applyHistoryTransition(direction: "undo" | "redo", nextStatus: string) {
+    return dispatchCommand({ type: `history.${direction}` }, nextStatus);
   }
 
   function closeFloatingPanels() {
@@ -577,25 +571,12 @@ function SpreadsheetWorkbook({
   }
 
   function commitCell(address: string, raw: string): boolean {
-    if (!ensureEditableAddress(address)) {
-      return false;
-    }
-    const parsed = parseCellInput(raw);
-    let nextWorkbook = setCellContent(workbook, activeSheet.id, address, parsed.stored);
-    if (!validateCandidateWorkbook(nextWorkbook, [address])) {
-      return false;
-    }
-    if (parsed.inferredNumberFormat && getCellFormat(workbook, activeSheet.id, address).numberFormat === undefined) {
-      const coord = parseCellAddress(address);
-      nextWorkbook = setCellFormat(
-        nextWorkbook,
-        activeSheet.id,
-        { start: coord, end: coord },
-        { numberFormat: parsed.inferredNumberFormat }
-      );
-    }
-    commitWorkbook(nextWorkbook);
-    return true;
+    return dispatchCommand({
+      type: "cell.set",
+      sheetId: activeSheet.id,
+      address,
+      input: raw
+    }, "Saved").status === "committed";
   }
 
   function commitFormulaBar() {
@@ -624,9 +605,11 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    const nextWorkbook = defineNamedRange(workbook, activeSheet.id, nextName, selection);
     const rangeLabel = formatSelectionAddress(selection);
-    commitWorkbook(nextWorkbook, `Named ${rangeLabel} as ${nextName}`);
+    dispatchCommand({
+      type: "namedRange.define",
+      namedRange: { name: nextName, sheetId: activeSheet.id, range: selection }
+    }, `Named ${rangeLabel} as ${nextName}`);
   }
 
   function selectRangeReference(targetRange: CellRange) {
@@ -638,15 +621,14 @@ function SpreadsheetWorkbook({
   }
 
   function selectNamedRange(namedRange: NamedRange) {
-    const nextWorkbook = setActiveSheet(workbook, namedRange.sheetId);
-    session.dispatch({
-      type: "workbook.replace",
-      workbook: nextWorkbook,
-      history: "commit"
-    });
-    setHistory({ ...history, present: nextWorkbook });
     const normalizedTarget = normalizeRange(namedRange.range);
-    setSelection(normalizedTarget);
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "sheet.activate", sheetId: namedRange.sheetId },
+        { type: "selection.set", selection: normalizedTarget }
+      ]
+    });
     gridApiRef.current?.ensureCellVisible(normalizedTarget.start.row, normalizedTarget.start.column);
     setStatus(`Selected ${namedRange.name}`);
   }
@@ -681,9 +663,7 @@ function SpreadsheetWorkbook({
     const validatedAddresses = [...new Set(addresses)].filter((address) =>
       Boolean(getCellValidation(candidateWorkbook, activeSheet.id, address))
     );
-    if (validatedAddresses.length === 0) {
-      return true;
-    }
+    if (validatedAddresses.length === 0) return true;
     const requiresFormulaEngine = validatedAddresses.some((address) => {
       const content = getCellContent(candidateWorkbook, activeSheet.id, address);
       return typeof content === "string" && content.startsWith("=");
@@ -692,26 +672,21 @@ function SpreadsheetWorkbook({
     try {
       for (const address of validatedAddresses) {
         const rule = getCellValidation(candidateWorkbook, activeSheet.id, address);
-        if (!rule) {
-          continue;
-        }
+        if (!rule) continue;
         const content = getCellContent(candidateWorkbook, activeSheet.id, address);
         const formula = typeof content === "string" && content.startsWith("=") ? content : undefined;
-        const candidate: ValidationCandidate = {
+        const result = validateCellCandidate({
           raw: content === null ? "" : String(content),
           parsed: content,
           evaluated: formula ? candidateEngine!.getComputedValue(activeSheet.id, address) : content,
-          formula
-        };
-        const result = validateCellCandidate(candidate, rule);
-        if (result.valid) {
-          continue;
+          ...(formula ? { formula } : {})
+        }, rule);
+        if (!result.valid) {
+          const coord = parseCellAddress(address);
+          setSelection({ start: coord, end: coord });
+          setStatus(result.message);
+          return false;
         }
-
-        const coord = parseCellAddress(address);
-        setSelection({ start: coord, end: coord });
-        setStatus(result.message);
-        return false;
       }
       return true;
     } finally {
@@ -766,10 +741,7 @@ function SpreadsheetWorkbook({
   }
 
   function applyFormat(format: CellFormat, nextStatus = "Formatted selection") {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellFormat(workbook, activeSheet.id, selection, format), nextStatus);
+    dispatchCommand({ type: "range.format", sheetId: activeSheet.id, range: selection, format }, nextStatus);
   }
 
   function handleFormatPainter() {
@@ -800,113 +772,119 @@ function SpreadsheetWorkbook({
 
     const painter = formatPainter;
     const normalizedTarget = normalizeRange(targetSelection);
-    if (!ensureEditableRange(normalizedTarget)) {
-      return;
-    }
-
     const targetLabel = formatSelectionAddress(normalizedTarget);
-    const clearedWorkbook = clearDirectCellFormats(workbook, activeSheet.id, normalizedTarget);
-    const paintedWorkbook = setCellFormat(clearedWorkbook, activeSheet.id, normalizedTarget, painter.format);
-    setSelection(normalizedTarget);
-    setFormatPainter(null);
-
-    if (paintedWorkbook === workbook) {
-      setStatus(`Painted format to ${targetLabel}`);
-      return;
+    const result = dispatchCommand({
+      type: "transaction",
+      commands: [
+        {
+          type: "range.format.replace",
+          sheetId: activeSheet.id,
+          range: normalizedTarget,
+          format: painter.format
+        },
+        { type: "selection.set", selection: normalizedTarget }
+      ]
+    }, `Painted format to ${targetLabel}`);
+    if (result.status === "committed") {
+      setFormatPainter(null);
     }
-
-    commitWorkbook(paintedWorkbook, `Painted format to ${targetLabel}`);
   }
 
   function applyBorders(preset: BorderPreset) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    const nextWorkbook = setCellBorders(workbook, activeSheet.id, selection, preset);
     const selectionLabel = formatSelectionAddress(selection);
     const nextStatus =
       preset === "none"
         ? `Cleared borders from ${selectionLabel}`
         : `Applied ${borderPresetLabel(preset)} borders to ${selectionLabel}`;
-    commitWorkbook(nextWorkbook, nextStatus);
+    dispatchCommand({
+      type: "range.borders",
+      sheetId: activeSheet.id,
+      range: selection,
+      preset
+    }, nextStatus);
   }
 
   function applyValidation(rule: DataValidationRule) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellValidation(workbook, activeSheet.id, selection, rule), "Applied data validation");
-    setValidationPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.validation.set",
+      sheetId: activeSheet.id,
+      range: selection,
+      rule
+    }, "Applied data validation");
+    if (result.status === "committed") setValidationPanelOpen(false);
   }
 
   function clearValidation() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(setCellValidation(workbook, activeSheet.id, selection, null), "Cleared data validation");
-    setValidationPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.validation.clear",
+      sheetId: activeSheet.id,
+      range: selection
+    }, "Cleared data validation");
+    if (result.status === "committed") setValidationPanelOpen(false);
   }
 
   function deleteDataValidationRule(summary: DataValidationSummary) {
-    if (!ensureEditableRange(summary.range)) {
-      return;
-    }
-
-    commitWorkbook(
-      setCellValidation(workbook, activeSheet.id, summary.range, null),
-      "Deleted data validation rule"
-    );
+    dispatchCommand({
+      type: "range.validation.clear",
+      sheetId: activeSheet.id,
+      range: summary.range
+    }, "Deleted data validation rule");
   }
 
   function applyConditionalFormatting(rule: Parameters<typeof addConditionalFormatRule>[3]) {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(
-      addConditionalFormatRule(workbook, activeSheet.id, selection, rule),
-      "Applied conditional formatting"
-    );
-    setConditionalPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.conditionalFormat.add",
+      sheetId: activeSheet.id,
+      range: selection,
+      rule: {
+        id: nextConditionalFormatCommandId(activeSheet.conditionalFormats ?? []),
+        range: selection,
+        condition: rule.condition,
+        format: rule.format
+      }
+    }, "Applied conditional formatting");
+    if (result.status === "committed") setConditionalPanelOpen(false);
   }
 
   function clearConditionalFormatting() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(
-      clearConditionalFormatRules(workbook, activeSheet.id, selection),
-      "Cleared conditional formatting"
-    );
-    setConditionalPanelOpen(false);
+    const result = dispatchCommand({
+      type: "range.conditionalFormat.clear",
+      sheetId: activeSheet.id,
+      range: selection
+    }, "Cleared conditional formatting");
+    if (result.status === "committed") setConditionalPanelOpen(false);
   }
 
   function deleteConditionalFormatRule(ruleId: string) {
     const rule = (activeSheet.conditionalFormats ?? []).find((candidate) => candidate.id === ruleId);
-    if (!rule || !ensureEditableRange(rule.range)) {
+    if (!rule) {
       return;
     }
-
-    commitWorkbook(
-      removeConditionalFormatRule(workbook, activeSheet.id, ruleId),
-      "Deleted conditional format rule"
-    );
+    dispatchCommand({
+      type: "range.conditionalFormat.remove",
+      sheetId: activeSheet.id,
+      ruleId
+    }, "Deleted conditional format rule");
   }
 
   function applyFilter(filter: { operator: FilterOperator; value: string }) {
     const normalized = normalizeRange(selection);
-    commitWorkbook(
-      addSheetFilter(workbook, activeSheet.id, normalized, {
+    dispatchCommand({
+      type: "sheet.filter.set",
+      sheetId: activeSheet.id,
+      filter: {
+        id: nextSheetFilterCommandId(activeSheet.filters ?? []),
+        range: normalized,
         ...filter,
         column: normalized.start.column,
         hasHeader: normalized.start.row !== normalized.end.row
-      }),
-      "Filter applied"
-    );
+      }
+    }, "Filter applied");
     setFilterPanelOpen(false);
   }
 
   function clearFilters() {
-    commitWorkbook(clearSheetFilters(workbook, activeSheet.id), "Filters cleared");
+    dispatchCommand({ type: "sheet.filter.clear", sheetId: activeSheet.id }, "Filters cleared");
     setFilterPanelOpen(false);
   }
 
@@ -930,20 +908,27 @@ function SpreadsheetWorkbook({
     }
 
     if (values.length === 0) {
-      commitWorkbook(clearSheetFilter(workbook, activeSheet.id, range, column), `Cleared filter from ${columnIndexToName(column)}`);
+      dispatchCommand({
+        type: "sheet.filter.clear",
+        sheetId: activeSheet.id,
+        column
+      }, `Cleared filter from ${columnIndexToName(column)}`);
       return;
     }
 
-    commitWorkbook(
-      addSheetFilter(workbook, activeSheet.id, range, {
+    dispatchCommand({
+      type: "sheet.filter.set",
+      sheetId: activeSheet.id,
+      filter: {
+        id: nextSheetFilterCommandId(activeSheet.filters ?? []),
+        range,
         column,
         operator: "equals",
         value: values[0] ?? "",
         values,
         hasHeader: true
-      }),
-      `Filtered ${columnIndexToName(column)} by ${values.join(", ")}`
-    );
+      }
+    }, `Filtered ${columnIndexToName(column)} by ${values.join(", ")}`);
   }
 
   function clearAutoFilterColumn(column: number) {
@@ -952,23 +937,26 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    commitWorkbook(clearSheetFilter(workbook, activeSheet.id, range, column), `Cleared filter from ${columnIndexToName(column)}`);
+    dispatchCommand({
+      type: "sheet.filter.clear",
+      sheetId: activeSheet.id,
+      column
+    }, `Cleared filter from ${columnIndexToName(column)}`);
   }
 
   function sortAutoFilterColumn(column: number, direction: "asc" | "desc") {
     const range = activeSheet.autoFilterRange ? normalizeRange(activeSheet.autoFilterRange) : null;
-    if (!range || !ensureEditableRange(range)) {
+    if (!range) {
       return;
     }
 
-    commitWorkbook(
-      sortRange(workbook, activeSheet.id, range, {
-        direction,
-        sortColumn: column,
-        readValue: (address) => formulaEngine.getComputedValue(activeSheet.id, address)
-      }),
-      direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`
-    );
+    dispatchCommand({
+      type: "range.sort",
+      sheetId: activeSheet.id,
+      range,
+      direction,
+      sortColumn: column
+    }, direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`);
   }
 
   function handleAutoSum(functionName: AutoFunctionName = "SUM") {
@@ -984,21 +972,17 @@ function SpreadsheetWorkbook({
     }
 
     const targetAddress = formatCellAddress(plan.target);
-    if (!ensureEditableAddress(targetAddress)) {
-      return;
-    }
-    const nextWorkbook = setCellContent(workbook, activeSheet.id, targetAddress, plan.formula);
-    if (!validateCandidateWorkbook(nextWorkbook, [targetAddress])) {
-      return;
-    }
-
-    commitWorkbook(
-      nextWorkbook,
+    dispatchCommand({
+      type: "transaction",
+      commands: [
+        { type: "cell.set", sheetId: activeSheet.id, address: targetAddress, input: plan.formula },
+        { type: "selection.set", selection: { start: plan.target, end: plan.target } }
+      ]
+    },
       functionName === "SUM"
         ? `Inserted AutoSum for ${formatRangeAddress(plan.source)}`
         : `Inserted ${autoFunctionLabel(functionName)} for ${formatRangeAddress(plan.source)}`
     );
-    setSelection({ start: plan.target, end: plan.target });
   }
 
   function handleFunctionLibrary() {
@@ -1041,7 +1025,7 @@ function SpreadsheetWorkbook({
   }
 
   function handleDeleteNamedRange(name: string) {
-    commitWorkbook(removeNamedRange(workbook, name), `Deleted named range ${name}`);
+    dispatchCommand({ type: "namedRange.remove", name }, `Deleted named range ${name}`);
   }
 
   function handleComment() {
@@ -1056,13 +1040,13 @@ function SpreadsheetWorkbook({
 
     const hadComment = existingComment.trim() !== "";
     const hasComment = nextComment.trim() !== "";
-    const nextWorkbook = setCellComment(workbook, activeSheet.id, activeAddress, nextComment);
-    if (nextWorkbook === workbook) {
-      return;
-    }
-
     const action = hasComment ? (hadComment ? "Updated" : "Added") : "Removed";
-    commitWorkbook(nextWorkbook, `${action} comment ${hasComment ? "to" : "from"} ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.comment.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      comment: nextComment
+    }, `${action} comment ${hasComment ? "to" : "from"} ${activeAddress}`);
   }
 
   function handleLink() {
@@ -1083,13 +1067,13 @@ function SpreadsheetWorkbook({
 
     const hadLink = existingLink.trim() !== "";
     const hasLink = normalizedUrl !== "";
-    const nextWorkbook = setCellHyperlink(workbook, activeSheet.id, activeAddress, normalizedUrl);
-    if (nextWorkbook === workbook) {
-      return;
-    }
-
     const action = hasLink ? (hadLink ? "Updated" : "Added") : "Removed";
-    commitWorkbook(nextWorkbook, `${action} link ${hasLink ? "to" : "from"} ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.hyperlink.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      hyperlink: normalizedUrl
+    }, `${action} link ${hasLink ? "to" : "from"} ${activeAddress}`);
   }
 
   function handleUnlink() {
@@ -1102,7 +1086,12 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    commitWorkbook(setCellHyperlink(workbook, activeSheet.id, activeAddress, null), `Removed link from ${activeAddress}`);
+    dispatchCommand({
+      type: "cell.hyperlink.set",
+      sheetId: activeSheet.id,
+      address: activeAddress,
+      hyperlink: null
+    }, `Removed link from ${activeAddress}`);
   }
 
   function handleMergeCells() {
@@ -1418,38 +1407,48 @@ function SpreadsheetWorkbook({
   }
 
   function handleClearSelection() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearRange(workbook, activeSheet.id, selection), "Cleared selection");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "contents"
+    }, "Cleared selection");
   }
 
   function handleClearAll() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearRangeAll(workbook, activeSheet.id, selection), "Cleared all");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "all"
+    }, "Cleared all");
   }
 
   function handleClearComments() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellComments(workbook, activeSheet.id, selection), "Cleared comments");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "comments"
+    }, "Cleared comments");
   }
 
   function handleClearFormats() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellFormats(workbook, activeSheet.id, selection), "Cleared formats");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "formats"
+    }, "Cleared formats");
   }
 
   function handleClearHyperlinks() {
-    if (!ensureEditableRange(selection)) {
-      return;
-    }
-    commitWorkbook(clearCellHyperlinks(workbook, activeSheet.id, selection), "Cleared hyperlinks");
+    dispatchCommand({
+      type: "range.clear",
+      sheetId: activeSheet.id,
+      range: selection,
+      mode: "hyperlinks"
+    }, "Cleared hyperlinks");
   }
 
   function openCellContextMenu(event: { address: string; row: number; column: number; x: number; y: number }) {
@@ -1927,16 +1926,13 @@ function SpreadsheetWorkbook({
 
     if (isCommand && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      applyHistoryTransition(
-        event.shiftKey ? redoHistory(history) : undoHistory(history),
-        event.shiftKey ? "Redone" : "Undone"
-      );
+      applyHistoryTransition(event.shiftKey ? "redo" : "undo", event.shiftKey ? "Redone" : "Undone");
       return;
     }
 
     if (isCommand && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      applyHistoryTransition(redoHistory(history), "Redone");
+      applyHistoryTransition("redo", "Redone");
       return;
     }
 
@@ -2226,7 +2222,6 @@ function SpreadsheetWorkbook({
   function handleNewWorkbook() {
     const next = createBlankWorkbook();
     session.dispatch({ type: "workbook.replace", workbook: next, history: "reset" });
-    setHistory(createHistory(next));
     setPivotDrillDowns({});
     setSelection(INITIAL_SELECTION);
     setFormatPainter(null);
@@ -2247,7 +2242,6 @@ function SpreadsheetWorkbook({
         : replaceActiveSheetWithRows(session.getSnapshot().workbook, parseCsv(text)))
         .then((nextWorkbook) => {
         session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
-        setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
@@ -2295,7 +2289,6 @@ function SpreadsheetWorkbook({
             })
           : await importWorkbookFromXlsx(buffer);
         session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
-        setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
@@ -2327,7 +2320,6 @@ function SpreadsheetWorkbook({
     importWorkbookFromGoogleSheets(input, tokenProvider)
       .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
         session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
-        setHistory((current) => commitHistory(current, nextWorkbook));
         setPivotDrillDowns({});
         setSelection(INITIAL_SELECTION);
         setFormatPainter(null);
@@ -2467,12 +2459,20 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    let nextWorkbook = workbook;
+    const currentWorkbook = session.getSnapshot().workbook;
+    const currentSheet = getActiveSheet(currentWorkbook);
+    const currentMatches = findMatches(currentSheet, findDraft);
+    const commands: WorkbookCommand[] = [];
     let changedCells = 0;
-    for (const match of matches) {
+    for (const match of currentMatches) {
       const nextContent = replaceEveryMatch(String(match.content), findDraft, replaceDraft);
       if (nextContent !== match.content) {
-        nextWorkbook = setCellContent(nextWorkbook, activeSheet.id, match.address, nextContent);
+        commands.push({
+          type: "cell.set",
+          sheetId: currentSheet.id,
+          address: match.address,
+          input: nextContent
+        });
         changedCells += 1;
       }
     }
@@ -2482,7 +2482,7 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    commitWorkbook(nextWorkbook, `Replaced ${changedCells} ${changedCells === 1 ? "cell" : "cells"}`);
+    dispatchCommand({ type: "transaction", commands }, `Replaced ${changedCells} ${changedCells === 1 ? "cell" : "cells"}`);
   }
 
   function handleFileDrop(event: React.DragEvent) {
@@ -2544,8 +2544,8 @@ function SpreadsheetWorkbook({
         {features?.toolbar !== false ? (
         <Toolbar
           features={features}
-          canUndo={history.past.length > 0}
-          canRedo={history.future.length > 0}
+          canUndo={sessionSnapshot.canUndo}
+          canRedo={sessionSnapshot.canRedo}
           onNew={handleNewWorkbook}
           onImport={() => fileInputRef.current?.click()}
           onExport={handleExportCsv}
@@ -2554,10 +2554,10 @@ function SpreadsheetWorkbook({
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
-            applyHistoryTransition(undoHistory(history), "Undone");
+            applyHistoryTransition("undo", "Undone");
           }}
           onRedo={() => {
-            applyHistoryTransition(redoHistory(history), "Redone");
+            applyHistoryTransition("redo", "Redone");
           }}
           onClear={handleClearSelection}
           canPasteSpecial={Boolean(richClipboard)}
@@ -2987,7 +2987,6 @@ function SpreadsheetWorkbook({
                 workbook: nextWorkbook,
                 history: "commit"
               });
-              setHistory({ ...history, present: nextWorkbook });
               setSelection(INITIAL_SELECTION);
             }}
             onAdd={handleAddSheet}
@@ -3758,6 +3757,29 @@ function nextGeneratedSheetName(workbook: WorkbookModel, base: string): string {
     name = `${base} ${index}`;
   }
   return name;
+}
+
+function nextConditionalFormatCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "conditional-format-");
+}
+
+function nextSheetFilterCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "filter-");
+}
+
+function nextSheetChartCommandId(items: readonly { id: string }[]): string {
+  return nextCommandId(items, "chart-");
+}
+
+function nextCommandId(items: readonly { id: string }[], prefix: string): string {
+  const existing = new Set(items.map((item) => item.id));
+  let index = items.length + 1;
+  let id = `${prefix}${index}`;
+  while (existing.has(id)) {
+    index += 1;
+    id = `${prefix}${index}`;
+  }
+  return id;
 }
 
 function rowRange(row: number, columnCount: number): CellRange {

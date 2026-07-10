@@ -1,7 +1,19 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { createBlankWorkbook } from "../../lib/workbook";
+import {
+  addConditionalFormatRule,
+  addSheet,
+  createBlankWorkbook,
+  getCellConditionalFormatRules,
+  getCellContent,
+  getCellFormat,
+  getColumnWidth,
+  setActiveSheet,
+  setCellContent,
+  setCellFormat,
+  setCellValidation
+} from "../../lib/workbook";
 import type { CommandEnvelope, CommandResult } from "../commands/types";
-import type { WorkbookCommand } from "./commands";
+import { applyWorkbookMutation, type WorkbookCommand } from "./commands";
 
 const cell = { row: 0, column: 0 } as const;
 const range = { start: cell, end: { row: 1, column: 1 } } as const;
@@ -31,6 +43,8 @@ const completePreTableCommands = [
     mode
   })),
   { type: "range.format", sheetId: "sheet-1", range, format: { bold: true } },
+  { type: "range.directFormat.clear", sheetId: "sheet-1", range },
+  { type: "range.format.replace", sheetId: "sheet-1", range, format: { italic: true } },
   { type: "range.borders", sheetId: "sheet-1", range, preset: "outer" },
   { type: "range.validation.set", sheetId: "sheet-1", range, rule: { type: "number", min: 1 } },
   { type: "range.validation.clear", sheetId: "sheet-1", range },
@@ -46,6 +60,7 @@ const completePreTableCommands = [
     }
   },
   { type: "range.conditionalFormat.remove", sheetId: "sheet-1", ruleId: "conditional-1" },
+  { type: "range.conditionalFormat.clear", sheetId: "sheet-1", range },
   { type: "range.readOnly.set", sheetId: "sheet-1", range, readOnly: true },
   { type: "range.merge", sheetId: "sheet-1", range },
   { type: "range.unmerge", sheetId: "sheet-1", range },
@@ -55,6 +70,7 @@ const completePreTableCommands = [
   { type: "range.sort", sheetId: "sheet-1", range, direction: "asc", sortColumn: 0 },
   { type: "range.removeDuplicates", sheetId: "sheet-1", range },
   { type: "clipboard.paste", sheetId: "sheet-1", target: cell, payload: clipboard, mode: "all" },
+  { type: "clipboard.pasteMatrix", sheetId: "sheet-1", target: cell, matrix: [["plain", "=A1"]] },
   {
     type: "clipboard.move",
     sourceSheetId: "sheet-1",
@@ -71,6 +87,16 @@ const completePreTableCommands = [
   { type: "rows.hidden.set", sheetId: "sheet-1", rows: [0, 2], hidden: true },
   { type: "columns.hidden.set", sheetId: "sheet-1", columns: [0, 2], hidden: true },
   { type: "sheet.add", name: "Second" },
+  {
+    type: "sheet.createFromMatrix",
+    sheetId: "sheet-2",
+    name: "Generated",
+    rows: [["Heading"], ["Value"]],
+    formats: [{ range: { start: cell, end: cell }, format: { bold: true } }],
+    columnWidths: [120],
+    freeze: { rows: 1, columns: 0 }
+  },
+  { type: "sheet.replaceWithRows", sheetId: "sheet-1", rows: [["A", "B"]] },
   { type: "sheet.rename", sheetId: "sheet-1", name: "Renamed" },
   { type: "sheet.duplicate", sheetId: "sheet-1" },
   { type: "sheet.delete", sheetId: "sheet-1" },
@@ -125,7 +151,141 @@ describe("WorkbookCommand", () => {
     expectTypeOf(result).toMatchTypeOf<CommandResult>();
     expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
   });
+
+  it("clears and replaces direct formats without removing conditional formats", () => {
+    let workbook = createBlankWorkbook();
+    workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
+    workbook = addConditionalFormatRule(workbook, "sheet-1", range, {
+      condition: { type: "greaterThan", value: "1" },
+      format: { textColor: "#ff0000" }
+    });
+
+    const cleared = apply(workbook, { type: "range.directFormat.clear", sheetId: "sheet-1", range });
+    expect(cleared.status).toBe("applied");
+    if (cleared.status !== "applied") return;
+    expect(getCellFormat(cleared.workbook, "sheet-1", "A1")).toEqual({});
+    expect(getCellConditionalFormatRules(cleared.workbook, "sheet-1", "A1")).toHaveLength(1);
+
+    const replaced = apply(workbook, {
+      type: "range.format.replace",
+      sheetId: "sheet-1",
+      range,
+      format: { italic: true }
+    });
+    expect(replaced.status).toBe("applied");
+    if (replaced.status !== "applied") return;
+    expect(getCellFormat(replaced.workbook, "sheet-1", "A1")).toEqual({ italic: true });
+    expect(getCellConditionalFormatRules(replaced.workbook, "sheet-1", "A1")).toHaveLength(1);
+  });
+
+  it("clears only conditional-format rules intersecting the requested range", () => {
+    let workbook = createBlankWorkbook();
+    workbook = addConditionalFormatRule(workbook, "sheet-1", {
+      start: cell,
+      end: cell
+    }, {
+      condition: { type: "blank" },
+      format: { bold: true }
+    });
+    workbook = addConditionalFormatRule(workbook, "sheet-1", {
+      start: { row: 0, column: 1 },
+      end: { row: 0, column: 1 }
+    }, {
+      condition: { type: "blank" },
+      format: { italic: true }
+    });
+
+    const result = apply(workbook, {
+      type: "range.conditionalFormat.clear",
+      sheetId: "sheet-1",
+      range: { start: cell, end: cell }
+    });
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(getCellConditionalFormatRules(result.workbook, "sheet-1", "A1")).toEqual([]);
+    expect(getCellConditionalFormatRules(result.workbook, "sheet-1", "B1")).toHaveLength(1);
+  });
+
+  it("pastes a plain matrix atomically without translating formula text", () => {
+    let workbook = createBlankWorkbook();
+    workbook = setCellValidation(workbook, "sheet-1", {
+      start: { row: 0, column: 1 },
+      end: { row: 0, column: 1 }
+    }, { type: "number", max: 5 });
+
+    const rejected = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: "sheet-1",
+      target: cell,
+      matrix: [["kept", "10"]]
+    });
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ message: "Enter a number less than or equal to 5", address: "B1" }]
+    });
+    expect(getCellContent(workbook, "sheet-1", "A1")).toBeNull();
+
+    const accepted = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: "sheet-1",
+      target: cell,
+      matrix: [["=A2", "5"]]
+    });
+    expect(accepted.status).toBe("applied");
+    if (accepted.status !== "applied") return;
+    expect(getCellContent(accepted.workbook, "sheet-1", "A1")).toBe("=A2");
+    expect(getCellContent(accepted.workbook, "sheet-1", "B1")).toBe("5");
+  });
+
+  it("replaces one sheet from CSV rows against the dispatch-time workbook", () => {
+    let workbook = addSheet(createBlankWorkbook(), "Other");
+    workbook = setActiveSheet(workbook, "sheet-1");
+    workbook = setCellContent(workbook, "sheet-1", "A1", "old");
+    workbook = setCellContent(workbook, "sheet-2", "A1", "keep");
+    workbook = setCellFormat(workbook, "sheet-1", range, { bold: true });
+
+    const result = apply(workbook, {
+      type: "sheet.replaceWithRows",
+      sheetId: "sheet-1",
+      rows: [["Name", "Amount"], ["Rent", "1200"]]
+    });
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(getCellContent(result.workbook, "sheet-1", "A1")).toBe("Name");
+    expect(getCellContent(result.workbook, "sheet-1", "B2")).toBe("1200");
+    expect(getCellFormat(result.workbook, "sheet-1", "A1")).toEqual({});
+    expect(getCellContent(result.workbook, "sheet-2", "A1")).toBe("keep");
+  });
+
+  it("creates a deterministic generated sheet from a matrix and presentation data", () => {
+    const workbook = createBlankWorkbook();
+    const result = apply(workbook, {
+      type: "sheet.createFromMatrix",
+      sheetId: "sheet-2",
+      name: "Generated",
+      rows: [["Heading"], ["42"]],
+      formats: [{ range: { start: cell, end: cell }, format: { bold: true } }],
+      columnWidths: [123],
+      freeze: { rows: 1, columns: 0 }
+    });
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.activeSheetId).toBe("sheet-2");
+    expect(getCellContent(result.workbook, "sheet-2", "A1")).toBe("Heading");
+    expect(getCellFormat(result.workbook, "sheet-2", "A1")).toMatchObject({ bold: true });
+    expect(getColumnWidth(result.workbook, "sheet-2", 0)).toBe(123);
+    expect(result.workbook.sheets[1].freezeTopRow).toBe(true);
+  });
 });
+
+function apply(workbook: ReturnType<typeof createBlankWorkbook>, command: WorkbookCommand) {
+  return applyWorkbookMutation(workbook, command, {
+    evaluateCell(candidate, sheetId, address) {
+      return getCellContent(candidate, sheetId, address);
+    }
+  });
+}
 
 function containsFunction(value: unknown): boolean {
   if (typeof value === "function") {

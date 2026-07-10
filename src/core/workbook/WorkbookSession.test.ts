@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { WorkbookModel } from "../../types";
 import type { FormulaEngine } from "../../lib/formulaEngine";
 import {
+  addSheet,
   createBlankWorkbook,
   getCellContent,
+  setActiveSheet,
   setCellContent
 } from "../../lib/workbook";
 import type { CommandEnvelope } from "../commands/types";
@@ -126,7 +128,7 @@ describe("WorkbookSession", () => {
       reason: "validation",
       issues: [{
         code: "validation.failed",
-        message: "Cell value does not satisfy validation",
+          message: "Choose one of: allowed",
         sheetId,
         address: "A1"
       }]
@@ -504,6 +506,25 @@ describe("WorkbookSession", () => {
       changed: false
     });
     expect(notifications).toBe(2);
+  });
+
+  it("publishes sheet activation without adding workbook history", () => {
+    const workbook = addSheet(createBlankWorkbook(), "Second");
+    const session = createWorkbookSession({ workbook: setActiveSheet(workbook, "sheet-1") });
+
+    expect(session.dispatch({ type: "sheet.activate", sheetId: "sheet-2" })).toMatchObject({
+      status: "committed",
+      changed: true,
+      revision: "1"
+    });
+    expect(session.getSnapshot()).toMatchObject({ canUndo: false, canRedo: false });
+    expect(session.getSnapshot().workbook.activeSheetId).toBe("sheet-2");
+
+    session.dispatch({ type: "cell.set", sheetId: "sheet-2", address: "A1", input: "durable" });
+    session.dispatch({ type: "sheet.activate", sheetId: "sheet-1" });
+    expect(session.dispatch({ type: "history.undo" })).toMatchObject({ status: "committed", changed: true });
+    expect(getCellContent(session.getSnapshot().workbook, "sheet-2", "A1")).toBeNull();
+    session.destroy();
   });
 
   it("enforces read-only permissions without publishing the rejected candidate", () => {

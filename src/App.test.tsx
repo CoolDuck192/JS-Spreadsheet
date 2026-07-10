@@ -81,6 +81,29 @@ describe("App", () => {
     expect(formulaInput).toHaveValue("1250");
   });
 
+  it("retains both synchronous workbook commits in one React batch", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const bold = screen.getByRole("button", { name: "Bold" });
+    const italic = screen.getByRole("button", { name: "Italic" });
+
+    act(() => {
+      fireEvent.click(bold);
+      fireEvent.click(italic);
+    });
+
+    expect(bold).toHaveAttribute("aria-pressed", "true");
+    expect(italic).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(bold).toHaveAttribute("aria-pressed", "true");
+    expect(italic).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(bold).toHaveAttribute("aria-pressed", "false");
+    expect(italic).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("adds and renames sheets", async () => {
     const user = userEvent.setup();
     vi.spyOn(window, "prompt").mockReturnValue("Budget");

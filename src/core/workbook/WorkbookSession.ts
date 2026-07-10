@@ -67,6 +67,7 @@ type DraftState = {
   persistence: PersistenceState;
   revisionAffectingChange: boolean;
   resetHistory: boolean;
+  historyAffectingChange: boolean;
   historyOverride?: WorkbookHistory;
 };
 
@@ -178,7 +179,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       selection,
       persistence,
       revisionAffectingChange: false,
-      resetHistory: false
+      resetHistory: false,
+      historyAffectingChange: false
     };
 
     let applied: DraftResult;
@@ -250,7 +252,9 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     } else if (workbookChanged) {
       nextHistory = nextState.resetHistory
         ? createWorkbookHistory(nextState.workbook, history.limits)
-        : commitWorkbookHistory(history, nextState.workbook);
+        : nextState.historyAffectingChange
+          ? commitWorkbookHistory(history, nextState.workbook)
+          : { ...history, present: nextState.workbook };
     } else if (nextState.resetHistory) {
       nextHistory = createWorkbookHistory(nextState.workbook, history.limits);
     }
@@ -495,7 +499,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
           ...state,
           workbook: command.workbook,
           revisionAffectingChange: true,
-          resetHistory: command.history === "reset"
+          resetHistory: command.history === "reset",
+          historyAffectingChange: state.historyAffectingChange || command.history === "commit"
         }
       };
     }
@@ -513,7 +518,8 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       state: {
         ...state,
         workbook: mutation.workbook,
-        revisionAffectingChange: true
+        revisionAffectingChange: true,
+        historyAffectingChange: state.historyAffectingChange || command.type !== "sheet.activate"
       }
     };
   }
