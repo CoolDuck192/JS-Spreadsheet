@@ -76,7 +76,10 @@ export {
   type WorkbookSnapshot
 } from "./core/workbook/WorkbookSession";
 export type {
+  GoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration,
   SpreadsheetServices,
+  TokenProvider,
   TokenProvider as WorkbookTokenProvider,
   WorkbookExportArtifact,
   WorkbookExporter,
@@ -113,6 +116,5 @@ export {
 export {
   createBrowserTokenProvider,
   SHEETS_READONLY_SCOPE,
-  SHEETS_READWRITE_SCOPE,
-  type TokenProvider
+  SHEETS_READWRITE_SCOPE
 } from "./lib/googleAuth";

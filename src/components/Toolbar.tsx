@@ -59,7 +59,14 @@ import {
   Upload,
   WrapText
 } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject
+} from "react";
 import type { BorderPreset, CellFormat, SelectionFormatSummary } from "../types";
 import type { AutoFunctionName } from "../lib/autoSum";
 import type { WorkbookFeatureConfiguration } from "../App";
@@ -160,6 +167,7 @@ type ToolbarProps = {
   onExport: () => void;
   onImportXlsx: () => void;
   onImportGoogleSheet: () => void;
+  googleSheetsImportButtonRef: RefObject<HTMLButtonElement | null>;
   onExportXlsx: () => void;
   onPrint: () => void;
   onUndo: () => void;
@@ -396,7 +404,13 @@ function WorkbookGroup(props: ToolbarProps) {
         </>
       ) : null}
       {props.features?.googleSheets !== false ? (
-        <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Cloud />} />
+        <ToolbarButton
+          label="Import Google Sheet"
+          onClick={props.onImportGoogleSheet}
+          icon={<Cloud />}
+          buttonRef={props.googleSheetsImportButtonRef}
+          additionalClassName="google-sheets-import-trigger"
+        />
       ) : null}
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
     </ToolbarGroup>
@@ -879,7 +893,9 @@ function ToolbarButton({
   pressed,
   expanded,
   shortcut,
-  compact = false
+  compact = false,
+  buttonRef,
+  additionalClassName
 }: {
   label: string;
   onClick: () => void;
@@ -892,6 +908,8 @@ function ToolbarButton({
   /** Shown in the tooltip and exposed via aria-keyshortcuts. */
   shortcut?: string;
   compact?: boolean;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+  additionalClassName?: string;
 }) {
   const isActive = pressed === true || expanded === true;
   const isMixed = pressed === "mixed";
@@ -899,13 +917,15 @@ function ToolbarButton({
     "toolbar-button",
     isActive ? "active-toolbar-button" : "",
     isMixed ? "mixed-toolbar-button" : "",
-    compact ? "compact-toolbar-button" : ""
+    compact ? "compact-toolbar-button" : "",
+    additionalClassName
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={className}
       aria-label={label}

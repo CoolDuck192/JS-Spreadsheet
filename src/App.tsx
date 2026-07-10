@@ -19,6 +19,7 @@ import { FormulaAuditPanel, type FormulaAuditReference } from "./components/Form
 import { FormulaBar } from "./components/FormulaBar";
 import { FunctionLibraryPanel } from "./components/FunctionLibraryPanel";
 import { GoToPanel } from "./components/GoToPanel";
+import { GoogleSheetsImportDialog } from "./components/GoogleSheetsImportDialog";
 import { Grid, type CommitEditMove, type GridScrollApi } from "./components/Grid";
 import { NamedRangesPanel } from "./components/NamedRangesPanel";
 import { PivotPanel } from "./components/PivotPanel";
@@ -57,8 +58,6 @@ import { createChartData } from "./lib/charts";
 import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
-import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth";
-import { importWorkbookFromGoogleSheets } from "./lib/googleSheets";
 import { extractFormulaReferences } from "./lib/formulaReferences";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
@@ -95,12 +94,15 @@ import {
 } from "./core/workbook/structuredTables";
 import { isStructuredTableRowVisible as isWorkbookStructuredTableRowVisible } from "./core/workbook/structuredTableFilter";
 import type {
+  GoogleSheetsServiceConfiguration,
   SpreadsheetServices,
   WorkbookExportArtifact,
   WorkbookExporter,
   WorkbookImporter
 } from "./core/workbook/services";
 import { useWorkbookSession } from "./react/useWorkbookSession";
+import { getDefaultBrowserGoogleClientIdStorage } from "./react/browserGoogleClientIdStorage";
+import { useGoogleSheetsImport } from "./react/useGoogleSheetsImport";
 import { WorkbookTableView } from "./react/workbook/WorkbookTableView";
 
 const INITIAL_SELECTION: CellRange = {
@@ -348,26 +350,32 @@ function SpreadsheetWorkbook({
   const gridApiRef = useRef<GridScrollApi | null>(null);
   const pendingGridFocusSheetIdRef = useRef<string | null>(null);
   const gridEditCommitInProgressRef = useRef(false);
-  const googleTokenProviderRef = useRef<{
-    factory: (clientId: string) => TokenProvider;
-    clientId: string;
-    provider: TokenProvider;
-  } | null>(null);
+  const googleSheetsImportButtonRef = useRef<HTMLButtonElement>(null);
   const registerGridScrollApi = useCallback((api: GridScrollApi) => {
     gridApiRef.current = api;
   }, []);
 
-  function getComponentGoogleTokenProvider(clientId: string): TokenProvider {
-    const factory = services?.googleTokenProviderFactory ?? createBrowserTokenProvider;
-    const cached = googleTokenProviderRef.current;
-    if (cached?.factory === factory && cached.clientId === clientId) {
-      return cached.provider;
+  const googleSheetsImport = useGoogleSheetsImport({
+    configuration: services?.googleSheets,
+    deprecatedTokenProviderFactory: services?.googleTokenProviderFactory,
+    origin: typeof window === "undefined" ? "null" : window.location.origin,
+    onImported(imported) {
+      const result = session.replaceWorkbook(imported.workbook, {
+        history: "preserve",
+        origin: "import"
+      });
+      if (result.status === "committed") {
+        resetAfterWorkbookReplacement(`Imported ${imported.spreadsheetTitle}`);
+      }
+    },
+    onError(error) {
+      invokeHostCallback(onError, {
+        code: `service.google.${error.code}`,
+        message: error.message,
+        recoverable: error.recoverable
+      });
     }
-
-    const provider = factory(clientId);
-    googleTokenProviderRef.current = { factory, clientId, provider };
-    return provider;
-  }
+  });
 
   const lastSuppliedEventSnapshot = useRef(sessionSnapshot);
   useEffect(() => {
@@ -2497,36 +2505,6 @@ function SpreadsheetWorkbook({
       .catch(() => reportServiceFailure("service.import.xlsx.failed", "XLSX import failed"));
   }
 
-  function handleImportGoogleSheet() {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
-    if (!clientId) {
-      setStatus("Set VITE_GOOGLE_CLIENT_ID (a Google OAuth client id) to link Google Sheets");
-      return;
-    }
-
-    const input = window.prompt("Paste a Google Sheets URL (or spreadsheet id):");
-    if (!input) {
-      return;
-    }
-
-    let tokenProvider: TokenProvider;
-    try {
-      tokenProvider = getComponentGoogleTokenProvider(clientId);
-    } catch {
-      reportServiceFailure("service.google.auth.failed", "Google Sheets connection failed");
-      return;
-    }
-    setStatus("Connecting to Google Sheets…");
-    importWorkbookFromGoogleSheets(input, tokenProvider)
-      .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
-        const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
-        if (result.status === "committed") {
-          resetAfterWorkbookReplacement(`Linked ${spreadsheetTitle}`);
-        }
-      })
-      .catch(() => reportServiceFailure("service.google.import.failed", "Google Sheets import failed"));
-  }
-
   function handleExportXlsx() {
     const exporter = services?.exporters?.xlsx;
     Promise.resolve().then(async () => exporter
@@ -2776,7 +2754,8 @@ function SpreadsheetWorkbook({
           onImport={() => fileInputRef.current?.click()}
           onExport={handleExportCsv}
           onImportXlsx={() => xlsxInputRef.current?.click()}
-          onImportGoogleSheet={handleImportGoogleSheet}
+          onImportGoogleSheet={googleSheetsImport.openDialog}
+          googleSheetsImportButtonRef={googleSheetsImportButtonRef}
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
@@ -3309,6 +3288,10 @@ function SpreadsheetWorkbook({
             onAdd={handleAddSheet}
           />
         ) : null}
+        <GoogleSheetsImportDialog
+          controller={googleSheetsImport}
+          opener={googleSheetsImportButtonRef}
+        />
         <StatusBar
           status={status}
           activeAddress={activeAddress}
@@ -3327,7 +3310,18 @@ function SpreadsheetWorkbook({
 }
 
 export default function App() {
-  return <Spreadsheet className="js-spreadsheet-standalone" style={{ height: "100dvh", minHeight: 0 }} />;
+  const standaloneGoogleSheets = {
+    clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined,
+    clientIdStorage: getDefaultBrowserGoogleClientIdStorage()
+  } satisfies GoogleSheetsServiceConfiguration;
+
+  return (
+    <Spreadsheet
+      className="js-spreadsheet-standalone"
+      style={{ height: "100dvh", minHeight: 0 }}
+      services={{ googleSheets: standaloneGoogleSheets }}
+    />
+  );
 }
 
 function projectStructuredTableCell(workbook: WorkbookModel, sheetId: string, address: string) {

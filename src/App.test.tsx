@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { Spreadsheet } from "./App";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
+import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
 
 describe("App", () => {
   beforeEach(() => {
@@ -14,6 +15,7 @@ describe("App", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("owns the viewport only for the standalone workbook", () => {
@@ -22,6 +24,67 @@ describe("App", () => {
 
     expect(root).toHaveClass("js-spreadsheet-standalone");
     expect(root).toHaveStyle({ height: "100dvh", minHeight: 0 });
+  });
+
+  it("always opens standalone Google setup and stores only the normalized public client ID", async () => {
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "");
+    const prompt = vi.spyOn(window, "prompt");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+
+    expect(screen.getByRole("dialog", { name: "Import Google Sheet" })).toBeInTheDocument();
+    const clientId = screen.getByLabelText("Google OAuth client ID");
+    await user.type(clientId, " 123-abc.apps.googleusercontent.com ");
+    await user.click(screen.getByRole("button", { name: "Save and continue" }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem(GOOGLE_CLIENT_ID_STORAGE_KEY)).toBe(
+        "123-abc.apps.googleusercontent.com"
+      );
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(localStorage.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("imports a Google Sheet through session history and reports Imported", async () => {
+    const user = userEvent.setup();
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("test-access-token")
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        properties: { title: "Budget" },
+        sheets: [{ properties: { title: "Imported" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valueRanges: [{ values: [["from Google"]] }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <Spreadsheet
+        defaultWorkbook={setCellContent(createBlankWorkbook(), "sheet-1", "A1", "before")}
+        storage={false}
+        services={{ googleSheets: { tokenProvider } }}
+      />
+    );
+
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+    const sheetInput = await screen.findByLabelText("Google Sheet URL or spreadsheet ID");
+    await user.type(sheetInput, "12345678901234567890");
+    await user.click(screen.getByRole("button", { name: "Import and replace workbook" }));
+
+    expect(await screen.findByRole("gridcell", { name: "A1 from Google" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Imported Budget");
+    expect(document.body).not.toHaveTextContent("test-access-token");
+
+    await openRibbonTab(user, "Home");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("gridcell", { name: "A1 before" })).toBeInTheDocument();
   });
 
   it("edits cells and recalculates formulas", async () => {

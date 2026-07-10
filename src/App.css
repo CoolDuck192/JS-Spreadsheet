@@ -3497,3 +3497,282 @@
   color: #17634a;
   pointer-events: none;
 }
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(760px, calc(100dvh - 32px));
+  margin: auto;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+  color: var(--js-spreadsheet-text, #172033);
+  background: var(--js-spreadsheet-surface, #fff);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 8%),
+    0 16px 36px -12px rgb(15 23 42 / 24%),
+    0 28px 72px rgb(15 23 42 / 18%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-trigger {
+  min-height: 40px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog::backdrop {
+  background: rgb(15 23 42 / 46%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-form {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(760px, calc(100dvh - 32px));
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions {
+  padding: 18px 20px;
+  background: var(--js-spreadsheet-surface, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header {
+  border-bottom: 1px solid var(--js-spreadsheet-border, #cbd5e1);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header h2,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header p,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section h3,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section p,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-alert,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-progress {
+  margin: 0;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header h2 {
+  font-size: 20px;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header p {
+  margin-top: 6px;
+  color: var(--js-spreadsheet-text-muted, #5f6e82);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
+  background: var(--js-spreadsheet-surface, #fff);
+  overscroll-behavior: contain;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section {
+  display: grid;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--js-spreadsheet-surface-muted, #f8fafc);
+  box-shadow: 0 0 0 1px rgb(15 23 42 / 7%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section h3 {
+  font-size: 14px;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin {
+  display: block;
+  padding: 9px 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  color: var(--js-spreadsheet-text, #172033);
+  background: var(--js-spreadsheet-surface, #fff);
+  box-shadow: inset 0 0 0 1px var(--js-spreadsheet-border, #cbd5e1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin-status,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-help,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-warning,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-copy-status {
+  color: var(--js-spreadsheet-text-muted, #5f6e82);
+  font-size: 12px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin-status.blocked,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-warning {
+  color: #8a4b08;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-checklist {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--js-spreadsheet-text-muted, #5f6e82);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-checklist code {
+  overflow-wrap: anywhere;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field {
+  display: grid;
+  gap: 6px;
+  color: var(--js-spreadsheet-text, #172033);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--js-spreadsheet-border-strong, #94a3b8);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--js-spreadsheet-text, #172033);
+  background: var(--js-spreadsheet-surface, #fff);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input:focus-visible {
+  border-color: var(--js-spreadsheet-accent, #22795d);
+  outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-accent, #22795d) 24%, transparent);
+  outline-offset: 1px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input[readonly] {
+  color: var(--js-spreadsheet-text-muted, #5f6e82);
+  background: var(--js-spreadsheet-surface-muted, #f8fafc);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input:disabled,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-alert {
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--js-spreadsheet-danger, #b42318);
+  background: color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 8%, #fff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 24%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-progress {
+  border-radius: 7px;
+  padding: 11px 12px;
+  color: var(--js-spreadsheet-accent-strong, #17634a);
+  background: var(--js-spreadsheet-accent-soft, #eaf7f2);
+  font-weight: 700;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions,
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions {
+  border-top: 1px solid var(--js-spreadsheet-border, #cbd5e1);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-weight: 700;
+  transition-property: background-color, box-shadow, transform;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.primary {
+  color: var(--js-spreadsheet-accent-contrast, #fff);
+  background: var(--js-spreadsheet-accent, #22795d);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 14%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.secondary {
+  color: var(--js-spreadsheet-text, #172033);
+  background: var(--js-spreadsheet-surface, #fff);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 10%),
+    0 1px 2px rgb(15 23 42 / 7%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.danger {
+  color: var(--js-spreadsheet-danger, #b42318);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:hover:not(:disabled),
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:focus-visible:not(:disabled) {
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 14%),
+    0 2px 5px rgb(15 23 42 / 11%);
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-accent, #22795d) 38%, transparent);
+  outline-offset: 2px;
+}
+
+.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+@media (max-width: 540px) {
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-form {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header,
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions,
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-body {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions .google-sheets-import-button {
+    flex: 1 1 180px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button {
+    transition-duration: 0ms;
+  }
+
+  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:active:not(:disabled) {
+    transform: none;
+  }
+}
