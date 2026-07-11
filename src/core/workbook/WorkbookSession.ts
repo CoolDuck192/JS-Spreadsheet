@@ -310,7 +310,9 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       const overrideSelections = nextState.selectionHistoryOverride ?? selectionHistory;
       if (nextState.historyOverride.present === nextState.workbook) {
         nextHistory = nextState.historyOverride;
-        nextSelectionHistory = overrideSelections;
+        nextSelectionHistory = rangesEqual(overrideSelections.present, nextState.selection)
+          ? overrideSelections
+          : { ...overrideSelections, present: cloneRange(nextState.selection) };
       } else {
         nextHistory = commitWorkbookHistory(nextState.historyOverride, nextState.workbook);
         nextSelectionHistory = commitSelectionHistory(
@@ -851,6 +853,7 @@ function commandOrChildGeneratesIds(command: WorkbookCommand): boolean {
 
 function commandGeneratesIds(command: WorkbookCommand): boolean {
   return command.type === "columns.insert"
+    || command.type === "sheet.duplicate"
     || command.type === "table.create"
     || command.type === "table.resize"
     || command.type === "table.insertRows";

@@ -590,7 +590,7 @@ export function applyWorkbookMutation(
     case "sheet.rename":
       return applied(renameSheet(workbook, command.sheetId, command.name));
     case "sheet.duplicate":
-      return applied(duplicateSheet(workbook, command.sheetId));
+      return applied(duplicateSheet(workbook, command.sheetId, context.createId ?? createRandomId));
     case "sheet.delete":
       return applied(deleteSheet(workbook, command.sheetId));
     case "sheet.activate":
