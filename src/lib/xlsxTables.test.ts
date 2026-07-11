@@ -158,6 +158,31 @@ describe("xlsxTables", () => {
     expect(worksheet.getCell("F5").formula).toBe("D5*E5");
   });
 
+  it.each([
+    ["first", "F2", "D2*E2+1"],
+    ["later", "F4", "D4*E4+1"]
+  ])("treats a %s-row calculated-column formula exception as a per-cell override", async (
+    _label,
+    address,
+    formula
+  ) => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    worksheet.getCell(address).value = { formula };
+
+    const tables = await importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      readNativeTableXml(bytes),
+      { idGenerator: sequencedIds(`exception-${address}`) }
+    );
+
+    expect(tables[0].columns.find(
+      (column) => column.name === "Amount"
+    )?.calculatedFormula).toBeUndefined();
+    expect(worksheet.getCell(address).formula).toBe(formula);
+  });
+
   it("imports both independently authored tables with default headers and native filters", async () => {
     const { bytes, workbook } = await loadFixture(realFixturePath);
     const metadata = readNativeTableXml(bytes);

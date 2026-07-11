@@ -12,6 +12,7 @@ import type {
   WorkbookModel
 } from "../types";
 import { formatCellAddress, parseRangeAddress } from "./addressing";
+import { translateFormulaReferences } from "./formulaReferences";
 import { structuredFormulaToA1 } from "./structuredFormula";
 import { nativeTotalsFunctionToAggregate, type NativeTableXmlMetadata } from "./xlsxTableXml";
 
@@ -132,14 +133,19 @@ export async function importStructuredTablesFromWorksheet(
       if (!xmlFormula || plan.bodyStart > plan.bodyEnd) return column;
       const translated = structuredFormulaToA1(xmlFormula, provisional, plan.bodyStart);
       if (!translated.ok) return column;
-      const expanded = excelCellFormula(worksheet.getCell(plan.bodyStart + 1, column.sheetColumn + 1));
-      if (expanded && normalizeFormula(expanded) !== normalizeFormula(translated.formula)) {
-        throw xlsxTableError(
-          "XLSX_TABLE_FORMULA_MISMATCH",
-          `Expanded formula for ${plan.name}[${column.name}] does not match table metadata`
-        );
+      let firstExpanded: string | undefined;
+      for (let row = plan.bodyStart; row <= plan.bodyEnd; row += 1) {
+        const expanded = excelCellFormula(worksheet.getCell(row + 1, column.sheetColumn + 1));
+        const expected = translateFormulaReferences(translated.formula, {
+          rowOffset: row - plan.bodyStart,
+          columnOffset: 0
+        });
+        if (!expanded || normalizeFormula(expanded) !== normalizeFormula(expected)) {
+          return column;
+        }
+        firstExpanded ??= expanded;
       }
-      return { ...column, calculatedFormula: expanded ?? translated.formula };
+      return { ...column, calculatedFormula: firstExpanded ?? translated.formula };
     });
     const tableWithColumns = { ...provisional, columns: columnsWithCalculatedFormulas };
 
