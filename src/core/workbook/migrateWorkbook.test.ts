@@ -1,8 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { createBlankWorkbook } from "../../lib/workbook";
+import { describe, expect, it, vi } from "vitest";
+import { createBlankWorkbook, defineNamedRange } from "../../lib/workbook";
 import { migrateWorkbookModel } from "./migrateWorkbook";
 
 describe("workbook model migration", () => {
+  it("keeps named-range deduplication locale-independent across commands and migration", () => {
+    const originalToLocaleLowerCase = String.prototype.toLocaleLowerCase;
+    const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return originalToLocaleLowerCase.call(this, "tr");
+      });
+    let workbook = createBlankWorkbook();
+
+    try {
+      workbook = defineNamedRange(workbook, workbook.activeSheetId, "ID", cellRange());
+      workbook = defineNamedRange(workbook, workbook.activeSheetId, "id", cellRange());
+    } finally {
+      localeLowerCase.mockRestore();
+    }
+
+    expect(workbook.namedRanges).toHaveLength(1);
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(workbook)))).not.toBeNull();
+  });
+
   it("migrates a valid version 1 workbook to version 2", () => {
     const current = createBlankWorkbook();
     const versionOneFixture = { ...current, version: 1 };

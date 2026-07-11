@@ -34,6 +34,7 @@ import { rewriteFormulaForStructure, translateFormulaReferences } from "./formul
 import type { ComputedCellValue } from "./formulaEngine";
 import { compareDeterministicText } from "./filters";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "../core/workbook/tableNames";
+import { normalizeNamedRangeLookup } from "../core/workbook/namedRangeNames";
 
 export {
   commitWorkbookHistory as commitHistory,
@@ -2945,10 +2946,6 @@ function rangeHasAutoFilterHeader(sheet: SheetModel, range: CellRange): boolean 
   }
 
   return Boolean(sheet.autoFilterRange && rangesEqual(sheet.autoFilterRange, range));
-}
-
-function normalizeNamedRangeLookup(name: string): string {
-  return name.trim().toLocaleLowerCase();
 }
 
 function collectRangeRows(sheet: SheetModel, range: CellRange): RangeRowSnapshot[] {

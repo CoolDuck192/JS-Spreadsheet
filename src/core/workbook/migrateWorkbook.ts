@@ -29,6 +29,7 @@ import {
 } from "../../table/core/query";
 import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
+import { normalizeNamedRangeLookup } from "./namedRangeNames";
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const DATA_TYPES = new Set<TableDataType>(["text", "number", "boolean", "date", "datetime", "custom"]);
@@ -378,7 +379,7 @@ function migrateNamedRanges(value: unknown, sheets: readonly SheetModel[]): Name
     if (typeof item.sheetId !== "string" || !isCellRange(item.range)) return null;
     const sheet = sheetById.get(item.sheetId);
     if (!sheet || !rangeInBounds(item.range, sheet)) return null;
-    const key = item.name.normalize("NFKC").toLowerCase();
+    const key = normalizeNamedRangeLookup(item.name);
     if (names.has(key)) return null;
     names.add(key);
     result.push({ name: item.name, sheetId: item.sheetId, range: cloneRange(item.range) });
