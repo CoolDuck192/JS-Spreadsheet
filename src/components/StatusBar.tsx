@@ -1,6 +1,10 @@
 type StatusBarProps = {
   status: string;
-  statusIsError?: boolean;
+  persistence: {
+    status: "idle" | "saving" | "failed";
+    operation?: "load" | "save";
+    message?: string;
+  };
   activeAddress: string;
   selectedCount: number;
   selectionSummary: string;
@@ -13,7 +17,7 @@ type StatusBarProps = {
 
 export function StatusBar({
   status,
-  statusIsError = false,
+  persistence,
   activeAddress,
   selectedCount,
   selectionSummary,
@@ -23,9 +27,23 @@ export function StatusBar({
   onZoomOut,
   onResetZoom
 }: StatusBarProps) {
+  const persistenceMessage = persistence.status === "failed"
+    ? persistence.message ?? "Workbook storage operation failed"
+    : persistence.status === "saving"
+      ? "Saving…"
+      : null;
   return (
     <div className="status-bar" aria-label="Status">
-      <span role={statusIsError ? "alert" : undefined}>{status}</span>
+      <span>{status}</span>
+      {persistenceMessage ? (
+        <span
+          className={`status-persistence status-persistence-${persistence.status}`}
+          role={persistence.status === "failed" ? "alert" : "status"}
+          aria-label={`Workbook storage status: ${persistenceMessage}`}
+        >
+          {persistenceMessage}
+        </span>
+      ) : null}
       <span>{activeAddress}</span>
       <span>{selectedCount} selected</span>
       <span>{selectionSummary}</span>

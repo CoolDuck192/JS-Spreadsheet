@@ -466,10 +466,6 @@ function SpreadsheetWorkbook({
   const freezeTopRow = Boolean(activeSheet.freezeTopRow);
   const freezeFirstColumn = Boolean(activeSheet.freezeFirstColumn);
   const activeAddress = formatCellAddress(selection.start);
-  const persistenceFailed = sessionSnapshot.persistence.status === "failed";
-  const statusBarMessage = persistenceFailed
-    ? sessionSnapshot.persistence.message ?? "Workbook storage operation failed"
-    : status;
   const selectionName = useMemo(
     () => getNamedRangeForSelection(workbook, activeSheet.id, selection)?.name ?? formatSelectionAddress(selection),
     [activeSheet.id, selection, workbook]
@@ -3353,8 +3349,8 @@ function SpreadsheetWorkbook({
           opener={googleSheetsImportButtonRef}
         />
         <StatusBar
-          status={statusBarMessage}
-          statusIsError={persistenceFailed}
+          status={status}
+          persistence={sessionSnapshot.persistence}
           activeAddress={activeAddress}
           selectedCount={countSelectedCells(selection)}
           selectionSummary={selectionSummary}

@@ -2976,6 +2976,36 @@
   white-space: nowrap;
 }
 
+.status-persistence {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 650;
+  box-shadow: inset 0 0 0 1px rgba(95, 110, 130, 0.2);
+}
+
+.status-persistence::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: "";
+}
+
+.status-persistence-saving {
+  color: var(--js-spreadsheet-accent-strong);
+  background: var(--js-spreadsheet-accent-soft);
+}
+
+.status-persistence-failed {
+  color: var(--js-spreadsheet-danger, #b42318);
+  background: #fff3f2;
+  box-shadow: inset 0 0 0 1px rgba(180, 35, 24, 0.18);
+}
+
 .status-zoom {
   display: inline-flex;
   align-items: center;

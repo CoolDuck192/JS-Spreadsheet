@@ -33,22 +33,43 @@ describe("App", () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(
+    const alert = await screen.findByRole("alert", { name: /Workbook storage status/ });
+    expect(alert).toHaveTextContent(
       "Stored workbook could not be opened. A recovery copy was preserved, and autosave is paused."
-    ));
+    );
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Ready");
   });
 
-  it("shows a sanitized status-bar alert when autosave fails", async () => {
+  it("keeps command feedback visible beside a sanitized autosave alert and clears it after recovery", async () => {
     const user = userEvent.setup();
-    const save = vi.fn().mockRejectedValue(new Error("secret quota detail"));
+    let resolveRecovery!: () => void;
+    const recovery = new Promise<void>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    const save = vi.fn()
+      .mockRejectedValueOnce(new Error("secret quota detail"))
+      .mockReturnValueOnce(recovery);
     render(<Spreadsheet storage={{ load: () => null, save }} />);
 
     await editCell(user, "A1", "unsaved");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Workbook could not be saved");
-    expect(screen.getByLabelText("Status").firstElementChild).toBe(alert);
+    expect(alert).toHaveAccessibleName("Workbook storage status: Workbook could not be saved");
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Saved");
+    expect(screen.getByLabelText("Status").firstElementChild).not.toBe(alert);
     expect(screen.getByLabelText("Status")).not.toHaveTextContent("secret quota detail");
+
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Zoom 125%");
+    expect(screen.getByRole("alert")).toBe(alert);
+
+    await editCell(user, "A2", "saved");
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toBe(alert);
+    await act(async () => resolveRecovery());
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Saved");
   });
 
   it("always opens standalone Google setup and stores only the normalized public client ID", async () => {

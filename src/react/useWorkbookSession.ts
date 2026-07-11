@@ -23,7 +23,10 @@ import type {
   WorkbookChangeEvent,
   WorkbookStorage
 } from "../App";
-import { getDefaultBrowserWorkbookStorage } from "./browserWorkbookStorage";
+import {
+  BrowserWorkbookStorageCapacityError,
+  getDefaultBrowserWorkbookStorage
+} from "./browserWorkbookStorage";
 
 export type UseWorkbookSessionCommonOptions = Readonly<{
   storage?: WorkbookStorage | false;
@@ -411,21 +414,24 @@ function pumpSaveQueue(
   const request = state.pendingSave;
   state.pendingSave = undefined;
   state.saveInFlight = true;
-  if (!state.destroyed) {
+  if (
+    !state.destroyed
+    && state.raw.getSnapshot().persistence.status !== "failed"
+  ) {
     state.raw.dispatch({ type: "persistence.status", status: "saving", operation: "save" });
   }
 
   let saved: ReturnType<WorkbookStorage["save"]>;
   try {
     saved = state.storage.save(request.workbook);
-  } catch {
-    finishSave(state, callbacks, false);
+  } catch (error) {
+    finishSave(state, callbacks, false, error);
     return;
   }
   if (isPromiseLike(saved)) {
     saved.then(
       () => finishSave(state, callbacks, true),
-      () => finishSave(state, callbacks, false)
+      (error) => finishSave(state, callbacks, false, error)
     );
   } else {
     finishSave(state, callbacks, true);
@@ -435,9 +441,11 @@ function pumpSaveQueue(
 function finishSave(
   state: OwnedSessionState,
   callbacks: { current: CallbackState },
-  succeeded: boolean
+  succeeded: boolean,
+  error?: unknown
 ): void {
   state.saveInFlight = false;
+  const failureMessage = saveFailureMessage(error);
   if (!state.destroyed) {
     if (succeeded) {
       state.raw.dispatch({ type: "persistence.status", status: "idle" });
@@ -446,18 +454,24 @@ function finishSave(
         type: "persistence.status",
         status: "failed",
         operation: "save",
-        message: "Workbook could not be saved"
+        message: failureMessage
       });
     }
   }
   if (!succeeded) {
     invokeSafely(callbacks.current.onError, {
       code: "storage.save.failed",
-      message: "Workbook could not be saved",
+      message: failureMessage,
       recoverable: true
     });
   }
   pumpSaveQueue(state, callbacks);
+}
+
+function saveFailureMessage(error: unknown): string {
+  return error instanceof BrowserWorkbookStorageCapacityError
+    ? error.message
+    : "Workbook could not be saved";
 }
 
 function finishHydrationFailure(

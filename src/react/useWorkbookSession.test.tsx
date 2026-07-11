@@ -6,6 +6,10 @@ import { WORKBOOK_STORAGE_KEY } from "../lib/persistence";
 import { createBlankWorkbook, getCellContent, setCellContent } from "../lib/workbook";
 import type { WorkbookModel } from "../types";
 import type { WorkbookStorage } from "./Spreadsheet";
+import {
+  BrowserWorkbookStorageCapacityError,
+  createBrowserWorkbookStorage
+} from "./browserWorkbookStorage";
 import { useWorkbookSession } from "./useWorkbookSession";
 
 function deferred<T>() {
@@ -285,6 +289,63 @@ describe("useWorkbookSession", () => {
     await waitFor(() => expect(result.current.getSnapshot().persistence.status).toBe("idle"));
     expect(Number(result.current.getSnapshot().revision) - Number(failedRevision)).toBe(1);
   });
+
+  it("rejects workbooks above the 100,000-cell browser autosave cap before writing", () => {
+    const workbook = createBlankWorkbook();
+    const cells: Record<string, number> = {};
+    for (let row = 1; row <= 100_001; row += 1) {
+      cells[`A${row}`] = row;
+    }
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      rowCount: 100_001,
+      cells
+    };
+    const setItem = vi.fn();
+    const storage = createBrowserWorkbookStorage({ setItem } as unknown as Storage);
+
+    expect(() => storage.save(workbook)).toThrow(BrowserWorkbookStorageCapacityError);
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an actionable browser autosave capacity message", async () => {
+    const onError = vi.fn();
+    const storage: WorkbookStorage = {
+      load: () => null,
+      save() {
+        throw new BrowserWorkbookStorageCapacityError();
+      }
+    };
+    const initial = createBlankWorkbook();
+    const { result } = renderHook(() => useWorkbookSession({
+      defaultWorkbook: initial,
+      storage,
+      onError
+    }));
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "too large"
+      });
+    });
+
+    const message = "Workbook is too large for browser autosave. Use Export XLSX to save your work.";
+    await waitFor(() => expect(result.current.getSnapshot().persistence).toEqual({
+      status: "failed",
+      operation: "save",
+      message
+    }));
+    expect(onError).toHaveBeenCalledWith({
+      code: "storage.save.failed",
+      message,
+      recoverable: true
+    });
+  });
+
   it("flushes the latest edit when unmounted before the autosave effect runs", async () => {
     const save = vi.fn();
     const storage: WorkbookStorage = { load: () => null, save };
