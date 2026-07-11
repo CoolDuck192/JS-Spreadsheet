@@ -17,6 +17,7 @@ import {
 } from "../../lib/workbook";
 import type { CommandEnvelope, CommandResult } from "../commands/types";
 import { migrateWorkbookModel } from "./migrateWorkbook";
+import * as structuredTables from "./structuredTables";
 import { applyWorkbookMutation, type WorkbookCommand } from "./commands";
 
 const cell = { row: 0, column: 0 } as const;
@@ -280,6 +281,48 @@ describe("WorkbookCommand", () => {
     });
     expect(deletedRows.workbook.tables[0].columns.find((column) => column.id === "row-total")?.calculatedFormula)
       .toBe("=A4*2");
+  });
+
+  it("skips structured-table reconciliation for a bulk content range when the sheet has no tables", () => {
+    const reconcile = vi.spyOn(structuredTables, "reconcileStructuredTableContentWrites");
+    const tableLookup = vi.spyOn(structuredTables, "getStructuredTableAtCell");
+    try {
+      const workbook = createBlankWorkbook();
+      const result = apply(workbook, {
+        type: "range.clear",
+        sheetId: workbook.activeSheetId,
+        range: { start: { row: 0, column: 0 }, end: { row: 999, column: 25 } },
+        mode: "contents"
+      });
+
+      expect(result.status).toBe("applied");
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(tableLookup).not.toHaveBeenCalled();
+    } finally {
+      reconcile.mockRestore();
+      tableLookup.mockRestore();
+    }
+  });
+
+  it("skips structured-table reconciliation when a bulk content range misses every table", () => {
+    const reconcile = vi.spyOn(structuredTables, "reconcileStructuredTableContentWrites");
+    const tableLookup = vi.spyOn(structuredTables, "getStructuredTableAtCell");
+    try {
+      const workbook = structuredContentWorkbook();
+      const result = apply(workbook, {
+        type: "range.clear",
+        sheetId: workbook.activeSheetId,
+        range: { start: { row: 0, column: 10 }, end: { row: 999, column: 25 } },
+        mode: "contents"
+      });
+
+      expect(result.status).toBe("applied");
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(tableLookup).not.toHaveBeenCalled();
+    } finally {
+      reconcile.mockRestore();
+      tableLookup.mockRestore();
+    }
   });
 
   it.each([
