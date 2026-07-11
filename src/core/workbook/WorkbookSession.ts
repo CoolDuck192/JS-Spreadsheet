@@ -956,7 +956,8 @@ function createTransactionIdPreflight(
     reservationIds.add(candidate.id);
   }
 
-  const unavailable = new Set([...existingIds, ...reservationIds]);
+  const commandStrings = collectCommandStringValues(command);
+  const unavailable = new Set([...existingIds, ...reservationIds, ...commandStrings]);
   const usedSlots = new Set<string>();
   const allocations: IdAllocationTrace[] = [];
   const occurrences: Record<IdKind, number> = {
@@ -1047,6 +1048,31 @@ function collectStructuredTableIds(workbook: WorkbookModel): Set<string> {
     for (const rowId of table.rowIds) ids.add(rowId);
   }
   return ids;
+}
+
+function collectCommandStringValues(command: WorkbookCommand): Set<string> {
+  const strings = new Set<string>();
+  const visited = new WeakSet<object>();
+  visit(command);
+  return strings;
+
+  function visit(value: unknown): void {
+    if (typeof value === "string") {
+      strings.add(value);
+      return;
+    }
+    if (!value || typeof value !== "object" || visited.has(value)) {
+      return;
+    }
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry);
+      return;
+    }
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      visit(entry);
+    }
+  }
 }
 
 function hasNestedIdReservations(commands: readonly WorkbookCommand[]): boolean {
