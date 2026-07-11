@@ -600,6 +600,16 @@ describe("WorkbookSession", () => {
           headerRow: true,
           totalsRow: false
         },
+        {
+          type: "table.setKeyColumn",
+          tableId: "table-1",
+          columnId: "table-column-1"
+        },
+        {
+          type: "table.editCells",
+          tableId: "table-1",
+          edits: [{ rowId: "table-row-1", columnId: "table-column-1", rawText: "Grace" }]
+        },
         { type: "table.setStyle", tableId: "table-1", style }
       ]
     })).toMatchObject({ status: "committed", changed: true });
@@ -610,9 +620,11 @@ describe("WorkbookSession", () => {
         id: "table-1",
         columns: [{ id: "table-column-1" }],
         rowIds: ["table-row-1"],
+        keyColumnId: "table-column-1",
         style
       }
     ]);
+    expect(getCellContent(session.getSnapshot().workbook, sheetId, "A2")).toBe("Grace");
   });
 
   it("rejects an invalid deterministic dependent command before consuming host ids", () => {
