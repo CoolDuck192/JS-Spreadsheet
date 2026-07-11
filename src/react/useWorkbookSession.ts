@@ -16,6 +16,7 @@ import {
 import type { WorkbookCommand } from "../core/workbook/commands";
 import type { SpreadsheetServices } from "../core/workbook/services";
 import { createBlankWorkbook } from "../lib/workbook";
+import { WorkbookLoadError } from "../lib/persistence";
 import type { WorkbookModel } from "../types";
 import type {
   SpreadsheetErrorEvent,
@@ -73,10 +74,12 @@ type OwnedSessionState = {
   storage: WorkbookStorage | false;
   hydrated: boolean;
   hydrationStarted: boolean;
+  hydrationFailure?: { error: unknown };
   lastQueuedRevision: string;
   lastQueuedWorkbook: WorkbookModel;
   pendingSave?: SaveRequest;
   saveInFlight: boolean;
+  autosaveBlocked: boolean;
   destroyed: boolean;
   cleanupToken?: object;
   controlledWorkbook?: WorkbookModel;
@@ -86,6 +89,10 @@ type OwnedSessionState = {
 };
 
 const renderSessionCache = new Map<string, OwnedSessionState>();
+const LOAD_FAILURE_MESSAGE =
+  "Workbook could not be loaded. Autosave is paused to protect stored data.";
+const QUARANTINED_LOAD_FAILURE_MESSAGE =
+  "Stored workbook could not be opened. A recovery copy was preserved, and autosave is paused.";
 
 export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): WorkbookSession {
   const instanceId = useId();
@@ -196,6 +203,7 @@ function createOwnedSessionState(
     : options.storage ?? defaultBrowserStorage;
   let initialWorkbook = options.workbook ?? options.defaultWorkbook ?? createBlankWorkbook();
   let prehydrated = false;
+  let hydrationFailure: { error: unknown } | undefined;
 
   if (defaultBrowserStorage) {
     try {
@@ -204,8 +212,9 @@ function createOwnedSessionState(
         initialWorkbook = loaded;
         prehydrated = true;
       }
-    } catch {
+    } catch (error) {
       prehydrated = true;
+      hydrationFailure = { error };
     }
   }
 
@@ -224,13 +233,24 @@ function createOwnedSessionState(
     storage,
     hydrated: prehydrated || storage === false,
     hydrationStarted: prehydrated || storage === false,
+    hydrationFailure,
     lastQueuedRevision: raw.getSnapshot().revision,
     lastQueuedWorkbook: raw.getSnapshot().workbook,
     saveInFlight: false,
+    autosaveBlocked: hydrationFailure !== undefined,
     destroyed: false,
     controlledWorkbook: options.workbook,
     beginHydration(currentCallbacks) {
-      if (state.hydrationStarted || state.destroyed || !state.storage) {
+      if (state.destroyed) {
+        return;
+      }
+      if (state.hydrationFailure) {
+        const { error } = state.hydrationFailure;
+        state.hydrationFailure = undefined;
+        finishHydrationFailure(state, callbacks.current, error);
+        return;
+      }
+      if (state.hydrationStarted || !state.storage) {
         return;
       }
       state.hydrationStarted = true;
@@ -239,8 +259,8 @@ function createOwnedSessionState(
       let loaded: ReturnType<WorkbookStorage["load"]>;
       try {
         loaded = state.storage.load();
-      } catch {
-        finishHydrationFailure(state, callbacks.current);
+      } catch (error) {
+        finishHydrationFailure(state, callbacks.current, error);
         return;
       }
       Promise.resolve(loaded).then(
@@ -275,7 +295,7 @@ function createOwnedSessionState(
             state.queueSave(current);
           }
         },
-        () => finishHydrationFailure(state, callbacks.current)
+        (error) => finishHydrationFailure(state, callbacks.current, error)
       );
     },
     queueSave(current) {
@@ -283,6 +303,7 @@ function createOwnedSessionState(
         state.destroyed
         || !state.storage
         || !state.hydrated
+        || state.autosaveBlocked
         || current.revision === state.lastQueuedRevision
         || current.workbook === state.lastQueuedWorkbook
       ) {
@@ -360,13 +381,19 @@ function pumpSaveQueue(
   state: OwnedSessionState,
   callbacks: { current: CallbackState }
 ): void {
-  if (state.destroyed || state.saveInFlight || !state.storage || !state.pendingSave) {
+  if (
+    state.destroyed
+    || state.autosaveBlocked
+    || state.saveInFlight
+    || !state.storage
+    || !state.pendingSave
+  ) {
     return;
   }
   const request = state.pendingSave;
   state.pendingSave = undefined;
   state.saveInFlight = true;
-  state.raw.dispatch({ type: "persistence.status", status: "saving" });
+  state.raw.dispatch({ type: "persistence.status", status: "saving", operation: "save" });
 
   let saved: ReturnType<WorkbookStorage["save"]>;
   try {
@@ -396,6 +423,7 @@ function finishSave(
     state.raw.dispatch({
       type: "persistence.status",
       status: "failed",
+      operation: "save",
       message: "Workbook could not be saved"
     });
     invokeSafely(callbacks.current.onError, {
@@ -409,23 +437,33 @@ function finishSave(
 
 function finishHydrationFailure(
   state: OwnedSessionState,
-  callbacks: CallbackState
+  callbacks: CallbackState,
+  error: unknown
 ): void {
   if (state.destroyed) {
     return;
   }
   state.hydrated = true;
+  state.autosaveBlocked = true;
+  const message = loadFailureMessage(error);
   state.raw.dispatch({
     type: "persistence.status",
     status: "failed",
-    message: "Workbook could not be loaded"
+    operation: "load",
+    message
   });
   invokeSafely(callbacks.onError, {
     code: "storage.load.failed",
-    message: "Workbook could not be loaded",
+    message,
     recoverable: true
   });
-  state.queueSave(state.raw.getSnapshot());
+}
+
+function loadFailureMessage(error: unknown): string {
+  if (error instanceof WorkbookLoadError && error.quarantineKey) {
+    return QUARANTINED_LOAD_FAILURE_MESSAGE;
+  }
+  return LOAD_FAILURE_MESSAGE;
 }
 
 function publishWorkbookChange(

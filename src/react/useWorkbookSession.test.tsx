@@ -158,6 +158,45 @@ describe("useWorkbookSession", () => {
     expect(result.current.getSnapshot().workbook).toBe(controlled);
   });
 
+  it("reports a load failure and blocks later autosave attempts", async () => {
+    const save = vi.fn();
+    const onError = vi.fn();
+    const storage: WorkbookStorage = {
+      load() {
+        throw new Error("secret storage detail");
+      },
+      save
+    };
+    const initial = createBlankWorkbook();
+    const { result } = renderHook(() => useWorkbookSession({
+      defaultWorkbook: initial,
+      storage,
+      onError
+    }));
+
+    await waitFor(() => expect(result.current.getSnapshot().persistence).toEqual({
+      status: "failed",
+      operation: "load",
+      message: "Workbook could not be loaded. Autosave is paused to protect stored data."
+    }));
+    expect(onError).toHaveBeenCalledWith({
+      code: "storage.load.failed",
+      message: "Workbook could not be loaded. Autosave is paused to protect stored data.",
+      recoverable: true
+    });
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "must stay in memory"
+      });
+    });
+    await act(async () => Promise.resolve());
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("serializes saves and coalesces superseded queued revisions", async () => {
     const firstSave = deferred<void>();
     const secondSave = deferred<void>();

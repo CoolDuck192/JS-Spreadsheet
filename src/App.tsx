@@ -3329,7 +3329,10 @@ function SpreadsheetWorkbook({
           opener={googleSheetsImportButtonRef}
         />
         <StatusBar
-          status={status}
+          status={sessionSnapshot.persistence.status === "failed"
+            && sessionSnapshot.persistence.operation === "load"
+            ? sessionSnapshot.persistence.message ?? status
+            : status}
           activeAddress={activeAddress}
           selectedCount={countSelectedCells(selection)}
           selectionSummary={selectionSummary}

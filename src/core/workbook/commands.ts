@@ -198,7 +198,12 @@ export type WorkbookCommand =
   | { type: "namedRange.define"; namedRange: NamedRange }
   | { type: "namedRange.remove"; name: string }
   | { type: "history.undo" | "history.redo" }
-  | { type: "persistence.status"; status: "idle" | "saving" | "failed"; message?: string }
+  | {
+      type: "persistence.status";
+      status: "idle" | "saving" | "failed";
+      operation?: "load" | "save";
+      message?: string;
+    }
   | { type: "workbook.replace"; workbook: WorkbookModel; history: "commit" | "reset" }
   | StructuredTableCommand;
 

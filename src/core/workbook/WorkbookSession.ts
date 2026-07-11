@@ -33,7 +33,11 @@ export type WorkbookSnapshot = {
   revision: string;
   canUndo: boolean;
   canRedo: boolean;
-  persistence: { status: "idle" | "saving" | "failed"; message?: string };
+  persistence: {
+    status: "idle" | "saving" | "failed";
+    operation?: "load" | "save";
+    message?: string;
+  };
 };
 
 export type WorkbookCommandResult = CommandResult<WorkbookSnapshot>;
@@ -601,9 +605,11 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     }
 
     if (command.type === "persistence.status") {
-      const nextPersistence: PersistenceState = command.message === undefined
-        ? { status: command.status }
-        : { status: command.status, message: command.message };
+      const nextPersistence: PersistenceState = {
+        status: command.status,
+        ...(command.operation === undefined ? {} : { operation: command.operation }),
+        ...(command.message === undefined ? {} : { message: command.message })
+      };
       return {
         status: "applied",
         state: persistenceEqual(state.persistence, nextPersistence)
@@ -1126,7 +1132,9 @@ function rangesEqual(left: CellRange, right: CellRange): boolean {
 }
 
 function persistenceEqual(left: PersistenceState, right: PersistenceState): boolean {
-  return left.status === right.status && left.message === right.message;
+  return left.status === right.status
+    && left.operation === right.operation
+    && left.message === right.message;
 }
 
 function invokeSafely<T>(callback: ((value: T) => void) | undefined, value: T): void {

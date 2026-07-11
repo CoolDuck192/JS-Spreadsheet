@@ -4,6 +4,7 @@ import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { Spreadsheet } from "./App";
 import { createWorkbookSession } from "./core/workbook/WorkbookSession";
+import { WORKBOOK_STORAGE_KEY } from "./lib/persistence";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
@@ -25,6 +26,16 @@ describe("App", () => {
 
     expect(root).toHaveClass("js-spreadsheet-standalone");
     expect(root).toHaveStyle({ height: "100dvh", minHeight: 0 });
+  });
+
+  it("shows a recovery warning when the stored workbook cannot be opened", async () => {
+    localStorage.setItem(WORKBOOK_STORAGE_KEY, "{invalid workbook");
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(
+      "Stored workbook could not be opened. A recovery copy was preserved, and autosave is paused."
+    ));
   });
 
   it("always opens standalone Google setup and stores only the normalized public client ID", async () => {

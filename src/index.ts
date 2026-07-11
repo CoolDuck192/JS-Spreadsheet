@@ -107,7 +107,14 @@ export type {
 
 export { createBlankWorkbook, getActiveSheet, getCellContent, setCellContent } from "./lib/workbook";
 export { createFormulaEngine, type FormulaEngine } from "./lib/formulaEngine";
-export { loadWorkbook, saveWorkbook, WORKBOOK_STORAGE_KEY } from "./lib/persistence";
+export {
+  loadWorkbook,
+  saveWorkbook,
+  WorkbookLoadError,
+  type WorkbookLoadFailureReason,
+  WORKBOOK_QUARANTINE_KEY_PREFIX,
+  WORKBOOK_STORAGE_KEY
+} from "./lib/persistence";
 export { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 export { createPivotTable } from "./lib/pivot";
 export {
