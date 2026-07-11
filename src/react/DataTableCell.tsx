@@ -34,15 +34,20 @@ export function DataTableCell<TRow>({
         </DataTableExtensionBoundary>
       )
     : defaultCellContent(row, column.id, cell.displayValue);
+  const hasTreeToggle = row.kind === "data" && row.hasChildren && isFirstColumn;
 
   return (
     <MeasuredCell rowId={row.id} columnId={column.id} onMeasure={onMeasure}>
       <span
-        className="js-spreadsheet-data-table__cell-content"
+        className={[
+          "js-spreadsheet-data-table__cell-content",
+          hasTreeToggle ? "js-spreadsheet-data-table__cell-content--tree" : null
+        ].filter(Boolean).join(" ")}
         style={row.depth > 0 && isFirstColumn ? { paddingInlineStart: row.depth * 16 } : undefined}
       >
-        {row.kind === "data" && row.hasChildren && isFirstColumn ? (
+        {hasTreeToggle ? (
           <button
+            className="js-spreadsheet-data-table__tree-toggle"
             type="button"
             aria-label={`${row.expanded ? "Collapse" : "Expand"} ${String(cell.displayValue || row.id)}`}
             aria-expanded={row.expanded === true}

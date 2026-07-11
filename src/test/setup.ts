@@ -40,7 +40,7 @@ if (!("hidePopover" in HTMLElement.prototype)) {
     configurable: true,
     value(this: HTMLElement) {
       this.removeAttribute("data-popover-open");
-      this.style.display = "none";
+      this.style.removeProperty("display");
     }
   });
 }

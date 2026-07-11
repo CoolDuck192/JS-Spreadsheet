@@ -122,7 +122,9 @@ body {
     const css = readFileSync("src/styles/data-table.css", "utf8");
     const rootRule = css.match(/\.js-spreadsheet-root\.js-spreadsheet-data-table\s*\{[^}]*\}/s)?.[0] ?? "";
     const menuRule = css.match(/\.js-spreadsheet-data-table__column-menu\s*\{[^}]*\}/s)?.[0] ?? "";
-    const treeToggleRule = css.match(/\.js-spreadsheet-data-table__cell-content > button\s*\{[^}]*\}/s)?.[0] ?? "";
+    const openMenuRule = css.match(/\.js-spreadsheet-data-table__column-menu:popover-open\s*\{[^}]*\}/s)?.[0] ?? "";
+    const treeContentRule = css.match(/\.js-spreadsheet-data-table__cell-content--tree\s*\{[^}]*\}/s)?.[0] ?? "";
+    const treeToggleRule = css.match(/\.js-spreadsheet-data-table__tree-toggle\s*\{[^}]*\}/s)?.[0] ?? "";
 
     expect(rootRule).toMatch(/overflow:\s*hidden;/);
     expect(menuRule).toMatch(/position:\s*fixed;/);
@@ -131,6 +133,10 @@ body {
     expect(menuRule).toMatch(/max-height:\s*min\(520px, calc\(100dvh - 16px\)\);/);
     expect(menuRule).not.toMatch(/\binset(?:-|:)/);
     expect(menuRule).not.toMatch(/\b(?:cqi|cqb)\b/);
+    expect(menuRule).not.toMatch(/\bdisplay\s*:/);
+    expect(openMenuRule).toMatch(/display:\s*grid;/);
+    expect(css).not.toMatch(/__cell-content > button\s*\{/);
+    expect(treeContentRule).toMatch(/padding-block:\s*1px;/);
     expect(treeToggleRule).toMatch(/(?:width|min-width):\s*30px;/);
     expect(treeToggleRule).toMatch(/min-height:\s*30px;/);
   });

@@ -358,6 +358,61 @@ describe("DataTable", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("closes and cleanly reopens a column menu from the same trigger", async () => {
+    const user = userEvent.setup();
+    const showPopover = vi.spyOn(HTMLElement.prototype, "showPopover");
+    const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+
+    await user.click(trigger);
+    const firstMenu = screen.getByRole("menu", { name: "Name column menu" });
+    await user.click(trigger);
+
+    expect(firstMenu).not.toBeInTheDocument();
+    expect(firstMenu).not.toHaveAttribute("data-popover-open");
+    expect(firstMenu.style.display).toBe("");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    expect(showPopover).toHaveBeenCalledTimes(1);
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+
+    await user.click(trigger);
+
+    expect(screen.getByRole("menu", { name: "Name column menu" })).not.toBe(firstMenu);
+    expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
+    expect(showPopover).toHaveBeenCalledTimes(2);
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches directly between column triggers without stale menu ownership", async () => {
+    const user = userEvent.setup();
+    const showPopover = vi.spyOn(HTMLElement.prototype, "showPopover");
+    const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");
+    renderTable();
+    const nameTrigger = screen.getByRole("button", { name: "Column options for Name" });
+    const departmentTrigger = screen.getByRole("button", { name: "Column options for Department" });
+
+    await user.click(nameTrigger);
+    const staleMenu = screen.getByRole("menu", { name: "Name column menu" });
+    await user.click(departmentTrigger);
+
+    expect(staleMenu).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(nameTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(departmentTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
+    expect(showPopover).toHaveBeenCalledTimes(2);
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+
+    const staleToggle = new Event("toggle");
+    Object.defineProperty(staleToggle, "newState", { value: "closed" });
+    fireEvent(staleMenu, staleToggle);
+
+    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
+  });
+
   it.each([
     ["top", { left: 120, right: 142, top: 0, bottom: 22 }],
     ["right", { left: 298, right: 320, top: 90, bottom: 112 }],
@@ -558,6 +613,7 @@ describe("DataTable", () => {
     grid.scrollLeft = 37;
     const selectionBefore = ref.current?.getSelection();
     const toggle = screen.getByRole("button", { name: "Collapse Ada" });
+    const treeContent = toggle.closest(".js-spreadsheet-data-table__cell-content--tree");
     const pointerDown = new Event("pointerdown", { bubbles: true, cancelable: true });
     const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
 
@@ -567,9 +623,34 @@ describe("DataTable", () => {
 
     expect(pointerDown.defaultPrevented).toBe(true);
     expect(mouseDown.defaultPrevented).toBe(true);
+    expect(toggle).toHaveClass("js-spreadsheet-data-table__tree-toggle");
+    expect(treeContent).not.toBeNull();
+    expect(treeContent?.closest("[role=gridcell]")).toHaveStyle({ height: "32px" });
     expect(screen.queryByRole("gridcell", { name: "e1-child Name" })).not.toBeInTheDocument();
     expect(ref.current?.getSelection()).toEqual(selectionBefore);
     expect(grid.scrollLeft).toBe(37);
+  });
+
+  it("does not apply tree-toggle sizing to host-rendered cell buttons", () => {
+    const actionColumns: readonly ColumnDef<Employee>[] = [{
+      ...columns[0],
+      cell: ({ row }) => <button type="button" aria-label={`Host action ${row.id}`}>Action</button>
+    }];
+    render(
+      <DataTable
+        aria-label="Tree actions"
+        rows={employees}
+        columns={actionColumns}
+        getRowId={getRowId}
+        getSubRows={(row) => row.children}
+      />
+    );
+
+    const toggle = screen.getByRole("button", { name: "Expand Ada" });
+    const hostAction = screen.getByRole("button", { name: "Host action e1" });
+    expect(toggle).toHaveClass("js-spreadsheet-data-table__tree-toggle");
+    expect(hostAction).not.toHaveClass("js-spreadsheet-data-table__tree-toggle");
+    expect(hostAction.closest(".js-spreadsheet-data-table__cell-content--tree")).not.toBeNull();
   });
 
   it("renders an inline typed filter row without replacing column menus", async () => {
