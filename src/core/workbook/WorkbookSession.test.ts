@@ -673,6 +673,38 @@ describe("WorkbookSession", () => {
     expect(session.getSnapshot()).toBe(before);
   });
 
+  it("rejects an unreserved dependency on a predictable preflight id without allocating", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    let sequence = 0;
+    const createId = vi.fn((kind: IdKind) => `${kind}-host-${++sequence}`);
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+          name: "People",
+          headerRow: true,
+          totalsRow: false
+        },
+        {
+          type: "table.setStyle",
+          tableId: "__preflight-table-2",
+          style: { theme: "TableStyleLight2" }
+        }
+      ]
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
   it.each([
     {
       label: "blank id",
