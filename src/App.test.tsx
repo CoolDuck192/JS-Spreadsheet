@@ -2044,6 +2044,53 @@ describe("App", () => {
     }));
   });
 
+  it("explains why a partially overlapping structured-table selection cannot be sorted", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    selectRange("A2 West", "C3");
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.sort" })
+    }));
+  });
+
+  it("explains why a partially overlapping AutoFilter range cannot be sorted", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    const workbook = structuredTableWorkbook();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      autoFilterRange: {
+        start: { ...workbook.tables[0].range.start },
+        end: { row: workbook.tables[0].range.end.row, column: 2 }
+      }
+    };
+    render(<Spreadsheet defaultWorkbook={workbook} storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    await user.click(within(screen.getByRole("menu", { name: "AutoFilter menu for Region" }))
+      .getByRole("menuitem", { name: "Sort A to Z" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.sort" })
+    }));
+  });
+
   it("explains how to remove duplicates when the selection is inside a structured table", async () => {
     const user = userEvent.setup();
     const onCommandResult = vi.fn();

@@ -113,6 +113,8 @@ const INITIAL_SELECTION: CellRange = {
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 25;
+const PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE =
+  "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first.";
 const DEFAULT_SHEET_TAB_COLOR = "#2f7d9f";
 
 type RichClipboardState = {
@@ -1028,8 +1030,14 @@ function SpreadsheetWorkbook({
       return;
     }
 
+    const tableSortCommand = structuredTableSortCommand(workbook, activeSheet.id, range, column, direction);
+    if (!tableSortCommand && getStructuredTableForSelection(workbook, activeSheet.id, range)) {
+      setStatus(PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE);
+      return;
+    }
+
     dispatchCommand(
-      structuredTableSortCommand(workbook, activeSheet.id, range, column, direction) ?? {
+      tableSortCommand ?? {
         type: "range.sort",
         sheetId: activeSheet.id,
         range,
@@ -1375,14 +1383,20 @@ function SpreadsheetWorkbook({
   }
 
   function handleSort(direction: "asc" | "desc") {
+    const tableSortCommand = structuredTableSortCommand(
+      workbook,
+      activeSheet.id,
+      selection,
+      normalizeRange(selection).start.column,
+      direction
+    );
+    if (!tableSortCommand && getStructuredTableForSelection(workbook, activeSheet.id, selection)) {
+      setStatus(PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE);
+      return;
+    }
+
     dispatchCommand(
-      structuredTableSortCommand(
-        workbook,
-        activeSheet.id,
-        selection,
-        normalizeRange(selection).start.column,
-        direction
-      ) ?? {
+      tableSortCommand ?? {
         type: "range.sort",
         sheetId: activeSheet.id,
         range: selection,
