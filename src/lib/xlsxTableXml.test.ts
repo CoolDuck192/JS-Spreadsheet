@@ -254,6 +254,81 @@ describe("xlsxTableXml", () => {
     expect(tableXml(first)).toContain('<customFilter operator="notEqual" val="4"/>');
   });
 
+  it("writes same-column OR comparisons as native custom filters", async () => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{
+      ...salesTable,
+      filter: {
+        kind: "logical",
+        operator: "or",
+        operands: [
+          {
+            kind: "comparison",
+            columnId: "private-units",
+            operator: "eq",
+            value: { type: "number", value: 5 }
+          },
+          {
+            kind: "comparison",
+            columnId: "private-units",
+            operator: "eq",
+            value: { type: "number", value: 20 }
+          }
+        ]
+      }
+    }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("0");
+    expect(filters.map((filter) => filter.getAttribute("val"))).toEqual(["5", "20"]);
+  });
+
+  it.each([
+    ["logical comparisons", {
+      kind: "logical" as const,
+      operator: "and" as const,
+      operands: [
+        {
+          kind: "comparison" as const,
+          columnId: "private-units",
+          operator: "gte" as const,
+          value: { type: "number" as const, value: 5 }
+        },
+        {
+          kind: "comparison" as const,
+          columnId: "private-units",
+          operator: "lte" as const,
+          value: { type: "number" as const, value: 10 }
+        }
+      ]
+    }],
+    ["a between range", {
+      kind: "range" as const,
+      columnId: "private-units",
+      operator: "between" as const,
+      lower: { type: "number" as const, value: 5 },
+      upper: { type: "number" as const, value: 10 }
+    }]
+  ])("writes %s as ANDed native custom filters", async (_label, filter) => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{ ...salesTable, filter }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("1");
+    expect(filters.map((item) => [item.getAttribute("operator"), item.getAttribute("val")])).toEqual([
+      ["greaterThanOrEqual", "5"],
+      ["lessThanOrEqual", "10"]
+    ]);
+  });
+
   it("rejects unsupported filter expressions instead of silently dropping them", async () => {
     const source = await fixture();
     expect(() => patchNativeTableXml(source, [{

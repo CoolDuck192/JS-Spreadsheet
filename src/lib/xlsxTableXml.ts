@@ -290,25 +290,25 @@ function patchFilter(document: XmlDocument, root: XmlElement, table: StructuredT
     autoFilter.removeChild(node);
   }
 
-  const leaves = flattenNativeFilter(filter);
-  const leavesByColumn = new Map<number, (typeof leaves)[number]>();
-  for (const leaf of leaves) {
-    const columnIndex = table.columns.findIndex((column) => column.id === leaf.columnId);
+  const columnFilters = nativeColumnFilters(filter);
+  const filtersByColumn = new Map<number, NativeColumnFilter>();
+  for (const columnFilter of columnFilters) {
+    const columnIndex = table.columns.findIndex((column) => column.id === columnFilter.columnId);
     if (columnIndex < 0) throw tableXmlError("Native table filter refers to an unknown column");
-    if (leavesByColumn.has(columnIndex)) {
+    if (filtersByColumn.has(columnIndex)) {
       throw tableXmlError("Unsupported native table filter has multiple expressions for one column");
     }
-    leavesByColumn.set(columnIndex, leaf);
+    filtersByColumn.set(columnIndex, columnFilter);
   }
 
   for (let columnIndex = 0; columnIndex < table.columns.length; columnIndex += 1) {
-    const leaf = leavesByColumn.get(columnIndex);
+    const columnFilter = filtersByColumn.get(columnIndex);
     const candidates = existingByIndex.get(columnIndex) ?? [];
     const filterColumn = candidates.find(hasUnsupportedFilterChild)
       ?? candidates[0]
       ?? document.createElementNS(root.namespaceURI || XML_NAMESPACE, "filterColumn");
     filterColumn.setAttribute("colId", String(columnIndex));
-    if (!leaf) {
+    if (!columnFilter) {
       if (!hasUnsupportedFilterChild(filterColumn)) {
         removeDirectChildren(filterColumn, "filters");
         removeDirectChildren(filterColumn, "customFilters");
@@ -319,37 +319,120 @@ function patchFilter(document: XmlDocument, root: XmlElement, table: StructuredT
     }
     removeDirectChildren(filterColumn, "filters");
     removeDirectChildren(filterColumn, "customFilters");
-    if (leaf.kind === "set") {
-      if (leaf.operator !== "in") throw tableXmlError("Unsupported native table filter set operator");
+    if (columnFilter.kind === "set") {
+      if (columnFilter.operator !== "in") throw tableXmlError("Unsupported native table filter set operator");
       const filters = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "filters");
-      for (const value of leaf.values) {
+      for (const value of columnFilter.values) {
         const filterNode = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "filter");
         filterNode.setAttribute("val", scalarText(value));
         filters.appendChild(filterNode);
       }
       filterColumn.appendChild(filters);
     } else {
-      const operator = appComparisonOperator(leaf.operator);
-      if (!operator) throw tableXmlError("Unsupported native table filter comparison operator");
       const customFilters = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "customFilters");
-      const custom = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "customFilter");
-      if (operator !== "equal") custom.setAttribute("operator", operator);
-      custom.setAttribute("val", scalarText(leaf.value));
-      customFilters.appendChild(custom);
+      if (columnFilter.comparisons.length > 1) {
+        customFilters.setAttribute("and", columnFilter.operator === "and" ? "1" : "0");
+      }
+      for (const comparison of columnFilter.comparisons) {
+        const operator = appComparisonOperator(comparison.operator);
+        if (!operator) throw tableXmlError("Unsupported native table filter comparison operator");
+        const custom = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "customFilter");
+        if (operator !== "equal") custom.setAttribute("operator", operator);
+        custom.setAttribute("val", scalarText(comparison.value));
+        customFilters.appendChild(custom);
+      }
       filterColumn.appendChild(customFilters);
     }
     autoFilter.appendChild(filterColumn);
   }
 }
 
-function flattenNativeFilter(
-  filter: FilterExpression
-): Array<Extract<FilterExpression, { kind: "set" | "comparison" }>> {
-  if (filter.kind === "set" || filter.kind === "comparison") return [filter];
+type NativeComparisonFilter = Extract<FilterExpression, { kind: "comparison" }>;
+type NativeColumnFilter =
+  | Extract<FilterExpression, { kind: "set" }>
+  | {
+      kind: "custom";
+      columnId: string;
+      operator: "and" | "or";
+      comparisons: readonly NativeComparisonFilter[];
+    };
+
+function nativeColumnFilters(filter: FilterExpression): NativeColumnFilter[] {
+  if (filter.kind === "set") return [filter];
+  if (filter.kind === "comparison") {
+    return [{ kind: "custom", columnId: filter.columnId, operator: "and", comparisons: [filter] }];
+  }
+  if (filter.kind === "range") {
+    const between = filter.operator === "between";
+    return [{
+      kind: "custom",
+      columnId: filter.columnId,
+      operator: between ? "and" : "or",
+      comparisons: [
+        {
+          kind: "comparison",
+          columnId: filter.columnId,
+          operator: between ? "gte" : "lt",
+          value: filter.lower
+        },
+        {
+          kind: "comparison",
+          columnId: filter.columnId,
+          operator: between ? "lte" : "gt",
+          value: filter.upper
+        }
+      ]
+    }];
+  }
+  if (filter.kind === "logical" && filter.operator === "or") {
+    if (filter.operands.length === 0 || filter.operands.length > 2) {
+      throw tableXmlError("Unsupported native table filter OR expression");
+    }
+    const comparisons = filter.operands.map((operand) => {
+      if (operand.kind !== "comparison") {
+        throw tableXmlError("Unsupported native table filter OR expression");
+      }
+      return operand;
+    });
+    const columnId = comparisons[0].columnId;
+    if (comparisons.some((comparison) => comparison.columnId !== columnId)) {
+      throw tableXmlError("Unsupported native table filter OR spans multiple columns");
+    }
+    return [{ kind: "custom", columnId, operator: "or", comparisons }];
+  }
   if (filter.kind === "logical" && filter.operator === "and") {
-    return filter.operands.flatMap(flattenNativeFilter);
+    if (filter.operands.length === 0) throw tableXmlError("Unsupported native table filter expression");
+    return mergeAndColumnFilters(filter.operands.flatMap(nativeColumnFilters));
   }
   throw tableXmlError("Unsupported native table filter expression");
+}
+
+function mergeAndColumnFilters(filters: readonly NativeColumnFilter[]): NativeColumnFilter[] {
+  const merged = new Map<string, NativeColumnFilter>();
+  const order: string[] = [];
+  for (const filter of filters) {
+    const existing = merged.get(filter.columnId);
+    if (!existing) {
+      merged.set(filter.columnId, filter);
+      order.push(filter.columnId);
+      continue;
+    }
+    if (
+      existing.kind !== "custom"
+      || filter.kind !== "custom"
+      || existing.comparisons.length !== 1
+      || filter.comparisons.length !== 1
+    ) {
+      throw tableXmlError("Unsupported native table filter has multiple expressions for one column");
+    }
+    merged.set(filter.columnId, {
+      kind: "custom",
+      columnId: filter.columnId,
+      operator: "and",
+      comparisons: [...existing.comparisons, ...filter.comparisons]
+    });
+  }
+  return order.map((columnId) => merged.get(columnId)!);
 }
 
 function nativeComparisonOperator(
