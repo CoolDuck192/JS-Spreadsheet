@@ -272,14 +272,14 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOperation(null);
   }, []);
 
-  // Invalidate during the commit itself so a settled import microtask cannot
-  // reach a stale target between a target/auth change and passive cleanup.
+  // Retire the old auth source during the commit itself. This prevents a later
+  // layout effect from starting a new attempt with the previous ready provider
+  // before passive provider preparation runs for the new source.
   useLayoutEffect(() => {
     invalidateImportAttempt();
-    return () => {
-      attemptGenerationRef.current += 1;
-      importPendingRef.current = false;
-    };
+    providerRuntime.clear();
+    providerRef.current = null;
+    updateReadiness("loading");
   }, [
     authSource.kind,
     authSource.kind === "provider" ? authSource.provider : undefined,
@@ -288,8 +288,22 @@ export function useGoogleSheetsImport(options: Readonly<{
     authSource.kind === "client" ? authSource.factory : undefined,
     configuration?.clientIdStorage,
     invalidateImportAttempt,
-    options.onImported,
-    origin
+    origin,
+    providerRuntime,
+    updateReadiness
+  ]);
+
+  // Target changes and unmounts must invalidate during commit so a settled
+  // import microtask cannot call a stale workbook/session callback.
+  useLayoutEffect(() => {
+    invalidateImportAttempt();
+    return () => {
+      attemptGenerationRef.current += 1;
+      importPendingRef.current = false;
+    };
+  }, [
+    invalidateImportAttempt,
+    options.onImported
   ]);
 
   const closeDialog = useCallback(() => {

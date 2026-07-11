@@ -586,6 +586,46 @@ describe("WorkbookSession", () => {
     expect(session.getSnapshot()).toBe(before);
   });
 
+  it("rejects generated ids that collide with another structured table", () => {
+    let workbook = structuredWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "D1", "Category");
+    workbook = setCellContent(workbook, sheetId, "E1", "Value");
+    const generatedIds = [
+      "sales-region",
+      "second-value",
+      "table-second",
+      "second-row"
+    ];
+    const createId = vi.fn(() => generatedIds.shift() ?? "unexpected-id");
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: { start: { row: 0, column: 3 }, end: { row: 1, column: 4 } },
+      name: "SecondTable",
+      headerRow: true,
+      totalsRow: false
+    })).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "TABLE_GENERATED_ID_INVALID",
+        message: "Generated structured-table IDs must be nonblank and unique"
+      }]
+    });
+    expect(createId).toHaveBeenCalledTimes(4);
+    expect(session.getSnapshot()).toBe(before);
+    expect(session.getSnapshot()).toMatchObject({
+      revision: before.revision,
+      selection: before.selection,
+      canUndo: before.canUndo,
+      canRedo: before.canRedo
+    });
+  });
+
   it("keeps selection, revision, history, and ids unchanged when structure rejects", () => {
     const createId = vi.fn(() => "unused-table-column");
     const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });

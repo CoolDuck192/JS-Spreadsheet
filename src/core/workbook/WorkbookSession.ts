@@ -632,7 +632,13 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     if (mutation.workbook === state.workbook) {
       return { status: "applied", state };
     }
-    if (commandGeneratesIds(command) && migrateWorkbookModel(mutation.workbook) === null) {
+    if (
+      commandGeneratesIds(command) &&
+      (
+        migrateWorkbookModel(mutation.workbook) === null ||
+        !hasUniqueStructuredTableIds(mutation.workbook)
+      )
+    ) {
       return {
         status: "rejected",
         reason: "validation",
@@ -848,6 +854,28 @@ function commandGeneratesIds(command: WorkbookCommand): boolean {
     || command.type === "table.create"
     || command.type === "table.resize"
     || command.type === "table.insertRows";
+}
+
+function hasUniqueStructuredTableIds(workbook: WorkbookModel): boolean {
+  const reserved = new Set<string>();
+  for (const table of workbook.tables) {
+    if (!reserve(table.id)) return false;
+    for (const column of table.columns) {
+      if (!reserve(column.id)) return false;
+    }
+    for (const rowId of table.rowIds) {
+      if (!reserve(rowId)) return false;
+    }
+  }
+  return true;
+
+  function reserve(id: unknown): boolean {
+    if (typeof id !== "string" || id.trim().length === 0 || reserved.has(id)) {
+      return false;
+    }
+    reserved.add(id);
+    return true;
+  }
 }
 
 function createPreflightIdGenerator(workbook: WorkbookModel): IdGenerator {

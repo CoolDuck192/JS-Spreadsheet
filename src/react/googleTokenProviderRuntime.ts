@@ -56,6 +56,10 @@ function resolveProviderRecord(
     return cached;
   }
 
+  // A source change retires the previous provider even when constructing or
+  // validating the replacement throws. The cache represents only the current
+  // effective source, never the last source that happened to resolve.
+  records.splice(0, records.length);
   const provider = source.kind === "provider"
     ? source.provider
     : source.factory(source.clientId);

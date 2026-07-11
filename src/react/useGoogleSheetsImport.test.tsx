@@ -742,6 +742,51 @@ describe("useGoogleSheetsImport", () => {
     expect(secondTarget).not.toHaveBeenCalled();
   });
 
+  it("does not start an import with the stale provider during an auth-change layout", async () => {
+    const providerA = provider();
+    const providerB = provider();
+    const onImported = vi.fn();
+    googleMocks.importWorkbook.mockImplementation(async (_sheet: string, importProvider: TokenProvider) => {
+      await importProvider.getAccessToken(["scope"]);
+      return result("Wrong provider");
+    });
+    const controller = renderHook((current: DynamicControllerOptions & { importInLayout: boolean }) => {
+      const importController = useGoogleSheetsImport({
+        origin: current.origin ?? "https://sheets.example.com",
+        onImported: current.onImported,
+        onError: current.onError,
+        configuration: current.configuration,
+        deprecatedTokenProviderFactory: current.deprecatedTokenProviderFactory
+      });
+      useLayoutEffect(() => {
+        if (current.importInLayout) {
+          importController.importSheet();
+        }
+      }, [current.importInLayout, importController.importSheet]);
+      return importController;
+    }, {
+      initialProps: {
+        configuration: { tokenProvider: providerA },
+        onImported,
+        importInLayout: false
+      }
+    });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+
+    controller.rerender({
+      configuration: { tokenProvider: providerB },
+      onImported,
+      importInLayout: true
+    });
+    await act(async () => Promise.resolve());
+
+    expect(googleMocks.importWorkbook).not.toHaveBeenCalled();
+    expect(providerA.getAccessToken).not.toHaveBeenCalled();
+    expect(providerB.getAccessToken).not.toHaveBeenCalled();
+    expect(onImported).not.toHaveBeenCalled();
+  });
+
   it.each([
     "managed client ID",
     "direct provider",
@@ -886,6 +931,57 @@ describe("useGoogleSheetsImport", () => {
       onImported
     });
     await waitFor(() => expect(factoryB).toHaveBeenCalledTimes(1));
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+
+    await waitFor(() => expect(factoryA).toHaveBeenCalledTimes(2));
+    expect(providerA.prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the current provider when authentication becomes missing", async () => {
+    const providerA = provider();
+    const factoryA = vi.fn(() => providerA);
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+
+    controller.rerender({
+      configuration: { tokenProviderFactory: factoryA },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("missing"));
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+
+    await waitFor(() => expect(factoryA).toHaveBeenCalledTimes(2));
+    expect(providerA.prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops the previous provider before resolving a failing replacement source", async () => {
+    const providerA = provider();
+    const factoryA = vi.fn(() => providerA);
+    const failingFactory = vi.fn((): TokenProvider => {
+      throw new Error("replacement factory failed");
+    });
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: failingFactory },
+      onImported
+    });
+    await waitFor(() => expect(failingFactory).toHaveBeenCalledTimes(1));
     controller.rerender({
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
