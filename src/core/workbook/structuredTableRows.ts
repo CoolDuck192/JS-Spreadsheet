@@ -258,15 +258,19 @@ function regenerateCalculatedColumns(workbook: WorkbookModel, table: StructuredT
 }
 
 type RowMapping = { sourceRow: number; targetRow: number };
-type RectangularEdit = { row: number; count: number; operation: "insert" | "delete" };
+export type RectangularEdit = { row: number; count: number; operation: "insert" | "delete" };
+export type RewriteWorkbookForRowEditsOptions = {
+  rewriteCalculatedFormulaMetadata?: boolean;
+};
 type RewriteOutcome =
   | { status: "committed"; workbook: WorkbookModel }
   | { status: "rejected"; workbook: WorkbookModel; issues: readonly { code: string; message: string }[] };
 
-function rewriteWorkbookForRowEdits(
+export function rewriteWorkbookForRowEdits(
   workbook: WorkbookModel,
   table: StructuredTable,
-  edits: readonly RectangularEdit[]
+  edits: readonly RectangularEdit[],
+  options: RewriteWorkbookForRowEditsOptions = {}
 ): RewriteOutcome {
   let candidate = workbook;
   let tableRowEnd = table.range.end.row;
@@ -298,6 +302,45 @@ function rewriteWorkbookForRowEdits(
       }
       sheets.push(cells ? { ...sheet, cells } : sheet);
     }
+    let tables: StructuredTable[] | undefined;
+    const tableCount = options.rewriteCalculatedFormulaMetadata ? candidate.tables.length : 0;
+    for (let tableIndex = 0; tableIndex < tableCount; tableIndex += 1) {
+      const candidateTable = candidate.tables[tableIndex];
+      const formulaSheet = candidate.sheets.find((sheet) => sheet.id === candidateTable.sheetId)!;
+      let columns: Array<StructuredTable["columns"][number]> | undefined;
+      for (let columnIndex = 0; columnIndex < candidateTable.columns.length; columnIndex += 1) {
+        const column = candidateTable.columns[columnIndex];
+        let nextColumn = column;
+        if (column.calculatedFormula) {
+          const rewritten = rewriteFormulaForRectangularRowEdit(column.calculatedFormula, {
+            formulaSheetId: formulaSheet.name,
+            editedSheetId: editedSheet.name,
+            tableColumnStart: table.range.start.column,
+            tableColumnEnd: table.range.end.column,
+            tableRowEnd,
+            row: edit.row,
+            count: edit.count,
+            operation: edit.operation,
+            sheetBounds: { rowCount: editedSheet.rowCount, columnCount: editedSheet.columnCount }
+          });
+          if (!rewritten.ok) {
+            return { status: "rejected", workbook, issues: [rewritten.issue] };
+          }
+          if (rewritten.formula !== column.calculatedFormula) {
+            nextColumn = { ...column, calculatedFormula: rewritten.formula };
+          }
+        }
+        if (nextColumn !== column && !columns) {
+          columns = candidateTable.columns.slice(0, columnIndex);
+        }
+        columns?.push(nextColumn);
+      }
+      const nextTable = columns ? { ...candidateTable, columns } : candidateTable;
+      if (nextTable !== candidateTable && !tables) {
+        tables = candidate.tables.slice(0, tableIndex);
+      }
+      tables?.push(nextTable);
+    }
     let namedRanges: WorkbookModel["namedRanges"] | undefined;
     for (let index = 0; index < candidate.namedRanges.length; index += 1) {
       const namedRange = candidate.namedRanges[index];
@@ -317,7 +360,12 @@ function rewriteWorkbookForRowEdits(
       }
       namedRanges?.push(rewritten);
     }
-    candidate = { ...candidate, sheets, ...(namedRanges ? { namedRanges } : {}) };
+    candidate = {
+      ...candidate,
+      sheets,
+      ...(tables ? { tables } : {}),
+      ...(namedRanges ? { namedRanges } : {})
+    };
     tableRowEnd += edit.operation === "insert" ? edit.count : -edit.count;
   }
   return { status: "committed", workbook: candidate };

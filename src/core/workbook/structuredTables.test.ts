@@ -195,6 +195,52 @@ describe("structured table metadata", () => {
     expect(getCellContent(withoutTotals, "sheet-1", "B4")).toBeNull();
   });
 
+  it("rewrites moved and external formulas in both header-toggle directions", () => {
+    const workbook = headerFormulaFixture();
+    const services = deterministicServices();
+
+    const withHeader = commit(workbook, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: true
+    }, services);
+
+    expect(getCellContent(withHeader, "sheet-1", "B2")).toBe("=Z1+A2+Sheet2!B1");
+    expect(getCellContent(withHeader, "sheet-1", "D1")).toBe("=SUM(A2:A4)");
+    expect(getCellContent(withHeader, "sheet-summary", "A1")).toBe("=SUM(Sheet1!A2:A4)");
+    expect(withHeader.tables[0].columns[1].calculatedFormula).toBe("=Z1+A2+Sheet2!B1");
+
+    const withoutHeader = commit(withHeader, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: false
+    }, services);
+
+    expect(getCellContent(withoutHeader, "sheet-1", "B1")).toBe("=Z1+A1+Sheet2!B1");
+    expect(getCellContent(withoutHeader, "sheet-1", "D1")).toBe("=SUM(A1:A3)");
+    expect(getCellContent(withoutHeader, "sheet-summary", "A1")).toBe("=SUM(Sheet1!A1:A3)");
+    expect(withoutHeader.tables[0].columns[1].calculatedFormula).toBe("=Z1+A1+Sheet2!B1");
+  });
+
+  it("keeps the translated calculated-column anchor during later regeneration", () => {
+    const workbook = headerFormulaFixture();
+    const services = deterministicServices();
+    const withHeader = commit(workbook, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: true
+    }, services);
+
+    const inserted = commit(withHeader, {
+      type: "table.insertRows",
+      tableId: "table-formulas",
+      count: 1
+    }, services);
+
+    expect(getCellContent(inserted, "sheet-1", "B2")).toBe("=Z1+A2+Sheet2!B1");
+    expect(getCellContent(inserted, "sheet-1", "B5")).toBe("=Z4+A5+Sheet2!B4");
+  });
+
   it("toggles headers and totals without replacing body row IDs", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "Ada");
@@ -328,6 +374,49 @@ function totalsResizeFixture(overrides: Record<string, string | number> = {}): W
         { id: "column-amount", name: "Amount", sheetColumn: 1, totalsFunction: "sum" }
       ],
       rowIds: ["row-ada", "row-grace", "row-linus", "row-margaret"]
+    }]
+  };
+}
+
+function headerFormulaFixture(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  return {
+    ...workbook,
+    sheets: [
+      {
+        ...sheet,
+        cells: {
+          A1: 1, B1: "=Z1+A1+Sheet2!B1",
+          A2: 2, B2: "=Z2+A2+Sheet2!B2",
+          A3: 3, B3: "=Z3+A3+Sheet2!B3",
+          D1: "=SUM(A1:A3)"
+        }
+      },
+      {
+        ...sheet,
+        id: "sheet-summary",
+        name: "Summary",
+        cells: { A1: "=SUM(Sheet1!A1:A3)" }
+      }
+    ],
+    tables: [{
+      id: "table-formulas",
+      name: "FormulaTable",
+      sheetId: "sheet-1",
+      range: range(0, 0, 2, 1),
+      headerRow: false,
+      totalsRow: false,
+      columns: [
+        { id: "column-value", name: "Value", sheetColumn: 0 },
+        {
+          id: "column-formula",
+          name: "Formula",
+          sheetColumn: 1,
+          calculatedFormula: "=Z1+A1+Sheet2!B1"
+        }
+      ],
+      rowIds: ["row-1", "row-2", "row-3"]
     }]
   };
 }

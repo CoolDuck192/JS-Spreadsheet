@@ -12,7 +12,6 @@ import type {
 } from "../../types";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { formatCellAddress } from "../../lib/addressing";
-import { translateFormulaReferences } from "../../lib/formulaReferences";
 import { getCellContent, getCellReadOnly, setCellContent, setCellFormat } from "../../lib/workbook";
 import { parseCellInput } from "../values/parseCellInput";
 import type { FilterExpression, TableSort } from "../../table/core/query";
@@ -21,6 +20,7 @@ import { isSupportedTableAggregate, migrateTableFilter } from "./migrateWorkbook
 import {
   deleteStructuredTableRows,
   insertStructuredTableRows,
+  rewriteWorkbookForRowEdits,
   setStructuredTableCalculatedColumn,
   sortStructuredTableRows
 } from "./structuredTableRows";
@@ -450,21 +450,51 @@ function setHeaderRow(workbook: WorkbookModel, tableId: string, enabled: boolean
     if (!rowSliceIsEmpty(workbook, table.sheetId, table.range.end.row + 1, table.range)) {
       return reject(workbook, "TABLE_RANGE_BLOCKED", "Enabling headers would overwrite populated cells");
     }
-    let next = shiftTableSlice(workbook, table, table.range.start.row, table.range.end.row, 1);
-    for (const column of table.columns) {
+    const rewritten = rewriteWorkbookForRowEdits(workbook, table, [{
+      row: table.range.start.row,
+      count: 1,
+      operation: "insert"
+    }], { rewriteCalculatedFormulaMetadata: true });
+    if (rewritten.status === "rejected") return rewritten;
+    const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+    let next = shiftTableSlice(
+      rewritten.workbook,
+      rewrittenTable,
+      table.range.start.row,
+      table.range.end.row,
+      1
+    );
+    for (const column of rewrittenTable.columns) {
       next = setRawCell(next, table.sheetId, { row: table.range.start.row, column: column.sheetColumn }, column.name);
     }
-    return commitTable(next, { ...table, range, headerRow: true });
+    const nextTable = { ...rewrittenTable, range, headerRow: true };
+    next = regenerateStructuredTableTotals(next, nextTable);
+    return commitTable(next, nextTable);
   }
 
   if (table.range.end.row - 1 < table.range.start.row) {
     return reject(workbook, "TABLE_RANGE_BLOCKED", "A table must retain at least one physical row");
   }
 
-  let next = shiftTableSlice(workbook, table, table.range.start.row + 1, table.range.end.row, -1);
+  const rewritten = rewriteWorkbookForRowEdits(workbook, table, [{
+    row: table.range.start.row,
+    count: 1,
+    operation: "delete"
+  }], { rewriteCalculatedFormulaMetadata: true });
+  if (rewritten.status === "rejected") return rewritten;
+  const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+  let next = shiftTableSlice(
+    rewritten.workbook,
+    rewrittenTable,
+    table.range.start.row + 1,
+    table.range.end.row,
+    -1
+  );
   next = clearRowSlice(next, table.sheetId, table.range.end.row, table.range);
   const range = { ...cloneRange(table.range), end: { ...table.range.end, row: table.range.end.row - 1 } };
-  return commitTable(next, { ...table, range, headerRow: false });
+  const nextTable = { ...rewrittenTable, range, headerRow: false };
+  next = regenerateStructuredTableTotals(next, nextTable);
+  return commitTable(next, nextTable);
 }
 
 function setTotalsRow(workbook: WorkbookModel, tableId: string, enabled: boolean): StructuredTableReduction {
@@ -700,7 +730,7 @@ function shiftTableSlice(
 ): WorkbookModel {
   const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === table.sheetId);
   const sheet = workbook.sheets[sheetIndex];
-  const cells = shiftAddressRecord(sheet.cells, table.range, startRow, endRow, rowOffset, true);
+  const cells = shiftAddressRecord(sheet.cells, table.range, startRow, endRow, rowOffset);
   const formats = shiftAddressRecord(sheet.formats, table.range, startRow, endRow, rowOffset);
   const validations = shiftAddressRecord(sheet.validations, table.range, startRow, endRow, rowOffset);
   const comments = shiftAddressRecord(sheet.comments, table.range, startRow, endRow, rowOffset);
@@ -780,8 +810,7 @@ function shiftAddressRecord<T>(
   tableRange: CellRange,
   startRow: number,
   endRow: number,
-  rowOffset: number,
-  translateFormulas = false
+  rowOffset: number
 ): Record<string, T> {
   const next = { ...record };
   const sources: Array<{ source: string; target: string; value: T }> = [];
@@ -792,11 +821,7 @@ function shiftAddressRecord<T>(
       delete next[source];
       delete next[target];
       if (Object.prototype.hasOwnProperty.call(record, source)) {
-        let value = record[source];
-        if (translateFormulas && typeof value === "string" && value.startsWith("=")) {
-          value = translateFormulaReferences(value, { rowOffset, columnOffset: 0 }) as T;
-        }
-        sources.push({ source, target, value });
+        sources.push({ source, target, value: record[source] });
       }
     }
   }

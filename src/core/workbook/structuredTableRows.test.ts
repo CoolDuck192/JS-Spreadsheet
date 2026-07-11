@@ -215,6 +215,25 @@ describe("structured table rows", () => {
     expect(table(result.workbook).columns[4].calculatedFormula).toBe("=C2*D2+$A$1");
   });
 
+  it("keeps a calculated-column anchor at the first body row when prepending", () => {
+    const workbook = calculatedFixture();
+    const calculated = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=C2*D2+$A$1",
+      servicesFor(workbook)
+    );
+    const prepended = insertStructuredTableRows(calculated.workbook, "table-calc", {
+      beforeRowId: "row-1",
+      count: 1
+    }, servicesFor(calculated.workbook));
+
+    expect(prepended.status).toBe("committed");
+    expect(table(prepended.workbook).columns[4].calculatedFormula).toBe("=C2*D2+$A$1");
+    expect(getCellContent(prepended.workbook, "sheet-1", "E2")).toBe("=C2*D2+$A$1");
+  });
+
   it("preserves single-quoted sheet names while regenerating calculated columns", () => {
     const workbook = calculatedFixture();
     const result = setStructuredTableCalculatedColumn(
