@@ -12,9 +12,10 @@ export function useClampedMenuPosition(x: number, y: number) {
       setPosition({ left: x, top: y });
       return;
     }
+    const menuElement = menu;
 
     function updatePosition() {
-      const rect = menu.getBoundingClientRect();
+      const rect = menuElement.getBoundingClientRect();
       const maxLeft = Math.max(
         MENU_VIEWPORT_MARGIN,
         window.innerWidth - rect.width - MENU_VIEWPORT_MARGIN
