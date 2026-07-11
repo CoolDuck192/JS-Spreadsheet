@@ -130,16 +130,23 @@ describe("structured table rows", () => {
     }
   });
 
-  it("moves unsupported external body formulas without rewriting or blocking the row edit", () => {
-    const workbook = rowFixture({ B3: "='[Book.xlsx]Data'!D3" });
+  it.each([
+    ["mixed-column range", "=SUM(A3:C3)"],
+    ["external workbook reference", "='[Book.xlsx]Data'!D3"]
+  ])("rejects row insertion atomically for an unsupported body formula with a %s", (_label, formula) => {
+    const workbook = rowFixture({ B3: formula });
 
     const result = insertStructuredTableRows(workbook, "table-1", {
       beforeRowId: "row-2",
       count: 1
     }, servicesFor(workbook));
 
-    expect(result.status).toBe("committed");
-    expect(getCellContent(result.workbook, "sheet-1", "B4")).toBe("='[Book.xlsx]Data'!D3");
+    expect(result.status).toBe("rejected");
+    expect(result.workbook).toBe(workbook);
+    expect(result).toMatchObject({
+      issues: [{ code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }]
+    });
+    expect(getCellContent(result.workbook, "sheet-1", "B3")).toBe(formula);
   });
 
   it("rejects unknown or duplicate anchors and row IDs without partial movement", () => {

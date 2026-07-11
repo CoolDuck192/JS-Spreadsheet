@@ -7,7 +7,7 @@ import type {
 import type { TableSort } from "../../table/core/query";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { compareDeterministicText } from "../../lib/filters";
-import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
+import { formatCellAddress } from "../../lib/addressing";
 import {
   rewriteFormulaForRectangularRowEdit,
   rewriteRowIntervalForRectangularEdit,
@@ -278,18 +278,6 @@ function rewriteWorkbookForRowEdits(
       let cells: SheetModel["cells"] | undefined;
       for (const [address, value] of Object.entries(sheet.cells)) {
         if (typeof value !== "string" || !value.startsWith("=")) continue;
-        let coordinate: { row: number; column: number };
-        try {
-          coordinate = parseCellAddress(address);
-        } catch {
-          continue;
-        }
-        // The totals row is included because insert/delete remapping moves it with the table body.
-        const isInsideTableDataOrTotals = sheet.id === table.sheetId
-          && coordinate.row >= table.range.start.row + Number(table.headerRow)
-          && coordinate.row <= table.range.end.row
-          && coordinate.column >= table.range.start.column
-          && coordinate.column <= table.range.end.column;
         const rewritten = rewriteFormulaForRectangularRowEdit(value, {
           formulaSheetId: sheet.name,
           editedSheetId: editedSheet.name,
@@ -302,7 +290,6 @@ function rewriteWorkbookForRowEdits(
           sheetBounds: { rowCount: editedSheet.rowCount, columnCount: editedSheet.columnCount }
         });
         if (!rewritten.ok) {
-          if (isInsideTableDataOrTotals) continue;
           return { status: "rejected", workbook, issues: [rewritten.issue] };
         }
         if (rewritten.formula !== value) {
