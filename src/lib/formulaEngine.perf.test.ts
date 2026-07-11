@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createFormulaEngine } from "./formulaEngine";
 import { createBlankWorkbook, setCellContent } from "./workbook";
 import type { WorkbookModel } from "../types";
+import { insertStructuredTableRows } from "../core/workbook/structuredTableRows";
 
 describe("formula engine at scale", () => {
   it("leaves static structured totals untouched for unrelated cell edits", () => {
@@ -43,6 +44,26 @@ describe("formula engine at scale", () => {
       expect(batch).toHaveBeenCalledTimes(2);
     } finally {
       batch.mockRestore();
+      engine.destroy();
+    }
+  });
+
+  it("keeps table row insertion on the incremental engine path when named ranges are unchanged", () => {
+    const workbook = structuredTotalWorkbook();
+    const engine = createFormulaEngine(workbook);
+    const destroy = vi.spyOn(HyperFormula.prototype, "destroy");
+    try {
+      const inserted = insertStructuredTableRows(workbook, "table-1", { count: 1 }, {
+        createId: () => "row-new",
+        getCellEvaluation: () => null
+      });
+      expect(inserted.status).toBe("committed");
+
+      engine.update(inserted.workbook);
+
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      destroy.mockRestore();
       engine.destroy();
     }
   });

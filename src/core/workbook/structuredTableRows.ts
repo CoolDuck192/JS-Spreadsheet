@@ -299,8 +299,9 @@ function rewriteWorkbookForRowEdits(
       }
       sheets.push(cells ? { ...sheet, cells } : sheet);
     }
-    const namedRanges = [] as WorkbookModel["namedRanges"];
-    for (const namedRange of candidate.namedRanges) {
+    let namedRanges: WorkbookModel["namedRanges"] | undefined;
+    for (let index = 0; index < candidate.namedRanges.length; index += 1) {
+      const namedRange = candidate.namedRanges[index];
       const rewritten = rewriteNamedRange(namedRange, table, edit, tableRowEnd);
       if (rewritten === "unsupported") {
         return {
@@ -312,9 +313,12 @@ function rewriteWorkbookForRowEdits(
           }]
         };
       }
-      namedRanges.push(rewritten);
+      if (rewritten !== namedRange && !namedRanges) {
+        namedRanges = candidate.namedRanges.slice(0, index);
+      }
+      namedRanges?.push(rewritten);
     }
-    candidate = { ...candidate, sheets, namedRanges };
+    candidate = { ...candidate, sheets, ...(namedRanges ? { namedRanges } : {}) };
     tableRowEnd += edit.operation === "insert" ? edit.count : -edit.count;
   }
   return { status: "committed", workbook: candidate };

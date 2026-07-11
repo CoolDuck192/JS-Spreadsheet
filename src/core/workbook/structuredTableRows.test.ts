@@ -70,6 +70,26 @@ describe("structured table rows", () => {
     expect(composite.namedRanges).toEqual(sequential.namedRanges);
   });
 
+  it("preserves named-range array identity when a table row edit leaves every range unchanged", () => {
+    const base = rowFixture();
+    const workbook: WorkbookModel = {
+      ...base,
+      namedRanges: [{
+        name: "Unrelated",
+        sheetId: "sheet-1",
+        range: { start: { row: 10, column: 3 }, end: { row: 11, column: 3 } }
+      }]
+    };
+
+    const inserted = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+
+    expect(inserted.status).toBe("committed");
+    expect(inserted.workbook.namedRanges).toBe(workbook.namedRanges);
+  });
+
   it("keeps out-of-table references pinned when body formulas move", () => {
     const workbook = rowFixture({ B3: "=A3+D3+1" });
 
