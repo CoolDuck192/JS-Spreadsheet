@@ -109,6 +109,86 @@ export function getStructuredTableBodyRange(table: StructuredTable): CellRange |
       };
 }
 
+export function reconcileStructuredTableContentWrites(
+  workbook: WorkbookModel,
+  sheetId: string,
+  coordinates: readonly CellCoord[]
+): StructuredTableReduction {
+  const touched = new Set(coordinates.map((coordinate) => `${coordinate.row}:${coordinate.column}`));
+  const headerNames = new Map<string, readonly string[]>();
+
+  for (const table of workbook.tables) {
+    if (table.sheetId !== sheetId || !table.headerRow) continue;
+    const headerTouched = table.columns.some((column) =>
+      touched.has(`${table.range.start.row}:${column.sheetColumn}`)
+    );
+    if (!headerTouched) continue;
+
+    const names: string[] = [];
+    const normalizedNames = new Set<string>();
+    for (const column of table.columns) {
+      const value = getCellContent(
+        workbook,
+        sheetId,
+        formatCellAddress({ row: table.range.start.row, column: column.sheetColumn })
+      );
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be nonblank and unique");
+      }
+      const normalized = normalizeStructuredTableHeader(value);
+      if (normalizedNames.has(normalized)) {
+        return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be nonblank and unique");
+      }
+      normalizedNames.add(normalized);
+      names.push(value);
+    }
+    headerNames.set(table.id, names);
+  }
+
+  let changed = false;
+  const tables = workbook.tables.map((table) => {
+    if (table.sheetId !== sheetId) return table;
+    const names = headerNames.get(table.id);
+    const totalsTouched = table.totalsRow && table.columns.some((column) =>
+      touched.has(`${table.range.end.row}:${column.sheetColumn}`)
+    );
+    if (!names && !totalsTouched) return table;
+
+    const columns = table.columns.map((column, index) => {
+      let next = column;
+      const name = names?.[index];
+      if (name !== undefined && name !== column.name) {
+        next = { ...next, name };
+      }
+      if (table.totalsRow && touched.has(`${table.range.end.row}:${column.sheetColumn}`)) {
+        const value = getCellContent(
+          workbook,
+          sheetId,
+          formatCellAddress({ row: table.range.end.row, column: column.sheetColumn })
+        );
+        const totalsLabel = index === 0
+          && typeof value === "string"
+          && !value.startsWith("=")
+          && value.trim().length > 0
+          ? value
+          : undefined;
+        if (next.totalsFunction !== undefined || next.totalsLabel !== totalsLabel) {
+          const { totalsFunction: _function, totalsLabel: _label, ...base } = next;
+          next = totalsLabel === undefined ? base : { ...base, totalsLabel };
+        }
+      }
+      return next;
+    });
+
+    if (columns.every((column, index) => column === table.columns[index])) return table;
+    changed = true;
+    return { ...table, columns };
+  });
+
+  return changed
+    ? { status: "committed", workbook: { ...workbook, tables } }
+    : { status: "unchanged", workbook };
+}
 export function reduceStructuredTableCommand(
   workbook: WorkbookModel,
   command: StructuredTableCommand,

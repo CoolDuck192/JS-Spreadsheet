@@ -16,6 +16,7 @@ import {
   setSheetProtection
 } from "../../lib/workbook";
 import type { CommandEnvelope, CommandResult } from "../commands/types";
+import { migrateWorkbookModel } from "./migrateWorkbook";
 import { applyWorkbookMutation, type WorkbookCommand } from "./commands";
 
 const cell = { row: 0, column: 0 } as const;
@@ -281,6 +282,225 @@ describe("WorkbookCommand", () => {
       .toBe("=A4*2");
   });
 
+  it.each([
+    ["range.clear", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.clear",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 0, column: 1 } },
+      mode: "contents"
+    })],
+    ["range.fill", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.fill",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 0, column: 1 } },
+      direction: "right"
+    })],
+    ["range.sort", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.sort",
+      sheetId: workbook.activeSheetId,
+      range: workbook.tables[0].range,
+      direction: "asc",
+      sortColumn: 0
+    })],
+    ["range.removeDuplicates", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.removeDuplicates",
+      sheetId: workbook.activeSheetId,
+      range: workbook.tables[0].range
+    })],
+    ["clipboard.move", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "clipboard.move",
+      sourceSheetId: workbook.activeSheetId,
+      source: { start: { row: 0, column: 0 }, end: { row: 0, column: 1 } },
+      targetSheetId: workbook.activeSheetId,
+      target: { row: 5, column: 0 }
+    })],
+    ["range.autoFill", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.autoFill",
+      sheetId: workbook.activeSheetId,
+      source: { start: { row: 1, column: 0 }, end: { row: 1, column: 1 } },
+      target: { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } }
+    })]
+  ] as const)("rejects %s when it would invalidate a structured-table header", (_name, commandFor) => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, commandFor(workbook) as WorkbookCommand);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: expect.stringMatching(/^TABLE_HEADER/) }]
+    });
+    expect(getCellContent(workbook, workbook.activeSheetId, "A1")).toBe("Name");
+    expect(workbook.tables[0].columns.map((column) => column.name)).toEqual(["Name", "Amount"]);
+  });
+
+  it.each([
+    [
+      "clipboard.paste",
+      (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+        type: "clipboard.paste",
+        sheetId: workbook.activeSheetId,
+        target: { row: 0, column: 0 },
+        payload: headerClipboard("Customer", "Value"),
+        mode: "all"
+      }),
+      ["Customer", "Value"]
+    ],
+    [
+      "clipboard.pasteMatrix",
+      (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+        type: "clipboard.pasteMatrix",
+        sheetId: workbook.activeSheetId,
+        target: { row: 0, column: 0 },
+        matrix: [["Customer", "Value"]]
+      }),
+      ["Customer", "Value"]
+    ]
+  ] as const)("reconciles %s header writes with table column metadata", (_name, commandFor, expected) => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, commandFor(workbook) as WorkbookCommand);
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns.map((column) => column.name)).toEqual(expected);
+    expect(["A1", "B1"].map((address) =>
+      getCellContent(result.workbook, workbook.activeSheetId, address)
+    )).toEqual(expected);
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(result.workbook)))).not.toBeNull();
+  });
+
+  it("reconciles an atomic table-header swap without rebinding column ids", () => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: workbook.activeSheetId,
+      target: { row: 0, column: 0 },
+      matrix: [["Amount", "Name"]]
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns).toMatchObject([
+      { id: "content-name", name: "Amount", totalsLabel: "Total" },
+      { id: "content-amount", name: "Name", totalsFunction: "sum" }
+    ]);
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(result.workbook)))).not.toBeNull();
+  });
+
+  it("does not reconcile source-only totals cells during range fill", () => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, {
+      type: "range.fill",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 3, column: 1 }, end: { row: 4, column: 1 } },
+      direction: "down"
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns[1].totalsFunction).toBe("sum");
+  });
+
+  it("rejects normalized duplicate table headers atomically", () => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: workbook.activeSheetId,
+      target: { row: 0, column: 0 },
+      matrix: [["Name", "ＮＡＭＥ"]]
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "TABLE_HEADER_INVALID" }]
+    });
+    expect(workbook.tables[0].columns.map((column) => column.name)).toEqual(["Name", "Amount"]);
+  });
+
+  it("reconciles valid auto-filled table headers", () => {
+    const workbook = structuredContentWorkbook();
+    const renamed = apply(workbook, {
+      type: "cell.set",
+      sheetId: workbook.activeSheetId,
+      address: "A1",
+      input: "Column1"
+    });
+    expect(renamed.status).toBe("applied");
+    if (renamed.status !== "applied") return;
+
+    const result = apply(renamed.workbook, {
+      type: "range.autoFill",
+      sheetId: workbook.activeSheetId,
+      source: { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      target: { start: { row: 0, column: 0 }, end: { row: 0, column: 1 } }
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns.map((column) => column.name))
+      .toEqual(["Column1", "Column2"]);
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(result.workbook)))).not.toBeNull();
+  });
+
+  it("reconciles totals metadata when a batch paste overwrites totals cells", () => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: workbook.activeSheetId,
+      target: { row: 3, column: 0 },
+      matrix: [["Grand total", "999"]]
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns[0]).toMatchObject({ totalsLabel: "Grand total" });
+    expect(result.workbook.tables[0].columns[1].totalsFunction).toBeUndefined();
+    expect(result.workbook.tables[0].columns[1].totalsLabel).toBeUndefined();
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(result.workbook)))).not.toBeNull();
+  });
+
+  it("removes totals metadata when totals contents are cleared", () => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, {
+      type: "range.clear",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 3, column: 0 }, end: { row: 3, column: 1 } },
+      mode: "contents"
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(result.workbook.tables[0].columns.every((column) =>
+      column.totalsFunction === undefined && column.totalsLabel === undefined
+    )).toBe(true);
+    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(result.workbook)))).not.toBeNull();
+  });
+
+  it("rejects batch writes into calculated table columns", () => {
+    const workbook = calculatedDispatchWorkbook();
+
+    const result = apply(workbook, {
+      type: "clipboard.pasteMatrix",
+      sheetId: workbook.activeSheetId,
+      target: { row: 1, column: 4 },
+      matrix: [["999"]]
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "permission",
+      issues: [{ code: "TABLE_CALCULATED_COLUMN_READ_ONLY", address: "E2" }]
+    });
+    expect(getCellContent(workbook, workbook.activeSheetId, "E2")).toBe("=B2*$C$2");
+  });
+
   it("clears and replaces direct formats without removing conditional formats", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
@@ -485,6 +705,66 @@ describe("WorkbookCommand", () => {
     expect(result.workbook.sheets[1].freezeTopRow).toBe(true);
   });
 });
+
+function structuredContentWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-content-dispatch",
+    name: "ContentDispatchTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 0, column: 0 }, end: { row: 3, column: 1 } },
+    headerRow: true,
+    totalsRow: true,
+    columns: [
+      { id: "content-name", name: "Name", sheetColumn: 0, totalsLabel: "Total" },
+      { id: "content-amount", name: "Amount", sheetColumn: 1, totalsFunction: "sum" }
+    ],
+    rowIds: ["content-row-1", "content-row-2"]
+  };
+  return {
+    ...workbook,
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A1: "Name",
+        B1: "Amount",
+        A2: "Ada",
+        B2: 1,
+        A3: "Grace",
+        B3: 2,
+        A4: "Total",
+        B4: "=SUBTOTAL(109,B2:B3)"
+      }
+    }]
+  };
+}
+
+function headerClipboard(first: string, second: string) {
+  return {
+    range: { start: { row: 0, column: 0 }, end: { row: 0, column: 1 } },
+    cells: [[
+      {
+        sourceAddress: "A1",
+        content: first,
+        displayContent: first,
+        format: {},
+        validation: null,
+        comment: null,
+        hyperlink: null
+      },
+      {
+        sourceAddress: "B1",
+        content: second,
+        displayContent: second,
+        format: {},
+        validation: null,
+        comment: null,
+        hyperlink: null
+      }
+    ]]
+  } as const;
+}
 
 function calculatedDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
   const workbook = createBlankWorkbook();

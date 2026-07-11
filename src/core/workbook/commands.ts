@@ -75,6 +75,7 @@ import { createRandomId, type IdGenerator, type IdKind } from "../ids";
 import {
   getStructuredTableAtCell,
   getStructuredTableBodyRange,
+  reconcileStructuredTableContentWrites,
   reduceStructuredTableCommand,
   type StructuredTableCommand
 } from "./structuredTables";
@@ -314,9 +315,7 @@ export function applyWorkbookMutation(
           { numberFormat: parsed.inferredNumberFormat }
         );
       }
-      const validated = validatedMutation(candidate, command.sheetId, [command.address], context);
-      if (validated.status === "rejected") return validated;
-      return applied(updateCustomTotalsMetadata(candidate, command.sheetId, coordinate, parsed.stored));
+      return validatedContentMutation(candidate, command.sheetId, [command.address], context);
     }
     case "cell.comment.set": {
       parseCellAddress(command.address);
@@ -341,7 +340,10 @@ export function applyWorkbookMutation(
     case "range.clear": {
       const range = checkedRange(command.range);
       const addresses = getRangeAddresses(range);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const mutatesContent = command.mode === "contents" || command.mode === "all";
+      const permission = mutatesContent
+        ? contentMutationPermission(workbook, command.sheetId, addresses)
+        : writableAddresses(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
@@ -361,7 +363,7 @@ export function applyWorkbookMutation(
         candidate = setCellValidation(candidate, command.sheetId, range, null);
       }
       return command.mode === "contents" || command.mode === "all"
-        ? validatedMutation(candidate, command.sheetId, addresses, context)
+        ? validatedContentMutation(candidate, command.sheetId, addresses, context)
         : applied(candidate);
     }
     case "range.format": {
@@ -449,32 +451,41 @@ export function applyWorkbookMutation(
     }
     case "range.fill": {
       const range = checkedRange(command.range);
-      const addresses = getRangeAddresses(range);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const addresses = fillDestinationAddresses(range, command.direction);
+      const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
       const candidate = command.direction === "down"
         ? fillDown(workbook, command.sheetId, range)
         : fillRight(workbook, command.sheetId, range);
-      return validatedMutation(candidate, command.sheetId, addresses, context);
+      return validatedContentMutation(candidate, command.sheetId, addresses, context);
     }
     case "range.autoFill": {
       const source = checkedRange(command.source);
       const target = checkedRange(command.target);
       const sourceAddresses = new Set(getRangeAddresses(source));
       const addresses = getRangeAddresses(target).filter((address) => !sourceAddresses.has(address));
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
       const candidate = autoFillRange(workbook, command.sheetId, command.source, target);
-      return validatedMutation(candidate, command.sheetId, addresses, context);
+      return validatedContentMutation(candidate, command.sheetId, addresses, context);
     }
     case "range.sort": {
       const range = checkedRange(command.range);
+      const headerPermission = tableHeaderMutationPermission(
+        workbook,
+        command.sheetId,
+        range,
+        "Sorting cannot include a structured-table header"
+      );
+      if (headerPermission) {
+        return headerPermission;
+      }
       const addresses = getRangeAddresses(range);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
@@ -483,16 +494,25 @@ export function applyWorkbookMutation(
         sortColumn: command.sortColumn,
         readValue: (address) => context.evaluateCell(workbook, command.sheetId, address)
       });
-      return validatedMutation(candidate, command.sheetId, addresses, context);
+      return validatedContentMutation(candidate, command.sheetId, addresses, context);
     }
     case "range.removeDuplicates": {
       const range = checkedRange(command.range);
+      const headerPermission = tableHeaderMutationPermission(
+        workbook,
+        command.sheetId,
+        range,
+        "Duplicate removal cannot include a structured-table header"
+      );
+      if (headerPermission) {
+        return headerPermission;
+      }
       const addresses = getRangeAddresses(range);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
-      return validatedMutation(
+      return validatedContentMutation(
         removeDuplicateRows(workbook, command.sheetId, range).workbook,
         command.sheetId,
         addresses,
@@ -504,25 +524,37 @@ export function applyWorkbookMutation(
       const clipboard = mutableClipboard(command.payload);
       const addresses = previewRichPaste(clipboard, startAddress, { mode: command.mode })
         .map((cell) => cell.address);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const mutatesContent = command.mode !== "formats";
+      const permission = mutatesContent
+        ? contentMutationPermission(workbook, command.sheetId, addresses)
+        : writableAddresses(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
       const candidate = pasteRichRange(workbook, command.sheetId, startAddress, clipboard, {
         mode: command.mode
       });
-      return validatedMutation(candidate, command.sheetId, addresses, context);
+      return mutatesContent
+        ? validatedContentMutation(candidate, command.sheetId, addresses, context)
+        : validatedMutation(candidate, command.sheetId, addresses, context);
     }
     case "clipboard.move": {
       const source = checkedRange(command.source);
       const targetAddress = formatCellAddress(checkedCoordinate(command.target));
       const clipboard = copyRichRange(workbook, command.sourceSheetId, source);
       const targetAddresses = previewRichPaste(clipboard, targetAddress).map((cell) => cell.address);
-      const sourceAddresses = getRangeAddresses(source);
-      const sourcePermission = writableAddresses(workbook, command.sourceSheetId, sourceAddresses);
-      const targetPermission = writableAddresses(workbook, command.targetSheetId, targetAddresses);
-      if (sourcePermission || targetPermission) {
-        return sourcePermission ?? targetPermission!;
+      const targetAddressSet = command.sourceSheetId === command.targetSheetId
+        ? new Set(targetAddresses)
+        : null;
+      const sourceAddresses = getRangeAddresses(source)
+        .filter((address) => !targetAddressSet?.has(address));
+      const writes = combineContentWrites([
+        { sheetId: command.sourceSheetId, addresses: sourceAddresses },
+        { sheetId: command.targetSheetId, addresses: targetAddresses }
+      ]);
+      for (const write of writes) {
+        const permission = contentMutationPermission(workbook, write.sheetId, write.addresses);
+        if (permission) return permission;
       }
       const candidate = moveRichRange(
         workbook,
@@ -531,16 +563,13 @@ export function applyWorkbookMutation(
         targetAddress,
         clipboard
       );
-      const sourceValidation = validatedMutation(candidate, command.sourceSheetId, sourceAddresses, context);
-      return sourceValidation.status === "rejected"
-        ? sourceValidation
-        : validatedMutation(candidate, command.targetSheetId, targetAddresses, context);
+      return validatedContentMutations(candidate, writes, context);
     }
     case "clipboard.pasteMatrix": {
       const target = checkedCoordinate(command.target);
       const matrix = cloneStringMatrix(command.matrix);
       const addresses = matrixAddresses(target, matrix);
-      const permission = writableAddresses(workbook, command.sheetId, addresses);
+      const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
       }
@@ -550,7 +579,7 @@ export function applyWorkbookMutation(
         formatCellAddress(target),
         matrix
       );
-      return validatedMutation(candidate, command.sheetId, addresses, context);
+      return validatedContentMutation(candidate, command.sheetId, addresses, context);
     }
     case "rows.resize": {
       checkedDimension(command.height);
@@ -747,6 +776,130 @@ function applied(workbook: WorkbookModel): WorkbookMutationResult {
   return { status: "applied", workbook };
 }
 
+type ContentWrite = {
+  readonly sheetId: string;
+  readonly addresses: readonly string[];
+};
+
+function fillDestinationAddresses(
+  range: CellRange,
+  direction: "down" | "right"
+): string[] {
+  if (direction === "down") {
+    return range.start.row === range.end.row
+      ? []
+      : getRangeAddresses({
+          start: { row: range.start.row + 1, column: range.start.column },
+          end: range.end
+        });
+  }
+  return range.start.column === range.end.column
+    ? []
+    : getRangeAddresses({
+        start: { row: range.start.row, column: range.start.column + 1 },
+        end: range.end
+      });
+}
+
+function combineContentWrites(writes: readonly ContentWrite[]): ContentWrite[] {
+  const addressesBySheet = new Map<string, Set<string>>();
+  for (const write of writes) {
+    const addresses = addressesBySheet.get(write.sheetId) ?? new Set<string>();
+    for (const address of write.addresses) addresses.add(address);
+    addressesBySheet.set(write.sheetId, addresses);
+  }
+  return [...addressesBySheet].map(([sheetId, addresses]) => ({
+    sheetId,
+    addresses: [...addresses]
+  }));
+}
+
+function contentMutationPermission(
+  workbook: WorkbookModel,
+  sheetId: string,
+  addresses: readonly string[]
+): WorkbookMutationResult | null {
+  const permission = writableAddresses(workbook, sheetId, addresses);
+  if (permission) return permission;
+
+  for (const address of new Set(addresses)) {
+    const coordinate = parseCellAddress(address);
+    const table = getStructuredTableAtCell(workbook, sheetId, coordinate);
+    if (!table) continue;
+    const column = table.columns.find((candidate) => candidate.sheetColumn === coordinate.column);
+    const body = getStructuredTableBodyRange(table);
+    if (column?.calculatedFormula && body
+      && coordinate.row >= body.start.row
+      && coordinate.row <= body.end.row) {
+      return {
+        status: "rejected",
+        reason: "permission",
+        issues: [{
+          code: "TABLE_CALCULATED_COLUMN_READ_ONLY",
+          message: "Calculated table columns are read-only",
+          sheetId,
+          address
+        }]
+      };
+    }
+  }
+  return null;
+}
+
+function tableHeaderMutationPermission(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  message: string
+): WorkbookMutationResult | null {
+  const intersectsHeader = workbook.tables.some((table) => table.sheetId === sheetId
+    && table.headerRow
+    && rangesIntersect(range, {
+      start: { row: table.range.start.row, column: table.range.start.column },
+      end: { row: table.range.start.row, column: table.range.end.column }
+    }));
+  return intersectsHeader
+    ? {
+        status: "rejected",
+        reason: "validation",
+        issues: [{ code: "TABLE_HEADER_MUTATION_UNSUPPORTED", message, sheetId }]
+      }
+    : null;
+}
+
+function validatedContentMutation(
+  workbook: WorkbookModel,
+  sheetId: string,
+  addresses: readonly string[],
+  context: WorkbookMutationContext
+): WorkbookMutationResult {
+  return validatedContentMutations(workbook, [{ sheetId, addresses }], context);
+}
+
+function validatedContentMutations(
+  workbook: WorkbookModel,
+  writes: readonly ContentWrite[],
+  context: WorkbookMutationContext
+): WorkbookMutationResult {
+  let reconciled = workbook;
+  for (const write of writes) {
+    const reduction = reconcileStructuredTableContentWrites(
+      reconciled,
+      write.sheetId,
+      [...new Set(write.addresses)].map(parseCellAddress)
+    );
+    if (reduction.status === "rejected") {
+      return { status: "rejected", reason: "validation", issues: reduction.issues };
+    }
+    reconciled = reduction.workbook;
+  }
+  for (const write of writes) {
+    const validation = validatedMutation(reconciled, write.sheetId, write.addresses, context);
+    if (validation.status === "rejected") return validation;
+  }
+  return applied(reconciled);
+}
+
 function validatedMutation(
   workbook: WorkbookModel,
   sheetId: string,
@@ -909,33 +1062,6 @@ function rejectedUnsupported(code: string, message: string): WorkbookMutationRes
 
 function isStructuredTableCommand(command: WorkbookCommand): command is StructuredTableCommand {
   return command.type.startsWith("table.");
-}
-
-function updateCustomTotalsMetadata(
-  workbook: WorkbookModel,
-  sheetId: string,
-  coordinate: CellCoord,
-  value: WorkbookModel["sheets"][number]["cells"][string]
-): WorkbookModel {
-  const table = workbook.tables.find((candidate) => candidate.sheetId === sheetId
-    && candidate.totalsRow
-    && coordinate.row === candidate.range.end.row
-    && coordinate.column >= candidate.range.start.column
-    && coordinate.column <= candidate.range.end.column);
-  if (!table) return workbook;
-  const columnIndex = table.columns.findIndex((column) => column.sheetColumn === coordinate.column);
-  if (columnIndex < 0) return workbook;
-  const columns = table.columns.map((column, index) => {
-    if (index !== columnIndex) return column;
-    const { totalsFunction: _function, totalsLabel: _label, ...base } = column;
-    return index === 0 && typeof value === "string" && !value.startsWith("=") && value.trim().length > 0
-      ? { ...base, totalsLabel: value }
-      : base;
-  });
-  return {
-    ...workbook,
-    tables: workbook.tables.map((candidate) => candidate.id === table.id ? { ...table, columns } : candidate)
-  };
 }
 
 function rangesIntersect(left: CellRange, right: CellRange): boolean {
