@@ -171,6 +171,22 @@ describe("structured table rows", () => {
     expect(table(result.workbook).columns[4].calculatedFormula).toBe("=C2*D2+$A$1");
   });
 
+  it("preserves single-quoted sheet names while regenerating calculated columns", () => {
+    const workbook = calculatedFixture();
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "='Q1 data'!B2+C2",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "E2")).toBe("='Q1 data'!B2+C2");
+    expect(getCellContent(result.workbook, "sheet-1", "E3")).toBe("='Q1 data'!B3+C3");
+    expect(getCellContent(result.workbook, "sheet-1", "E4")).toBe("='Q1 data'!B4+C4");
+  });
+
   it("rewrites same- and cross-sheet dependents and named ranges only inside table columns", () => {
     let workbook = rowFixture();
     workbook = setCellContent(workbook, "sheet-1", "D1", "=SUM(A2:A4)+D3");

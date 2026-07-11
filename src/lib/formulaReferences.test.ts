@@ -24,6 +24,13 @@ describe("formulaReferences", () => {
     );
   });
 
+  it("preserves single-quoted sheet names that resemble cell references", () => {
+    expect(translateFormulaReferences(
+      "='A1'!B2+'Q1 data'!C3+A1",
+      { rowOffset: 1, columnOffset: 0 }
+    )).toBe("='A1'!B3+'Q1 data'!C4+A2");
+  });
+
   it("preserves external workbook references while translating same-sheet rows", () => {
     expect(translateFormulaRowsWithinColumns(
       "=[Book.xlsx]Sheet1!A3+A3",

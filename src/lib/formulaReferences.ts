@@ -142,6 +142,9 @@ export function translateFormulaReferences(content: string, offset: FormulaRefer
 
   return transformUnquotedFormulaSegments(content, (segment) =>
     segment.replace(CELL_REFERENCE_PATTERN, (match, columnLock: string, columnName: string, rowLock: string, rowName: string, position: number) => {
+      if (isInsideSingleQuotedFormulaSegment(segment, position)) {
+        return match;
+      }
       const nextCharacter = segment[position + match.length] ?? "";
       if (nextCharacter === "!" || nextCharacter === "(" || nextCharacter === "[") {
         return match;
@@ -156,6 +159,20 @@ export function translateFormulaReferences(content: string, offset: FormulaRefer
       return `${columnLock}${columnIndexToName(nextColumn)}${rowLock}${nextRow + 1}`;
     })
   );
+}
+
+function isInsideSingleQuotedFormulaSegment(segment: string, position: number): boolean {
+  let cursor = 0;
+  while (cursor < position) {
+    if (segment[cursor] !== "'") {
+      cursor += 1;
+      continue;
+    }
+    const end = skipQuotedFormulaSegment(segment, cursor, "'");
+    if (position < end) return true;
+    cursor = end;
+  }
+  return false;
 }
 
 export function translateFormulaRowsWithinColumns(
