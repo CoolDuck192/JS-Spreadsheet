@@ -9,6 +9,7 @@ import {
   setCellContent
 } from "../../lib/workbook";
 import type { CommandEnvelope } from "../commands/types";
+import type { IdKind } from "../ids";
 import type { WorkbookCommand } from "./commands";
 import {
   createWorkbookSession,
@@ -533,6 +534,123 @@ describe("WorkbookSession", () => {
     expect(session.getSnapshot().workbook.sheets[0].columnCount).toBe(27);
   });
 
+  it("keeps a post-undo transaction selection as the next history checkpoint", () => {
+    const workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    const firstCheckpoint = {
+      start: { row: 1, column: 1 },
+      end: { row: 1, column: 1 }
+    } as const;
+    const replacementCheckpoint = {
+      start: { row: 2, column: 2 },
+      end: { row: 2, column: 2 }
+    } as const;
+    const session = createWorkbookSession({ workbook });
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        { type: "cell.set", sheetId, address: "A1", input: "first" },
+        { type: "selection.set", selection: firstCheckpoint }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        { type: "history.undo" },
+        { type: "selection.set", selection: replacementCheckpoint }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot()).toMatchObject({ selection: replacementCheckpoint });
+
+    expect(session.dispatch({
+      type: "cell.set",
+      sheetId,
+      address: "A2",
+      input: "next"
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(session.dispatch({ type: "history.undo" }))
+      .toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot()).toMatchObject({ selection: replacementCheckpoint });
+    expect(getCellContent(session.getSnapshot().workbook, sheetId, "A2")).toBeNull();
+  });
+
+  it("preflights deterministic references to ids generated earlier in the transaction", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    const counts: Record<IdKind, number> = {
+      table: 0,
+      "table-column": 0,
+      "table-row": 0
+    };
+    const createId = vi.fn((kind: IdKind) => `${kind}-${++counts[kind]}`);
+    const session = createWorkbookSession({ workbook, createId });
+    const style = { theme: "TableStyleLight2", showRowStripes: false } as const;
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+          name: "People",
+          headerRow: true,
+          totalsRow: false
+        },
+        { type: "table.setStyle", tableId: "table-1", style }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+
+    expect(createId).toHaveBeenCalledTimes(3);
+    expect(session.getSnapshot().workbook.tables).toMatchObject([
+      {
+        id: "table-1",
+        columns: [{ id: "table-column-1" }],
+        rowIds: ["table-row-1"],
+        style
+      }
+    ]);
+  });
+
+  it("rejects an invalid deterministic dependent command before consuming host ids", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    const counts: Record<IdKind, number> = {
+      table: 0,
+      "table-column": 0,
+      "table-row": 0
+    };
+    const createId = vi.fn((kind: IdKind) => `${kind}-${++counts[kind]}`);
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+          name: "People",
+          headerRow: true,
+          totalsRow: false
+        },
+        { type: "table.setStyle", tableId: "table-1", style: { theme: "" } }
+      ]
+    })).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "TABLE_RANGE_BLOCKED", message: "Table style is invalid" }]
+    });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
   it("semantic-preflights a whole transaction before consuming host ids", () => {
     const createId = vi.fn(() => "table-column-host");
     const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
@@ -617,6 +735,69 @@ describe("WorkbookSession", () => {
       }]
     });
     expect(createId).toHaveBeenCalledTimes(4);
+    expect(session.getSnapshot()).toBe(before);
+    expect(session.getSnapshot()).toMatchObject({
+      revision: before.revision,
+      selection: before.selection,
+      canUndo: before.canUndo,
+      canRedo: before.canRedo
+    });
+  });
+
+  it("routes duplicated structured-table ids through the session allocator", () => {
+    const initial = structuredWorkbook();
+    let sequence = 0;
+    const createId = vi.fn((kind: IdKind) => `${kind}-copy-${++sequence}`);
+    const session = createWorkbookSession({ workbook: initial, createId });
+
+    expect(session.dispatch({
+      type: "sheet.duplicate",
+      sheetId: initial.activeSheetId
+    })).toMatchObject({ status: "committed", changed: true });
+
+    expect(createId).toHaveBeenCalledTimes(5);
+    expect(session.getSnapshot().workbook.tables[1]).toMatchObject({
+      id: "table-copy-3",
+      sheetId: session.getSnapshot().workbook.activeSheetId,
+      columns: [
+        { id: "table-column-copy-1" },
+        { id: "table-column-copy-2" }
+      ],
+      rowIds: ["table-row-copy-4", "table-row-copy-5"]
+    });
+  });
+
+  it.each([
+    {
+      label: "blank",
+      ids: [" ", "copy-column-2", "copy-table", "copy-row-1", "copy-row-2"]
+    },
+    {
+      label: "duplicate",
+      ids: ["copy-shared", "copy-shared", "copy-table", "copy-row-1", "copy-row-2"]
+    },
+    {
+      label: "global collision",
+      ids: ["sales-region", "copy-column-2", "copy-table", "copy-row-1", "copy-row-2"]
+    }
+  ])("rejects $label ids from structured-table sheet duplication", ({ ids }) => {
+    const generatedIds = [...ids];
+    const createId = vi.fn(() => generatedIds.shift() ?? "unexpected-id");
+    const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "sheet.duplicate",
+      sheetId: before.workbook.activeSheetId
+    })).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "TABLE_GENERATED_ID_INVALID",
+        message: "Generated structured-table IDs must be nonblank and unique"
+      }]
+    });
+    expect(createId).toHaveBeenCalledTimes(5);
     expect(session.getSnapshot()).toBe(before);
     expect(session.getSnapshot()).toMatchObject({
       revision: before.revision,
