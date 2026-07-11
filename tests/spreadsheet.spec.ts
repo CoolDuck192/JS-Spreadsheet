@@ -12,6 +12,8 @@ import {
   setSheetProtection
 } from "../src/lib/workbook";
 
+const EXTERNAL_LAN_ORIGIN = "http://192.168.6.232:4173";
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
 });
@@ -86,20 +88,42 @@ test("keeps an embedded spreadsheet inside its fixed host", async ({ page }) => 
   expect(spreadsheetBox!.height).toBeLessThanOrEqual(hostBox!.height);
 });
 
-test("offers table-aware left and right insertion from ribbon and column headers", async ({ page }) => {
+test("expands a structured table at its right and left column boundaries", async ({ page }) => {
   await page.goto("/");
 
   await page.getByRole("gridcell", { name: "A1", exact: true }).click();
+  await pasteGridData(page, "Region\tSales\nWest\t10\nEast\t8");
+  await selectRange(page, "A1 Region", "B3 8");
+  await openRibbonTab(page, "Insert");
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+
+  await expect(page.getByRole("tab", { name: "Table", exact: true })).toBeVisible();
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:B3");
+
+  await page.getByRole("gridcell", { name: "B2 10", exact: true }).click();
+  await openRibbonTab(page, "Home");
   await page.getByRole("button", { name: "Insert columns options", exact: true }).click();
   await page.getByRole("menuitem", { name: "Insert column right", exact: true }).click();
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column right");
+  const rightHeader = page.getByRole("gridcell", { name: "C1 Column3", exact: true });
+  await expect(rightHeader).toHaveAttribute("data-structured-table-role", "header");
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:C3");
 
-  await page.getByRole("columnheader", { name: "Column B", exact: true }).click({ button: "right" });
+  await page.getByRole("columnheader", { name: "Column A", exact: true }).click({ button: "right" });
   await page
-    .getByRole("menu", { name: "Column B context menu", exact: true })
+    .getByRole("menu", { name: "Column A context menu", exact: true })
     .getByRole("menuitem", { name: "Insert column left", exact: true })
     .click();
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column left");
+  const leftHeader = page.getByRole("gridcell", { name: "A1 Column1", exact: true });
+  await expect(leftHeader).toHaveAttribute("data-structured-table-role", "header");
+  await expect(page.getByRole("gridcell", { name: "B1 Region", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "C1 Sales", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "D1 Column3", exact: true })).toBeVisible();
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:D3");
 });
 
 test("opens the column header menu from the keyboard on a narrow screen", async ({ page }) => {
@@ -128,13 +152,17 @@ test("opens the column header menu from the keyboard on a narrow screen", async 
 });
 
 test("explains Google setup on the LAN IP instead of appearing inert", async ({ page }) => {
+  test.skip(
+    process.env.E2E_BASE_URL?.trim() !== EXTERNAL_LAN_ORIGIN,
+    `requires E2E_BASE_URL=${EXTERNAL_LAN_ORIGIN}`
+  );
   await page.goto("/");
   await openRibbonTab(page, "File");
   const importButton = page.getByRole("button", { name: "Import Google Sheet", exact: true });
   await importButton.click();
 
   const dialog = page.getByRole("dialog", { name: "Import Google Sheet", exact: true });
-  await expect(dialog).toContainText("http://192.168.6.232:4173");
+  await expect(dialog).toContainText(EXTERNAL_LAN_ORIGIN);
   await expect(dialog).toContainText(/HTTPS DNS origin/i);
   await expect(dialog).toContainText(/host.*token provider/i);
   await expect(dialog).toContainText(/replaces the current workbook/i);
@@ -151,6 +179,10 @@ test("explains Google setup on the LAN IP instead of appearing inert", async ({ 
 });
 
 test("keeps the Google setup dialog internally scrollable at 200% zoom", async ({ page }) => {
+  test.skip(
+    process.env.E2E_BASE_URL?.trim() !== EXTERNAL_LAN_ORIGIN,
+    `requires E2E_BASE_URL=${EXTERNAL_LAN_ORIGIN}`
+  );
   // Chromium exposes browser zoom as half the CSS-pixel viewport at 200%.
   // Keep the physical 390x844 screen while emulating its 195x422 CSS viewport.
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1758,6 +1790,27 @@ test("inserts and deletes rows and columns from the context menu", async ({ page
   await page.getByRole("gridcell", { name: "B1", exact: true }).click({ button: "right" });
   await page.getByRole("menu", { name: "Cell context menu", exact: true }).getByRole("menuitem", { name: "Delete column", exact: true }).click();
   await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
+});
+
+test("inserts a blank column right from the cell context menu", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A1", "Name");
+  await editCell(page, "B1", "Amount");
+  await editCell(page, "C1", "Total");
+
+  await page.getByRole("gridcell", { name: "B1 Amount", exact: true }).click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Cell context menu", exact: true })
+    .getByRole("menuitem", { name: "Insert column right", exact: true })
+    .click();
+
+  await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
+  const insertedCell = page.getByRole("gridcell", { name: "C1", exact: true });
+  await expect(insertedCell).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("C1");
+  await expect(page.getByRole("gridcell", { name: "D1 Total", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column right");
 });
 
 test("applies and clears cell borders", async ({ page }) => {
