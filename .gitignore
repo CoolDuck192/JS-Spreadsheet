@@ -14,5 +14,7 @@ work/
 
 vite.config.js
 vite.config.d.ts
+vitest.perf.config.js
+vitest.perf.config.d.ts
 playwright.config.js
 playwright.config.d.ts

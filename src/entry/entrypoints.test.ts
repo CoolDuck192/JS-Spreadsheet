@@ -97,15 +97,18 @@ describe("public entrypoints", () => {
     });
   });
 
-  it("keeps performance tests out of the functional test script", async () => {
+  it("routes functional and performance tests without shell-quoted globs", async () => {
     const manifest = JSON.parse(await readFile(
       new URL("../../package.json", import.meta.url),
       "utf8"
     ));
+    const functionalConfig = await readFile(new URL("../../vite.config.ts", import.meta.url), "utf8");
+    const performanceConfig = await readFile(new URL("../../vitest.perf.config.ts", import.meta.url), "utf8");
 
-    expect(manifest.scripts.test).toBe(
-      "vitest run --exclude '**/*.perf.test.ts' --exclude '**/*.perf.test.tsx'"
-    );
-    expect(manifest.scripts["test:perf"]).toBe("vitest run .perf.test.");
+    expect(manifest.scripts.test).toBe("vitest run --config vite.config.ts");
+    expect(manifest.scripts["test:perf"]).toBe("vitest run --config vitest.perf.config.ts");
+    expect(functionalConfig).toContain('"**/*.perf.test.ts"');
+    expect(functionalConfig).toContain('"**/*.perf.test.tsx"');
+    expect(performanceConfig).toContain('include: ["**/*.perf.test.ts", "**/*.perf.test.tsx"]');
   });
 });
