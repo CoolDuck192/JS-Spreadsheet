@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type { WorkbookModel } from "../types";
 import {
   addSheet,
@@ -41,6 +41,16 @@ import {
   setCellBorders
 } from "./workbook";
 import { exportStructuredTableToXlsx, exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
+
+function mutateXlsxEntry(
+  data: ArrayBuffer | Uint8Array,
+  entryName: string,
+  transform: (content: string) => string
+): Uint8Array {
+  const entries = unzipSync(new Uint8Array(data));
+  entries[entryName] = strToU8(transform(strFromU8(entries[entryName])));
+  return zipSync(entries);
+}
 
 describe("xlsx", () => {
   it("round-trips sheets, text, formulas, comments, hyperlinks, merges, and dimensions", async () => {
@@ -722,6 +732,23 @@ describe("native structured table XLSX", () => {
     expect(sheet.cells.D4).toBe("=SUM(D2:D3)");
     expect(sheet.cells.C4).toBe(99);
     expect(table.filter).toMatchObject({ kind: "set", operator: "in" });
+  });
+
+  it("sizes imported sheets from table ranges with trailing empty rows", async () => {
+    const source = await exportWorkbookToXlsx(nativeTableWorkbook());
+    const extended = mutateXlsxEntry(source, "xl/tables/table1.xml", (xml) =>
+      xml.replace('ref="A1:D4"', 'ref="A1:D300"')
+    );
+
+    const imported = await importWorkbookFromXlsx(extended);
+
+    expect(imported.sheets[0].rowCount).toBe(300);
+    expect(imported.tables[0].range.end.row).toBe(299);
+    expect(imported.tables[0].rowIds).toHaveLength(298);
+
+    const exported = await exportWorkbookToXlsx(imported);
+    const roundTripped = await importWorkbookFromXlsx(exported);
+    expect(roundTripped.tables[0].range.end.row).toBe(299);
   });
 
   it("imports table-column formula metadata even when ExcelJS cannot parse its native column position", async () => {

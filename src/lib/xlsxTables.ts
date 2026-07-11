@@ -16,6 +16,9 @@ import { translateFormulaReferences } from "./formulaReferences";
 import { structuredFormulaToA1 } from "./structuredFormula";
 import { nativeTotalsFunctionToAggregate, type NativeTableXmlMetadata } from "./xlsxTableXml";
 
+const EXCEL_MAX_ROWS = 1_048_576;
+const EXCEL_MAX_COLUMNS = 16_384;
+
 export type XlsxImportOptions = {
   idGenerator?: IdGenerator;
   tableKeys?: Readonly<Record<string, { columnName: string }>>;
@@ -67,6 +70,14 @@ export async function importStructuredTablesFromWorksheet(
       range = parseRangeAddress(model.tableRef.replace(/\$/g, ""));
     } catch {
       throw xlsxTableError("XLSX_TABLE_RANGE_INVALID", `Native table ${name} has an invalid range`);
+    }
+    if (
+      range.start.row < 0
+      || range.start.column < 0
+      || range.end.row >= EXCEL_MAX_ROWS
+      || range.end.column >= EXCEL_MAX_COLUMNS
+    ) {
+      throw xlsxTableError("XLSX_TABLE_RANGE_INVALID", `Native table ${name} exceeds Excel worksheet bounds`);
     }
     const nativeColumns = Array.isArray(model.columns) ? model.columns : [];
     if (nativeColumns.length === 0 || nativeColumns.length !== range.end.column - range.start.column + 1) {

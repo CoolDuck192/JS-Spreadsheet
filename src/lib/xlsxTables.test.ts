@@ -355,4 +355,20 @@ describe("xlsxTables", () => {
       code: "XLSX_TABLE_NAME_INVALID"
     });
   });
+
+  it("rejects native table ranges outside Excel bounds before allocating row IDs", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const native = listWorksheetTables(worksheet)[0] as unknown as {
+      table: { tableRef: string };
+    };
+    native.table.tableRef = "A1048577:F1048582";
+
+    await expect(importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      readNativeTableXml(bytes),
+      { idGenerator: sequencedIds("out-of-bounds") }
+    )).rejects.toMatchObject({ code: "XLSX_TABLE_RANGE_INVALID" });
+  });
 });

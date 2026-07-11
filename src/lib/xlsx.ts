@@ -82,7 +82,9 @@ export async function importWorkbookFromXlsx(
   const tablesByWorksheet = await Promise.all(worksheets.map((worksheet, index) =>
     importStructuredTablesFromWorksheet(worksheet, `sheet-${index + 1}`, xmlMetadata, options)
   ));
-  const sheets = worksheets.map((worksheet, index) => worksheetToSheet(worksheet, index));
+  const sheets = worksheets.map((worksheet, index) =>
+    worksheetToSheet(worksheet, index, tablesByWorksheet[index])
+  );
   const tables = tablesByWorksheet.flat();
   assertUniqueImportedTableNames(tables);
   removeFilterDerivedHiddenRows(sheets, tables);
@@ -237,7 +239,11 @@ async function sheetToWorksheet(sheet: SheetModel, worksheet: ExcelJS.Worksheet)
   await applySheetProtectionToWorksheet(sheet.protection, worksheet);
 }
 
-function worksheetToSheet(worksheet: ExcelJS.Worksheet, index: number): SheetModel {
+function worksheetToSheet(
+  worksheet: ExcelJS.Worksheet,
+  index: number,
+  tables: readonly StructuredTable[] = []
+): SheetModel {
   const cells: SheetModel["cells"] = {};
   const formats: SheetModel["formats"] = {};
   const comments: SheetModel["comments"] = {};
@@ -329,6 +335,10 @@ function worksheetToSheet(worksheet: ExcelJS.Worksheet, index: number): SheetMod
   if (autoFilterRange) {
     maxRow = Math.max(maxRow, autoFilterRange.end.row);
     maxColumn = Math.max(maxColumn, autoFilterRange.end.column);
+  }
+  for (const table of tables) {
+    maxRow = Math.max(maxRow, table.range.end.row);
+    maxColumn = Math.max(maxColumn, table.range.end.column);
   }
   const freezePanes = worksheetFreezePanes(worksheet);
 
