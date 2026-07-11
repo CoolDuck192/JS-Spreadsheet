@@ -512,11 +512,6 @@ describe("WorkbookSession", () => {
 
     expect(session.dispatch({
       type: "transaction",
-      idReservations: [
-        { kind: "table-column", occurrence: 0, id: "table-column-1" },
-        { kind: "table", occurrence: 0, id: "table-1" },
-        { kind: "table-row", occurrence: 0, id: "table-row-1" }
-      ],
       commands: [
         {
           type: "columns.insert",
@@ -553,11 +548,6 @@ describe("WorkbookSession", () => {
     const session = createWorkbookSession({ workbook });
     expect(session.dispatch({
       type: "transaction",
-      idReservations: [
-        { kind: "table-column", occurrence: 0, id: "table-column-1" },
-        { kind: "table", occurrence: 0, id: "table-1" },
-        { kind: "table-row", occurrence: 0, id: "table-row-1" }
-      ],
       commands: [
         { type: "cell.set", sheetId, address: "A1", input: "first" },
         { type: "selection.set", selection: firstCheckpoint }
@@ -601,6 +591,11 @@ describe("WorkbookSession", () => {
 
     expect(session.dispatch({
       type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" }
+      ],
       commands: [
         {
           type: "table.create",
@@ -653,6 +648,11 @@ describe("WorkbookSession", () => {
 
     expect(session.dispatch({
       type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" }
+      ],
       commands: [
         {
           type: "table.create",
