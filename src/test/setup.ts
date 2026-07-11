@@ -25,7 +25,7 @@ if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.p
   });
 }
 
-if (!("showPopover" in HTMLElement.prototype)) {
+if (typeof HTMLElement !== "undefined" && !("showPopover" in HTMLElement.prototype)) {
   Object.defineProperty(HTMLElement.prototype, "showPopover", {
     configurable: true,
     value(this: HTMLElement) {
@@ -35,7 +35,7 @@ if (!("showPopover" in HTMLElement.prototype)) {
   });
 }
 
-if (!("hidePopover" in HTMLElement.prototype)) {
+if (typeof HTMLElement !== "undefined" && !("hidePopover" in HTMLElement.prototype)) {
   Object.defineProperty(HTMLElement.prototype, "hidePopover", {
     configurable: true,
     value(this: HTMLElement) {
