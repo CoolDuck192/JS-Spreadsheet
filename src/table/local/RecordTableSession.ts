@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import type { CommandResult } from "../../core/commands/types";
+import { excelSerialToDate, parseExcelTemporalInput } from "../../core/values/excelDate";
 import { parseCellInput } from "../../core/values/parseCellInput";
 import { createLocalTableCapabilities, resolveTableOperationStates, type TableFeatureConfiguration } from "../core/capabilities";
 import { createCommandIdFactory, type CommandIdFactory } from "../core/commandId";
@@ -543,6 +544,13 @@ export class RecordTableSession<
         value = input.stored;
         evaluated = value;
       }
+      const originalValue = value;
+      const normalizedValue = normalizeLocalValue(value, column.dataType);
+      if (!normalizedValue.ok) {
+        return this.reject("validation", [{ code: "TABLE_VALUE_TYPE", message: "Cell value has an incompatible type", rowId: edit.rowId, columnId: edit.columnId }], commandId, reason, startedAt, edits.length, edits.length);
+      }
+      value = normalizedValue.value;
+      if (Object.is(evaluated, originalValue)) evaluated = value;
       if (formula && !formulaOperation.enabled) {
         return this.rejectUnsupported(commandId, editIntent(reason, edits), startedAt, formulaOperation.reason);
       }
@@ -1184,9 +1192,32 @@ function editIntent<TRow>(
 
 function compatibleValue(value: unknown, dataType: AnyColumn<unknown>["dataType"]): boolean {
   if (value === null || dataType === undefined || dataType === "custom") return true;
-  if (dataType === "number" || dataType === "date" || dataType === "datetime") return typeof value === "number" && Number.isFinite(value);
+  if (dataType === "date" || dataType === "datetime") return typeof value === "string";
+  if (dataType === "number") return typeof value === "number" && Number.isFinite(value);
   if (dataType === "boolean") return typeof value === "boolean";
   return typeof value === "string";
+}
+
+function normalizeLocalValue(
+  value: unknown,
+  dataType: AnyColumn<unknown>["dataType"]
+): { ok: true; value: unknown } | { ok: false } {
+  if (value === null || (dataType !== "date" && dataType !== "datetime")) {
+    return { ok: true, value };
+  }
+
+  const serial = typeof value === "number"
+    ? value
+    : typeof value === "string"
+      ? parseExcelTemporalInput(value)?.serial
+      : undefined;
+  if (serial === undefined || serial === 60) return { ok: false };
+  const date = excelSerialToDate(serial);
+  if (!date) return { ok: false };
+  return {
+    ok: true,
+    value: dataType === "date" ? date.toISOString().slice(0, 10) : date.toISOString()
+  };
 }
 
 function validateMetadataValue(value: unknown, validation: TableCellMetadata["validation"], rowId: string, columnId: string): TableCellIssue[] {

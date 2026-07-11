@@ -59,6 +59,107 @@ describe("createLocalRecordTableSession", () => {
     expect(session.getSnapshot().getCell("e1", "salary").storedValue).toBe(125);
   });
 
+  it("stores temporal edits as ISO strings across display, filter, sort, and grouping", async () => {
+    type TemporalRow = { id: string; day: string; instant: string };
+    const helper = createColumnHelper<TemporalRow>();
+    const rows: readonly TemporalRow[] = [
+      { id: "edited", day: "2026-01-15", instant: "2026-01-15T12:00:00.000Z" },
+      { id: "later", day: "2026-04-01", instant: "2026-04-01T12:00:00.000Z" }
+    ];
+    const onRowsChange = vi.fn();
+    const session = createLocalRecordTableSession({
+      source: { kind: "local", rows, getRowId: (row) => row.id, onRowsChange },
+      columns: [
+        helper.accessor("day", { id: "day", header: "Day", dataType: "date" }),
+        helper.accessor("instant", { id: "instant", header: "Instant", dataType: "datetime" })
+      ]
+    });
+
+    const result = await session.dispatch({
+      type: "edit-cells",
+      edits: [
+        { rowId: "edited", columnId: "day", rawText: "2026-03-05" },
+        { rowId: "edited", columnId: "instant", rawText: "2026-03-05T07:30:00-05:00" }
+      ]
+    });
+
+    expect(result).toMatchObject({ status: "committed", changed: true });
+    const updater = onRowsChange.mock.calls[0][0] as (source: readonly TemporalRow[]) => readonly TemporalRow[];
+    expect(updater(rows)[0]).toEqual({
+      id: "edited",
+      day: "2026-03-05",
+      instant: "2026-03-05T12:30:00.000Z"
+    });
+    expect(session.getSnapshot().getCell("edited", "day")).toMatchObject({
+      storedValue: "2026-03-05",
+      evaluatedValue: "2026-03-05",
+      displayValue: "2026-03-05"
+    });
+    expect(session.getSnapshot().getCell("edited", "instant")).toMatchObject({
+      storedValue: "2026-03-05T12:30:00.000Z",
+      displayValue: "2026-03-05T12:30:00.000Z"
+    });
+
+    await session.dispatch({
+      type: "set-filter",
+      filter: {
+        kind: "logical",
+        operator: "and",
+        operands: [
+          { kind: "comparison", columnId: "day", operator: "eq", value: { type: "date", value: "2026-03-05" } },
+          {
+            kind: "comparison",
+            columnId: "instant",
+            operator: "eq",
+            value: { type: "datetime", value: "2026-03-05T12:30:00.000Z" }
+          }
+        ]
+      }
+    });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["edited"]);
+
+    await session.dispatch({ type: "set-filter", filter: null });
+    await session.dispatch({
+      type: "set-sorting",
+      sorting: [{ columnId: "instant", direction: "asc" }]
+    });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["edited", "later"]);
+
+    await session.dispatch({ type: "set-grouping", grouping: [{ columnId: "day" }] });
+    const editedGroup = session.getSnapshot().rows.find((row) =>
+      row.kind === "group" && row.key.type === "date" && row.key.value === "2026-03-05"
+    );
+    expect(editedGroup).toBeDefined();
+    expect(session.getSnapshot().getCell(editedGroup!.id, "day").displayValue).toBe("2026-03-05");
+  });
+
+  it("rejects Excel's phantom leap-day serial for ISO-backed date columns", async () => {
+    type TemporalRow = { id: string; day: string };
+    const helper = createColumnHelper<TemporalRow>();
+    const session = createLocalRecordTableSession({
+      source: {
+        kind: "local",
+        rows: [{ id: "row-1", day: "1900-02-28" }],
+        getRowId: (row) => row.id
+      },
+      columns: [helper.accessor("day", { id: "day", header: "Day", dataType: "date" })]
+    });
+
+    const result = await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "row-1", columnId: "day", rawText: "1900-02-29" }]
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "TABLE_VALUE_TYPE", rowId: "row-1", columnId: "day" }]
+    });
+    expect(session.getSnapshot().getCell("row-1", "day").storedValue).toBe("1900-02-28");
+  });
+
   it("rejects an invalid batch without partial rows, metadata, history, or publication", async () => {
     const rows: readonly Employee[] = [employee(), { ...employee("e2", "Grace", 200), active: false }];
     const onRowsChange = vi.fn();
