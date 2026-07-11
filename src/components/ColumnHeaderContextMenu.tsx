@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useClampedMenuPosition } from "./useClampedMenuPosition";
 
-const MENU_VIEWPORT_MARGIN = 8;
 const MENU_ITEM_STYLE = { minHeight: 40, minWidth: 40 } as const;
 
 export type ColumnHeaderContextMenuProps = Readonly<{
@@ -24,45 +24,19 @@ export function ColumnHeaderContextMenu({
   onInsertRight,
   onDelete
 }: ColumnHeaderContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement>(null);
+  const { menuRef, position } = useClampedMenuPosition(x, y);
   const firstItemRef = useRef<HTMLButtonElement>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
-
-  useLayoutEffect(() => {
-    const menu = menuRef.current;
-    if (!menu) {
-      setPosition({ left: x, top: y });
-      return;
-    }
-    const menuElement = menu;
-
-    function updatePosition() {
-      const rect = menuElement.getBoundingClientRect();
-      const maxLeft = Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - rect.width - MENU_VIEWPORT_MARGIN);
-      const maxTop = Math.max(MENU_VIEWPORT_MARGIN, window.innerHeight - rect.height - MENU_VIEWPORT_MARGIN);
-      const nextPosition = {
-        left: Math.min(Math.max(MENU_VIEWPORT_MARGIN, x), maxLeft),
-        top: Math.min(Math.max(MENU_VIEWPORT_MARGIN, y), maxTop)
-      };
-      setPosition((currentPosition) =>
-        currentPosition.left === nextPosition.left && currentPosition.top === nextPosition.top
-          ? currentPosition
-          : nextPosition
-      );
-    }
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    return () => window.removeEventListener("resize", updatePosition);
-  }, [x, y]);
+  const closedRef = useRef(false);
 
   useLayoutEffect(() => {
     firstItemRef.current?.focus({ preventScroll: true });
   }, []);
 
-  const closeAndRestoreFocus = useCallback(() => {
+  const closeMenu = useCallback((restoreFocus = true) => {
+    if (closedRef.current) return;
+    closedRef.current = true;
     onClose();
-    if (opener.isConnected) {
+    if (restoreFocus && opener.isConnected) {
       opener.focus({ preventScroll: true });
     }
   }, [onClose, opener]);
@@ -70,7 +44,7 @@ export function ColumnHeaderContextMenu({
   useEffect(() => {
     function closeOnOutsidePointer(event: PointerEvent) {
       if (!menuRef.current?.contains(event.target as Node)) {
-        closeAndRestoreFocus();
+        closeMenu();
       }
     }
 
@@ -78,11 +52,11 @@ export function ColumnHeaderContextMenu({
     return () => {
       window.removeEventListener("pointerdown", closeOnOutsidePointer);
     };
-  }, [closeAndRestoreFocus]);
+  }, [closeMenu]);
 
   function run(action: () => void) {
     action();
-    closeAndRestoreFocus();
+    closeMenu();
   }
 
   return (
@@ -98,7 +72,12 @@ export function ColumnHeaderContextMenu({
         if (event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
-          closeAndRestoreFocus();
+          closeMenu();
+        }
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          closeMenu(false);
         }
       }}
     >

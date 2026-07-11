@@ -1,10 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ColumnHeaderContextMenu, type ColumnHeaderContextMenuProps } from "./ColumnHeaderContextMenu";
 
 describe("ColumnHeaderContextMenu", () => {
   afterEach(() => {
-    document.querySelectorAll("[data-column-menu-opener]").forEach((element) => element.remove());
+    document
+      .querySelectorAll("[data-column-menu-opener], [data-column-menu-focus-target]")
+      .forEach((element) => element.remove());
     vi.restoreAllMocks();
   });
 
@@ -57,6 +60,47 @@ describe("ColumnHeaderContextMenu", () => {
     expect(opener).toHaveFocus();
   });
 
+  it("keeps the menu open while Tab moves focus between its actions", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderMenu({ opener: createOpener(), onClose });
+
+    await user.tab();
+
+    expect(screen.getByRole("menuitem", { name: "Insert column right" })).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes without stealing the forward Tab destination when focus leaves", async () => {
+    const user = userEvent.setup();
+    const opener = createOpener();
+    const onClose = vi.fn();
+    renderMenu({ opener, onClose });
+    const destination = createFocusTarget("After column menu");
+    screen.getByRole("menuitem", { name: "Delete column" }).focus();
+
+    await user.tab();
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(destination).toHaveFocus();
+    expect(opener).not.toHaveFocus();
+  });
+
+  it("closes without stealing the reverse Tab destination when focus leaves", async () => {
+    const user = userEvent.setup();
+    const opener = createOpener();
+    const destination = createFocusTarget("Before column menu");
+    const onClose = vi.fn();
+    renderMenu({ opener, onClose });
+    screen.getByRole("menuitem", { name: "Insert column left" }).focus();
+
+    await user.tab({ shift: true });
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(destination).toHaveFocus();
+    expect(opener).not.toHaveFocus();
+  });
+
   it("dismisses on an outside pointer without treating an inside pointer as outside", () => {
     const opener = createOpener();
     const onClose = vi.fn();
@@ -102,6 +146,14 @@ function createOpener(): HTMLButtonElement {
   document.body.append(opener);
   opener.focus();
   return opener;
+}
+
+function createFocusTarget(label: string): HTMLButtonElement {
+  const target = document.createElement("button");
+  target.dataset.columnMenuFocusTarget = "true";
+  target.textContent = label;
+  document.body.append(target);
+  return target;
 }
 
 function renderMenu(overrides: Partial<ColumnHeaderContextMenuProps> = {}) {

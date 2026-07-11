@@ -1,6 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
-
-const MENU_VIEWPORT_MARGIN = 8;
+import { useClampedMenuPosition } from "./useClampedMenuPosition";
 
 type CellContextMenuProps = {
   address: string;
@@ -59,36 +57,7 @@ export function CellContextMenu({
   onComment,
   onLink
 }: CellContextMenuProps) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: x, top: y });
-
-  useLayoutEffect(() => {
-    const menu = menuRef.current;
-
-    if (!menu) {
-      setPosition({ left: x, top: y });
-      return;
-    }
-    const menuElement = menu;
-
-    function updatePosition() {
-      const rect = menuElement.getBoundingClientRect();
-      const maxLeft = Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - rect.width - MENU_VIEWPORT_MARGIN);
-      const maxTop = Math.max(MENU_VIEWPORT_MARGIN, window.innerHeight - rect.height - MENU_VIEWPORT_MARGIN);
-      const nextPosition = {
-        left: Math.min(Math.max(MENU_VIEWPORT_MARGIN, x), maxLeft),
-        top: Math.min(Math.max(MENU_VIEWPORT_MARGIN, y), maxTop)
-      };
-
-      setPosition((currentPosition) =>
-        currentPosition.left === nextPosition.left && currentPosition.top === nextPosition.top ? currentPosition : nextPosition
-      );
-    }
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    return () => window.removeEventListener("resize", updatePosition);
-  }, [x, y]);
+  const { menuRef, position } = useClampedMenuPosition(x, y);
 
   function run(action: () => void) {
     action();
