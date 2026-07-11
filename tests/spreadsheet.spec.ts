@@ -85,6 +85,11 @@ test("keeps an embedded spreadsheet inside its fixed host", async ({ page }) => 
   const spreadsheetBox = await spreadsheet.boundingBox();
   expect(hostBox).not.toBeNull();
   expect(spreadsheetBox).not.toBeNull();
+  expect(hostBox!.width).toBeGreaterThan(0);
+  expect(hostBox!.height).toBeGreaterThan(0);
+  expect(spreadsheetBox!.width).toBeGreaterThan(0);
+  expect(spreadsheetBox!.height).toBeGreaterThan(0);
+  expect(spreadsheetBox!.width).toBeLessThanOrEqual(hostBox!.width);
   expect(spreadsheetBox!.height).toBeLessThanOrEqual(hostBox!.height);
 });
 
