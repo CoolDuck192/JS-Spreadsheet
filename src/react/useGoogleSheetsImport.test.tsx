@@ -854,6 +854,25 @@ describe("useGoogleSheetsImport", () => {
     expect(controller.result.current.clientIdDraft).toBe("");
   });
 
+  it("keeps a direct provider ready after the unrelated storage identity changes", async () => {
+    const direct = provider();
+    const storageA = storage();
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { tokenProvider: direct, clientIdStorage: storageA },
+      onImported
+    });
+    await openReady(controller);
+
+    controller.rerender({
+      configuration: { tokenProvider: direct, clientIdStorage: false },
+      onImported
+    });
+
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+    expect(direct.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores a late load from a replaced storage adapter", async () => {
     const lateLoad = deferred<string | null>();
     const hostFactory = vi.fn(() => provider());

@@ -286,9 +286,25 @@ export function useGoogleSheetsImport(options: Readonly<{
     authSource.kind === "client" ? authSource.clientId : undefined,
     authSource.kind === "client" ? authSource.source : undefined,
     authSource.kind === "client" ? authSource.factory : undefined,
-    configuration?.clientIdStorage,
     invalidateImportAttempt,
     origin,
+    providerRuntime,
+    updateReadiness
+  ]);
+
+  // A storage swap only retires authentication derived from that editable
+  // storage. Direct providers and managed client IDs are independent of it and
+  // must remain ready.
+  useLayoutEffect(() => {
+    invalidateImportAttempt();
+    if (authSource.kind === "client" && authSource.source !== "managed") {
+      providerRuntime.clear();
+      providerRef.current = null;
+      updateReadiness("loading");
+    }
+  }, [
+    configuration?.clientIdStorage,
+    invalidateImportAttempt,
     providerRuntime,
     updateReadiness
   ]);
