@@ -133,6 +133,31 @@ describe("xlsxTables", () => {
     expect(worksheet.getCell("F6").formula).toBe("COUNTA(A2:F5)");
   });
 
+  it("degrades cross-table calculated-column metadata without aborting import", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const metadata = readNativeTableXml(bytes).map((entry) => entry.name === "SalesTable"
+      ? {
+          ...entry,
+          calculatedColumns: {
+            ...entry.calculatedColumns,
+            Amount: "=VLOOKUP(SalesTable[[#This Row],[Order ID]],Dim[#All],2,0)"
+          }
+        }
+      : entry);
+
+    const tables = await importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      metadata,
+      { idGenerator: sequencedIds("cross-table") }
+    );
+
+    expect(tables[0].columns.find((column) => column.name === "Amount")?.calculatedFormula).toBeUndefined();
+    expect(worksheet.getCell("F2").formula).toBe("D2*E2");
+    expect(worksheet.getCell("F5").formula).toBe("D5*E5");
+  });
+
   it("imports both independently authored tables with default headers and native filters", async () => {
     const { bytes, workbook } = await loadFixture(realFixturePath);
     const metadata = readNativeTableXml(bytes);

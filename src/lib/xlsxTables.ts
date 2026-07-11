@@ -131,7 +131,7 @@ export async function importStructuredTablesFromWorksheet(
       const xmlFormula = metadata?.calculatedColumns[column.name];
       if (!xmlFormula || plan.bodyStart > plan.bodyEnd) return column;
       const translated = structuredFormulaToA1(xmlFormula, provisional, plan.bodyStart);
-      if (!translated.ok) throw issueError(translated.issue);
+      if (!translated.ok) return column;
       const expanded = excelCellFormula(worksheet.getCell(plan.bodyStart + 1, column.sheetColumn + 1));
       if (expanded && normalizeFormula(expanded) !== normalizeFormula(translated.formula)) {
         throw xlsxTableError(
