@@ -116,10 +116,11 @@ describe("RemoteQueryController", () => {
     expect(accepted.mock.calls.map(([acceptance]) => ({
       generation: acceptance.generation,
       revision: acceptance.revision,
+      filter: acceptance.query.filter,
       rowIds: acceptance.items.map((item: { id: string }) => item.id)
     }))).toEqual([
-      { generation: 1, revision: "1", rowIds: ["1"] },
-      { generation: 3, revision: "2", rowIds: ["2"] }
+      { generation: 1, revision: "1", filter: queryWithFilter("Ada").filter, rowIds: ["1"] },
+      { generation: 3, revision: "2", filter: queryWithFilter("Grace").filter, rowIds: ["2"] }
     ]);
   });
 

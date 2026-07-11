@@ -525,6 +525,39 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("clears pending journal state when a complete refresh proves an uncertain row was deleted", async () => {
+    let rows: readonly Employee[] = employees;
+    let revision = "1";
+    const source = createTestRemoteSource<Employee>({
+      capabilities: unpaginatedUndoCapabilities(),
+      paginationMode: "none",
+      undoMode: "compensating",
+      query: async () => unpaginatedResult(revision, rows),
+      mutate: async () => { throw new Error("connection lost"); },
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Grace" }]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+
+    rows = [];
+    revision = "2";
+    await session.refresh();
+
+    expect(session.getSnapshot().pendingOperations).toEqual([]);
+    expect(session.getSnapshot().conflicts).toEqual([]);
+    expect(session.getSnapshot().canUndo).toBe(false);
+    expect(session.getDiagnostics()).toMatchObject({ pendingMutations: 0, journalEntries: 0 });
+
+    session.destroy();
+  });
+
   it("cancels a pending batch, retains tombstone reconciliation, and lets refresh win over a late acknowledgement", async () => {
     const acknowledgement = createDeferredMutation<Employee>();
     const refresh = createDeferredResult<QueryResult<Employee>>();

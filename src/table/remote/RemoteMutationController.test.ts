@@ -195,6 +195,84 @@ describe("RemoteMutationController", () => {
     });
   });
 
+  it("settles an uncertain batch as superseded when a complete unprojected query proves the row absent", async () => {
+    let queryResult = canonicalResult();
+    const onReconciled = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost"); },
+      undefined,
+      { query: async () => queryResult, onReconciled }
+    );
+
+    await harness.controller.execute("operation-row-deleted", [valueMutation(120)]);
+    queryResult = {
+      items: [],
+      revision: "2",
+      completeness: "completeDataset",
+      pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+    };
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.overlays.size).toBe(0);
+    expect(harness.controller.getConflicts()).toEqual([]);
+    expect(onReconciled).toHaveBeenCalledWith({
+      operationId: "operation-row-deleted",
+      outcome: "superseded"
+    });
+  });
+
+  it.each(["filtered", "incomplete"] as const)(
+    "retains a missing-row batch from a %s response but releases its operation backpressure slot",
+    async (projection) => {
+      let queryResult = canonicalResult();
+      const harness = await createHarness(
+        async () => { throw new Error("connection lost"); },
+        { maxPendingOperations: 1 },
+        { query: async () => queryResult }
+      );
+
+      await harness.controller.execute("operation-out-of-view", [valueMutation(120)]);
+      queryResult = {
+        items: [],
+        revision: "2",
+        completeness: projection === "filtered" ? "completeDataset" : "loadedRows",
+        pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+      };
+      const projectedQuery: QueryRequest = projection === "filtered"
+        ? {
+            ...query(),
+            filter: {
+              kind: "comparison",
+              columnId: "label",
+              operator: "eq",
+              value: { type: "string", value: "visible" }
+            }
+          }
+        : query();
+      await harness.queryController.load(projectedQuery, "projected-refresh");
+
+      expect(harness.controller.getPendingOperations()).toHaveLength(1);
+      expect(harness.overlays.getLatest("1", "salary")).toMatchObject({ status: "uncertain" });
+      const nextMutation: PreparedRemoteMutation = {
+        kind: "cell-value",
+        rowId: "1",
+        columnId: "label",
+        rawText: "next",
+        parsedValue: "next",
+        optimisticCell: {
+          storedValue: "next",
+          evaluatedValue: "next",
+          displayValue: "next",
+          metadata: {}
+        }
+      };
+      await expect(harness.controller.execute("operation-after-projection", [nextMutation]))
+        .resolves.toEqual({ status: "pending", operationId: "operation-after-projection" });
+      expect(harness.mutate).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("waits for authority from a query started after the uncertain transition", async () => {
     const mutation = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const earlyRefresh = createDeferred<QueryResult<Row>>();

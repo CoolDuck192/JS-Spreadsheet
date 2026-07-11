@@ -195,6 +195,31 @@ describe("RemoteSubscriptionController", () => {
     })]);
   });
 
+  it("settles an uncertain edit when an authoritative subscription deletes its row", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost");
+    });
+    await harness.mutations.execute("operation-uncertain-delete", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({ kind: "rows-deleted", revision: "2", rowIds: ["1"] });
+
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.mutations.getConflicts()).toEqual([]);
+  });
+
   it("invalidates unknown revision order and rejects an older in-flight query after a newer event", async () => {
     const harness = await createHarness();
     harness.subscription.accept({ kind: "invalidate", revision: "opaque" });

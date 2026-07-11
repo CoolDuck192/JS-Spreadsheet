@@ -14,6 +14,7 @@ export type RemoteQuerySnapshot<TRow> = {
 export type RemoteQueryAcceptance<TRow> = {
   generation: number;
   revision: string;
+  query: QueryRequest;
   items: readonly QueryRow<TRow>[];
   completeness: QueryResult<TRow>["completeness"];
 };
@@ -110,6 +111,7 @@ export class RemoteQueryController<TRow> {
       this.publishAcceptance({
         generation,
         revision: result.revision,
+        query,
         items: result.items,
         completeness: result.completeness
       });
