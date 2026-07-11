@@ -33,6 +33,7 @@ export type RectangularRowEditContext = {
   editedSheetId: string;
   tableColumnStart: number;
   tableColumnEnd: number;
+  tableRowEnd: number;
   row: number;
   count: number;
   operation: "insert" | "delete";
@@ -675,7 +676,7 @@ function rewriteRectangularReferenceToken(
     return { ok: true, formula: token.raw };
   }
 
-  const affectedRowInterval = rewriteRowInterval(token.start.row, originalEnd.row, context);
+  const affectedRowInterval = rewriteRowIntervalForRectangularEdit(token.start.row, originalEnd.row, context);
   if (
     affectedRowInterval
     && affectedRowInterval.start === token.start.row
@@ -725,44 +726,48 @@ function rewriteRectangularReferenceToken(
   };
 }
 
-function rewriteRowInterval(
+export function rewriteRowIntervalForRectangularEdit(
   startRow: number,
   endRow: number,
-  context: RectangularRowEditContext
+  context: Pick<RectangularRowEditContext, "row" | "count" | "operation" | "tableRowEnd">
 ): { start: number; end: number } | null {
   const ascending = startRow <= endRow;
   const low = Math.min(startRow, endRow);
   const high = Math.max(startRow, endRow);
-  let nextLow: number;
-  let nextHigh: number;
+  if (high < context.row || low > context.tableRowEnd) {
+    return { start: startRow, end: endRow };
+  }
+
+  let nextLow = low;
+  let nextHigh = high;
   if (context.operation === "insert") {
-    if (high < context.row) {
-      nextLow = low;
-      nextHigh = high;
-    } else if (low >= context.row) {
-      nextLow = low + context.count;
-      nextHigh = high + context.count;
-    } else {
-      nextLow = low;
-      nextHigh = high + context.count;
+    if (low >= context.row && low <= context.tableRowEnd) {
+      nextLow += context.count;
+    }
+    if (high >= context.row && high <= context.tableRowEnd) {
+      nextHigh += context.count;
     }
   } else {
-    const deleteEnd = context.row + context.count - 1;
-    if (high < context.row) {
-      nextLow = low;
-      nextHigh = high;
-    } else if (low > deleteEnd) {
-      nextLow = low - context.count;
-      nextHigh = high - context.count;
-    } else {
-      const survivesAbove = low < context.row;
-      const survivesBelow = high > deleteEnd;
-      if (!survivesAbove && !survivesBelow) return null;
-      nextLow = survivesAbove ? low : context.row;
-      nextHigh = survivesBelow ? high - context.count : context.row - 1;
-      if (nextLow > nextHigh) return null;
+    const deleteEnd = Math.min(
+      context.row + context.count - 1,
+      context.tableRowEnd
+    );
+    const lowDeleted = low >= context.row && low <= deleteEnd;
+    const highDeleted = high >= context.row && high <= deleteEnd;
+    if (lowDeleted && highDeleted) return null;
+
+    if (lowDeleted) nextLow = context.row;
+    else if (low > deleteEnd && low <= context.tableRowEnd) {
+      nextLow -= context.count;
+    }
+
+    if (highDeleted) nextHigh = context.row - 1;
+    else if (high > deleteEnd && high <= context.tableRowEnd) {
+      nextHigh -= context.count;
     }
   }
+
+  if (nextLow > nextHigh) [nextLow, nextHigh] = [nextHigh, nextLow];
   return ascending ? { start: nextLow, end: nextHigh } : { start: nextHigh, end: nextLow };
 }
 

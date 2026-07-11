@@ -168,6 +168,116 @@ describe("structured table rows", () => {
     });
   });
 
+  it("bounds insertion rewrites to rows moved inside the old table", () => {
+    let workbook = rowFixture({ B10: 7 });
+    workbook = setCellContent(
+      workbook,
+      "sheet-1",
+      "D1",
+      "=B10*2+SUM(A3:A10)+SUM(A2:A4)"
+    );
+    workbook = {
+      ...workbook,
+      namedRanges: [
+        {
+          name: "BelowTable",
+          sheetId: "sheet-1",
+          range: { start: { row: 9, column: 1 }, end: { row: 11, column: 1 } }
+        },
+        {
+          name: "StartsInside",
+          sheetId: "sheet-1",
+          range: { start: { row: 2, column: 0 }, end: { row: 9, column: 0 } }
+        },
+        {
+          name: "EndsInside",
+          sheetId: "sheet-1",
+          range: { start: { row: 1, column: 0 }, end: { row: 3, column: 0 } }
+        }
+      ]
+    };
+
+    const result = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "D1")).toBe(
+      "=B10*2+SUM(A4:A10)+SUM(A2:A5)"
+    );
+    expect(result.workbook.namedRanges.map(({ name, range }) => ({ name, range }))).toEqual([
+      {
+        name: "BelowTable",
+        range: { start: { row: 9, column: 1 }, end: { row: 11, column: 1 } }
+      },
+      {
+        name: "StartsInside",
+        range: { start: { row: 3, column: 0 }, end: { row: 9, column: 0 } }
+      },
+      {
+        name: "EndsInside",
+        range: { start: { row: 1, column: 0 }, end: { row: 4, column: 0 } }
+      }
+    ]);
+  });
+
+  it("bounds deletion rewrites to rows moved inside the old table", () => {
+    let workbook = rowFixture({ B10: 7 });
+    workbook = setCellContent(
+      workbook,
+      "sheet-1",
+      "D1",
+      "=B10*2+SUM(A4:A10)+SUM(A2:A4)"
+    );
+    workbook = {
+      ...workbook,
+      namedRanges: [
+        {
+          name: "BelowTable",
+          sheetId: "sheet-1",
+          range: { start: { row: 9, column: 1 }, end: { row: 11, column: 1 } }
+        },
+        {
+          name: "StartsInside",
+          sheetId: "sheet-1",
+          range: { start: { row: 3, column: 0 }, end: { row: 9, column: 0 } }
+        },
+        {
+          name: "EndsInside",
+          sheetId: "sheet-1",
+          range: { start: { row: 1, column: 0 }, end: { row: 3, column: 0 } }
+        }
+      ]
+    };
+
+    const result = deleteStructuredTableRows(
+      workbook,
+      "table-1",
+      ["row-2"],
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "D1")).toBe(
+      "=B10*2+SUM(A3:A10)+SUM(A2:A3)"
+    );
+    expect(result.workbook.namedRanges.map(({ name, range }) => ({ name, range }))).toEqual([
+      {
+        name: "BelowTable",
+        range: { start: { row: 9, column: 1 }, end: { row: 11, column: 1 } }
+      },
+      {
+        name: "StartsInside",
+        range: { start: { row: 2, column: 0 }, end: { row: 9, column: 0 } }
+      },
+      {
+        name: "EndsInside",
+        range: { start: { row: 1, column: 0 }, end: { row: 2, column: 0 } }
+      }
+    ]);
+  });
+
   it("sorts formula results numerically and permutes row IDs with every cell plane", () => {
     const workbook = rowFixture({ B2: "=10", B3: "=2", B4: "=2" });
     const engine = createFormulaEngine(workbook);

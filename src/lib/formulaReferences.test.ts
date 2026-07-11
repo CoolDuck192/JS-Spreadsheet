@@ -223,6 +223,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 2,
       count: 1,
       operation: "insert" as const,
@@ -247,6 +248,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 2,
       operation: "delete" as const,
@@ -264,6 +266,72 @@ describe("formulaReferences", () => {
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
+  it.each(["insert", "delete"] as const)(
+    "keeps references below the old table rectangle fixed on %s",
+    (operation) => {
+      const context = {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 1,
+        tableColumnEnd: 3,
+        tableRowEnd: 10,
+        row: 4,
+        count: 1,
+        operation,
+        sheetBounds: { rowCount: 100, columnCount: 26 }
+      };
+
+      expect(rewriteFormulaForRectangularRowEdit("=B20*2+SUM(C15:C30)", context)).toEqual({
+        ok: true,
+        formula: "=B20*2+SUM(C15:C30)"
+      });
+    }
+  );
+
+  it("rewrites only the endpoints inside the old table rectangle on insertion", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 3,
+      tableRowEnd: 10,
+      row: 4,
+      count: 2,
+      operation: "insert" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit(
+      "=SUM(B5:B20)+SUM(C3:C11)+D11+SUM(B3:B20)",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=SUM(B7:B20)+SUM(C3:C13)+D13+SUM(B3:B20)"
+    });
+  });
+
+  it("rewrites only the endpoints inside the old table rectangle on deletion", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 3,
+      tableRowEnd: 10,
+      row: 4,
+      count: 2,
+      operation: "delete" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit(
+      "=SUM(B7:B20)+SUM(C3:C11)+D11+SUM(B3:B20)",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=SUM(B5:B20)+SUM(C3:C9)+D9+SUM(B3:B20)"
+    });
+  });
+
   it("preserves quoted text, function names, scientific notation, and other sheets", () => {
     expect(rewriteFormulaForRectangularRowEdit(
       '=LOG10(B2)+1E10+"B2"+\'Rates 2026\'!B2',
@@ -272,6 +340,7 @@ describe("formulaReferences", () => {
         editedSheetId: "Data",
         tableColumnStart: 1,
         tableColumnEnd: 2,
+        tableRowEnd: 3,
         row: 1,
         count: 1,
         operation: "insert",
@@ -291,6 +360,7 @@ describe("formulaReferences", () => {
         editedSheetId: "Data",
         tableColumnStart: 1,
         tableColumnEnd: 2,
+        tableRowEnd: 3,
         row: 1,
         count: 1,
         operation: "insert",
@@ -308,6 +378,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,
@@ -334,6 +405,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,
@@ -352,6 +424,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,

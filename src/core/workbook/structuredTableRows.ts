@@ -10,6 +10,7 @@ import { compareDeterministicText } from "../../lib/filters";
 import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
 import {
   rewriteFormulaForRectangularRowEdit,
+  rewriteRowIntervalForRectangularEdit,
   translateFormulaReferences,
   translateFormulaRowsWithinColumns
 } from "../../lib/formulaReferences";
@@ -288,6 +289,7 @@ function rewriteWorkbookForRowEdits(
           editedSheetId: editedSheet.name,
           tableColumnStart: table.range.start.column,
           tableColumnEnd: table.range.end.column,
+          tableRowEnd: table.range.end.row,
           row: edit.row,
           count: edit.count,
           operation: edit.operation,
@@ -334,7 +336,12 @@ function rewriteNamedRange(
   const overlapsColumns = range.start.column <= table.range.end.column
     && range.end.column >= table.range.start.column;
   if (!overlapsColumns) return namedRange;
-  const interval = rewriteInterval(range.start.row, range.end.row, edit);
+  const interval = rewriteInterval(
+    range.start.row,
+    range.end.row,
+    edit,
+    table.range.end.row
+  );
   if (interval === "unchanged") return namedRange;
   const whollyInside = range.start.column >= table.range.start.column
     && range.end.column <= table.range.end.column;
@@ -351,23 +358,15 @@ function rewriteNamedRange(
 function rewriteInterval(
   start: number,
   end: number,
-  edit: RectangularEdit
+  edit: RectangularEdit,
+  tableRowEnd: number
 ): { start: number; end: number } | null | "unchanged" {
-  if (edit.operation === "insert") {
-    if (end < edit.row) return "unchanged";
-    if (start >= edit.row) return { start: start + edit.count, end: end + edit.count };
-    return { start, end: end + edit.count };
-  }
-  const deleteEnd = edit.row + edit.count - 1;
-  if (end < edit.row) return "unchanged";
-  if (start > deleteEnd) return { start: start - edit.count, end: end - edit.count };
-  const survivesAbove = start < edit.row;
-  const survivesBelow = end > deleteEnd;
-  if (!survivesAbove && !survivesBelow) return null;
-  return {
-    start: survivesAbove ? start : edit.row,
-    end: survivesBelow ? end - edit.count : edit.row - 1
-  };
+  const interval = rewriteRowIntervalForRectangularEdit(start, end, {
+    ...edit,
+    tableRowEnd
+  });
+  if (interval?.start === start && interval.end === end) return "unchanged";
+  return interval;
 }
 
 function contiguousDeletionEdits(rows: readonly number[]): RectangularEdit[] {
