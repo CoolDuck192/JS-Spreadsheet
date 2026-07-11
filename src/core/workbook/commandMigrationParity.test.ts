@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { DataValidationRule } from "../../types";
+import type { ConditionalFormatRule, DataValidationRule } from "../../types";
 import { createBlankWorkbook } from "../../lib/workbook";
 import type { WorkbookCommand } from "./commands";
 import { migrateWorkbookModel } from "./migrateWorkbook";
@@ -103,6 +103,34 @@ const invalidCommands: readonly Readonly<{
         anchor: { row: 0, column: 3 }
       }
     }
+  },
+  {
+    name: "conditional format outside the sheet",
+    command: conditionalFormatCommand({
+      range: { start: { row: 99, column: 0 }, end: { row: 100, column: 0 } }
+    })
+  },
+  {
+    name: "conditional format with a blank id",
+    command: conditionalFormatCommand({ id: "   " })
+  },
+  {
+    name: "conditional format with a zero top count",
+    command: conditionalFormatCommand({ condition: { type: "top", count: 0 } })
+  },
+  {
+    name: "conditional format with a non-positive font size",
+    command: conditionalFormatCommand({ format: { fontSize: 0 } })
+  },
+  {
+    name: "conditional format with an unknown number format",
+    command: conditionalFormatCommand({ format: { numberFormat: "accounting" } })
+  },
+  {
+    name: "conditional format with a non-thin border",
+    command: conditionalFormatCommand({
+      format: { borders: { top: { style: "double", color: "#123456" } } }
+    })
   }
 ];
 
@@ -119,7 +147,7 @@ describe("workbook command migration parity", () => {
     session.destroy();
   });
 
-  it("round-trips every committed validation, named-range, and chart command", () => {
+  it("round-trips every committed validation, conditional-format, named-range, and chart command", () => {
     const coordinate = fc.record({
       row: fc.integer({ min: 0, max: 102 }),
       column: fc.integer({ min: 0, max: 28 })
@@ -153,6 +181,22 @@ describe("workbook command migration parity", () => {
             namedRange: { name: "GeneratedRange", sheetId: "sheet-1", range: namedRange }
           },
           {
+            type: "range.conditionalFormat.add",
+            sheetId: "sheet-1",
+            range: validationRange,
+            rule: {
+              id: "generated-conditional-format",
+              range: inBoundsRange,
+              condition: { type: "between", value: "1", secondValue: "5" },
+              format: {
+                bold: true,
+                fontSize: 11,
+                numberFormat: "number",
+                borders: { bottom: { style: "thin", color: "#123456" } }
+              }
+            }
+          },
+          {
             type: "sheet.chart.add",
             sheetId: "sheet-1",
             chart: {
@@ -177,3 +221,22 @@ describe("workbook command migration parity", () => {
       }), { numRuns: 75 });
   });
 });
+
+function conditionalFormatCommand(overrides: Readonly<{
+  id?: unknown;
+  range?: ConditionalFormatRule["range"];
+  condition?: unknown;
+  format?: unknown;
+}>): WorkbookCommand {
+  return {
+    type: "range.conditionalFormat.add",
+    sheetId: "sheet-1",
+    range: overrides.range ?? inBoundsRange,
+    rule: {
+      id: overrides.id ?? "conditional-format",
+      range: inBoundsRange,
+      condition: overrides.condition ?? { type: "blank" },
+      format: overrides.format ?? { bold: true }
+    } as unknown as ConditionalFormatRule
+  };
+}

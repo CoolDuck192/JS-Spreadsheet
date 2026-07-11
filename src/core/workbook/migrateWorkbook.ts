@@ -197,15 +197,25 @@ function migrateConditionalFormats(
   const result: ConditionalFormatRule[] = [];
   const ids = new Set<string>();
   for (const item of value) {
-    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id)) return null;
-    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
-    const condition = migrateConditionalFormatCondition(item.condition);
-    const format = migrateCellFormat(item.format);
-    if (!condition || !format) return null;
-    ids.add(item.id);
-    result.push({ id: item.id, range: cloneRange(item.range), condition, format });
+    const rule = migrateConditionalFormatRule(item, bounds);
+    if (!rule || ids.has(rule.id)) return null;
+    ids.add(rule.id);
+    result.push(rule);
   }
   return result;
+}
+
+export function migrateConditionalFormatRule(
+  value: unknown,
+  bounds: SheetBounds
+): ConditionalFormatRule | null {
+  if (!isRecord(value) || !nonBlankString(value.id)) return null;
+  if (!isCellRange(value.range) || !rangeInBounds(value.range, bounds)) return null;
+  const condition = migrateConditionalFormatCondition(value.condition);
+  const format = migrateCellFormat(value.format);
+  return condition && format
+    ? { id: value.id, range: cloneRange(value.range), condition, format }
+    : null;
 }
 
 function migrateConditionalFormatCondition(value: unknown): ConditionalFormatCondition | null {

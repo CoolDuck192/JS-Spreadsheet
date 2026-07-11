@@ -84,6 +84,7 @@ import {
   reduceWorksheetStructureCommand,
   type WorksheetStructureCommand
 } from "./worksheetStructure";
+import { migrateConditionalFormatRule } from "./migrateWorkbook";
 
 export type SerializableRichClipboardRange = {
   readonly range: CellRange;
@@ -411,8 +412,28 @@ export function applyWorkbookMutation(
     }
     case "range.conditionalFormat.add": {
       const range = checkedRange(command.range);
+      const rangeIssue = rangeBoundsValidation(
+        workbook,
+        command.sheetId,
+        range,
+        "Conditional format range must be inside the sheet"
+      );
+      if (rangeIssue) return rangeIssue;
+      const sheet = workbook.sheets.find((candidate) => candidate.id === command.sheetId)!;
+      const rule = migrateConditionalFormatRule({ ...command.rule, range }, sheet);
+      if (!rule) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{
+            code: "conditionalFormat.rule.invalid",
+            message: "Conditional format rule must have a nonblank id and supported condition and format",
+            sheetId: command.sheetId
+          }]
+        };
+      }
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
-      return permission ?? applied(addConditionalFormat(workbook, command.sheetId, range, command.rule));
+      return permission ?? applied(addConditionalFormat(workbook, command.sheetId, range, rule));
     }
     case "range.conditionalFormat.remove": {
       const sheet = workbook.sheets.find((candidate) => candidate.id === command.sheetId);
