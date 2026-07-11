@@ -9,10 +9,8 @@ import type {
   XlsxImportOptions
 } from "./core";
 import type {
-  WorkbookCommand as RootWorkbookCommand,
-  WorkbookIdReservation as RootWorkbookIdReservation
-} from "../index";
-import type {
+  WorkbookCommand as ReactWorkbookCommand,
+  WorkbookIdReservation as ReactWorkbookIdReservation,
   WorkbookTableRow as ReactWorkbookTableRow,
   WorkbookTableSession as ReactWorkbookTableSession
 } from "./react";
@@ -67,7 +65,7 @@ describe("public entrypoints", () => {
     }>();
   });
 
-  it("publishes serializable transaction id reservation types from core", () => {
+  it("publishes serializable transaction id reservation types from core and React", () => {
     const reservation = {
       kind: "table",
       occurrence: 0,
@@ -80,8 +78,8 @@ describe("public entrypoints", () => {
     } satisfies WorkbookCommand;
 
     expectTypeOf(command).toMatchTypeOf<WorkbookCommand>();
-    expectTypeOf<RootWorkbookCommand>().toEqualTypeOf<WorkbookCommand>();
-    expectTypeOf<RootWorkbookIdReservation>().toEqualTypeOf<WorkbookIdReservation>();
+    expectTypeOf<ReactWorkbookCommand>().toEqualTypeOf<WorkbookCommand>();
+    expectTypeOf<ReactWorkbookIdReservation>().toEqualTypeOf<WorkbookIdReservation>();
   });
 
   it("maps typed subpaths for legacy TypeScript resolution", async () => {

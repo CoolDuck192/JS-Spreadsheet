@@ -575,6 +575,64 @@ describe("WorkbookSession", () => {
     expect(getCellContent(session.getSnapshot().workbook, sheetId, "A2")).toBeNull();
   });
 
+  it.each([
+    [
+      "undo then redo",
+      undefined,
+      { type: "history.undo" },
+      { type: "history.redo" },
+      { type: "history.undo" }
+    ],
+    [
+      "redo then undo",
+      { type: "history.undo" },
+      { type: "history.redo" },
+      { type: "history.undo" },
+      { type: "history.redo" }
+    ]
+  ] as const)(
+    "checkpoints a selection between %s history children",
+    (_direction, prepare, firstHistoryCommand, secondHistoryCommand, revisitCommand) => {
+      const workbook = createBlankWorkbook();
+      const sheetId = workbook.activeSheetId;
+      const b1 = {
+        start: { row: 0, column: 1 },
+        end: { row: 0, column: 1 }
+      } as const;
+      const c1 = {
+        start: { row: 0, column: 2 },
+        end: { row: 0, column: 2 }
+      } as const;
+      const session = createWorkbookSession({ workbook });
+
+      expect(session.dispatch({
+        type: "transaction",
+        commands: [
+          { type: "cell.set", sheetId, address: "B1", input: "first" },
+          { type: "selection.set", selection: b1 }
+        ]
+      })).toMatchObject({ status: "committed", changed: true });
+
+      if (prepare) {
+        expect(session.dispatch(prepare))
+          .toMatchObject({ status: "committed", changed: true });
+      }
+
+      expect(session.dispatch({
+        type: "transaction",
+        commands: [
+          firstHistoryCommand,
+          { type: "selection.set", selection: c1 },
+          secondHistoryCommand
+        ]
+      })).toMatchObject({ status: "committed", changed: true });
+
+      expect(session.dispatch(revisitCommand))
+        .toMatchObject({ status: "committed", changed: true });
+      expect(session.getSnapshot()).toMatchObject({ selection: c1 });
+    }
+  );
+
   it("preflights deterministic references to ids generated earlier in the transaction", () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;
