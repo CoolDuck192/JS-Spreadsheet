@@ -16,18 +16,18 @@ function installGoogleIdentityServices(
   initialize?: (configuration: TokenClientConfiguration) => { requestAccessToken(): void }
 ) {
   const requestAccessToken = vi.fn();
+  const configurations: TokenClientConfiguration[] = [];
   const callbacks: {
     token?: TokenClientConfiguration["callback"];
     failure?: NonNullable<TokenClientConfiguration["error_callback"]>;
   } = {};
-  const initTokenClient = vi.fn(
-    initialize ??
-      ((configuration: TokenClientConfiguration) => {
-        callbacks.token = configuration.callback;
-        callbacks.failure = configuration.error_callback;
-        return { requestAccessToken };
-      })
-  );
+  const initTokenClient = vi.fn((configuration: TokenClientConfiguration) => {
+    configurations.push(configuration);
+    if (initialize) return initialize(configuration);
+    callbacks.token = configuration.callback;
+    callbacks.failure = configuration.error_callback;
+    return { requestAccessToken };
+  });
 
   Object.defineProperty(window, "google", {
     configurable: true,
@@ -35,7 +35,7 @@ function installGoogleIdentityServices(
     value: { accounts: { oauth2: { initTokenClient } } }
   });
 
-  return { callbacks, initTokenClient, requestAccessToken };
+  return { callbacks, configurations, initTokenClient, requestAccessToken };
 }
 
 function expectCode(promise: Promise<unknown>, code: string) {
@@ -84,6 +84,71 @@ describe("createBrowserTokenProvider", () => {
     callbacks.token?.({ access_token: "token" });
     await expect(tokenPromise).resolves.toBe("token");
     expect(requestAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces overlapping requests with the same canonical scopes", async () => {
+    const { configurations, initTokenClient, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID);
+    await provider.prepare();
+
+    const first = provider.getAccessToken([SHEETS_READONLY_SCOPE, "profile"]);
+    const second = provider.getAccessToken(["profile", SHEETS_READONLY_SCOPE]);
+
+    expect(second).toBe(first);
+    expect(initTokenClient).toHaveBeenCalledTimes(1);
+    expect(requestAccessToken).toHaveBeenCalledTimes(1);
+
+    configurations[0]?.callback({ access_token: "shared-token" });
+    await expect(first).resolves.toBe("shared-token");
+    await expect(second).resolves.toBe("shared-token");
+  });
+
+  it("keeps overlapping requests for different scopes independent", async () => {
+    const { configurations, initTokenClient, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID);
+    await provider.prepare();
+
+    const readonly = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    const profile = provider.getAccessToken(["profile"]);
+
+    expect(profile).not.toBe(readonly);
+    expect(initTokenClient).toHaveBeenCalledTimes(2);
+    expect(requestAccessToken).toHaveBeenCalledTimes(2);
+
+    configurations[1]?.callback({ access_token: "profile-token" });
+    configurations[0]?.callback({ access_token: "readonly-token" });
+    await expect(readonly).resolves.toBe("readonly-token");
+    await expect(profile).resolves.toBe("profile-token");
+  });
+
+  it("shares a same-scope rejection and clears it so the request can be retried", async () => {
+    const { configurations, initTokenClient, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID);
+    await provider.prepare();
+
+    const first = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    const second = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    const settled = Promise.allSettled([first, second]);
+
+    expect(second).toBe(first);
+    expect(initTokenClient).toHaveBeenCalledTimes(1);
+    expect(requestAccessToken).toHaveBeenCalledTimes(1);
+    configurations[0]?.error_callback?.({ type: "popup_closed" });
+    const results = await settled;
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      expect(result.status === "rejected" ? result.reason : null).toMatchObject({
+        name: "GoogleSheetsError",
+        code: "popup_closed"
+      });
+    }
+
+    const retry = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    expect(initTokenClient).toHaveBeenCalledTimes(2);
+    expect(requestAccessToken).toHaveBeenCalledTimes(2);
+    configurations[1]?.callback({ access_token: "retry-token" });
+    await expect(retry).resolves.toBe("retry-token");
   });
 
   it.each([

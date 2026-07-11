@@ -54,6 +54,7 @@ declare global {
  */
 export function createBrowserTokenProvider(clientId: string): BrowserTokenProvider {
   let cached: { token: string; scopeKey: string; expiresAt: number } | null = null;
+  const pending = new Map<string, Promise<string>>();
   let preparedGoogle: GoogleIdentityServices | null = null;
   let normalizedClientId: string | null = null;
   let preparation: Promise<void> | null = null;
@@ -95,14 +96,26 @@ export function createBrowserTokenProvider(clientId: string): BrowserTokenProvid
       }
 
       if (preparedGoogle && normalizedClientId) {
-        return requestToken(preparedGoogle, normalizedClientId, scopeKey).then((token) => {
-          cached = {
-            token,
-            scopeKey,
-            expiresAt: Date.now() + ASSUMED_TOKEN_LIFETIME_MS
-          };
-          return token;
-        });
+        const inFlight = pending.get(scopeKey);
+        if (inFlight) return inFlight;
+
+        const request = requestToken(preparedGoogle, normalizedClientId, scopeKey).then(
+          (token) => {
+            cached = {
+              token,
+              scopeKey,
+              expiresAt: Date.now() + ASSUMED_TOKEN_LIFETIME_MS
+            };
+            pending.delete(scopeKey);
+            return token;
+          },
+          (error: unknown) => {
+            pending.delete(scopeKey);
+            throw error;
+          }
+        );
+        pending.set(scopeKey, request);
+        return request;
       }
 
       return provider.prepare().then(() => provider.getAccessToken(scopes));
