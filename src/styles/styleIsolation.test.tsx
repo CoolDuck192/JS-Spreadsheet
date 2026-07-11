@@ -117,4 +117,21 @@ body {
       /__quick-tools\s*\{(?=[^}]*position:\s*absolute;)(?=[^}]*max-height:\s*min\(420px, calc\(100dvh - 16px\), calc\(100% - 16px\)\);)(?=[^}]*overflow-x:\s*hidden;)(?=[^}]*overflow-y:\s*auto;)(?=[^}]*pointer-events:\s*auto;)[^}]*\}/s
     );
   });
+
+  it("keeps the clipped table root while sizing top-layer column menus to the viewport", () => {
+    const css = readFileSync("src/styles/data-table.css", "utf8");
+    const rootRule = css.match(/\.js-spreadsheet-root\.js-spreadsheet-data-table\s*\{[^}]*\}/s)?.[0] ?? "";
+    const menuRule = css.match(/\.js-spreadsheet-data-table__column-menu\s*\{[^}]*\}/s)?.[0] ?? "";
+    const treeToggleRule = css.match(/\.js-spreadsheet-data-table__cell-content > button\s*\{[^}]*\}/s)?.[0] ?? "";
+
+    expect(rootRule).toMatch(/overflow:\s*hidden;/);
+    expect(menuRule).toMatch(/position:\s*fixed;/);
+    expect(menuRule).toMatch(/margin:\s*0;/);
+    expect(menuRule).toMatch(/width:\s*min\(248px, calc\(100vw - 16px\)\);/);
+    expect(menuRule).toMatch(/max-height:\s*min\(520px, calc\(100dvh - 16px\)\);/);
+    expect(menuRule).not.toMatch(/\binset(?:-|:)/);
+    expect(menuRule).not.toMatch(/\b(?:cqi|cqb)\b/);
+    expect(treeToggleRule).toMatch(/(?:width|min-width):\s*30px;/);
+    expect(treeToggleRule).toMatch(/min-height:\s*30px;/);
+  });
 });

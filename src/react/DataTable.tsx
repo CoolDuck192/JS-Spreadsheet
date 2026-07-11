@@ -48,6 +48,11 @@ import type {
 import { useTableSession } from "./useTableSession";
 import { useTableSnapshot } from "./useTableSnapshot";
 
+type OpenColumnMenu = Readonly<{
+  columnId: string;
+  trigger: HTMLButtonElement;
+}>;
+
 function DataTableInner<TRow>(
   props: DataTableProps<TRow>,
   forwardedRef: ForwardedRef<DataTableHandle>
@@ -118,7 +123,7 @@ function DataTableSurface<TRow>({
   const [editing, setEditing] = useState<GridEditorState | null>(null);
   const [issue, setIssue] = useState("");
   const [announcement, setAnnouncement] = useState("");
-  const [openColumnId, setOpenColumnId] = useState<string | null>(null);
+  const [openColumnMenu, setOpenColumnMenu] = useState<OpenColumnMenu | null>(null);
   const [inlineFilterValues, setInlineFilterValues] = useState<Record<string, string>>({});
   const [containerInlineSize, setContainerInlineSize] = useState(0);
   const [measuredCellHeights, setMeasuredCellHeights] = useState<Record<string, Readonly<Record<string, number>>>>({});
@@ -172,6 +177,10 @@ function DataTableSurface<TRow>({
       // Host diagnostics stay isolated from rendering.
     }
   }, [presentation.onDiagnostic]);
+
+  const closeColumnMenu = useCallback((trigger: HTMLButtonElement) => {
+    setOpenColumnMenu((current) => current?.trigger === trigger ? null : current);
+  }, []);
 
   const measureCell = useCallback((rowId: string, columnId: string, height: number) => {
     if (presentation.rowHeight !== "auto") return;
@@ -558,11 +567,22 @@ function DataTableSurface<TRow>({
                   event.dataTransfer?.setData("text/plain", column.id);
                 }}
               >↕</button>
-              <button type="button" aria-label={`Column options for ${label}`} aria-expanded={openColumnId === column.id} onClick={() => setOpenColumnId(openColumnId === column.id ? null : column.id)}>
+              <button
+                type="button"
+                aria-label={`Column options for ${label}`}
+                aria-expanded={openColumnMenu?.columnId === column.id}
+                onClick={(event) => {
+                  const trigger = event.currentTarget;
+                  setOpenColumnMenu((current) => current?.columnId === column.id
+                    ? null
+                    : { columnId: column.id, trigger });
+                }}
+              >
                 ⋯
               </button>
-              {openColumnId === column.id ? (
+              {openColumnMenu?.columnId === column.id ? (
                 <DataTableColumnMenu
+                  anchor={openColumnMenu.trigger}
                   column={column}
                   session={session}
                   snapshot={snapshot}
@@ -570,6 +590,7 @@ function DataTableSurface<TRow>({
                   onIssue={setIssue}
                   onDiagnostic={reportDiagnostic}
                   onAnnouncement={setAnnouncement}
+                  onClose={closeColumnMenu}
                 />
               ) : null}
             </div>

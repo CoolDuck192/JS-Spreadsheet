@@ -46,6 +46,14 @@ export function DataTableCell<TRow>({
             type="button"
             aria-label={`${row.expanded ? "Collapse" : "Expand"} ${String(cell.displayValue || row.id)}`}
             aria-expanded={row.expanded === true}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             onClick={(event) => {
               event.stopPropagation();
               onToggleExpanded?.(row.id, row.expanded !== true);

@@ -7,7 +7,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLocalRecordTableSession } from "../table/local/RecordTableSession";
-import type { ChangeContext, RowUpdater, TableDiagnosticEvent } from "../table/core/types";
+import type { ChangeContext, RowUpdater, TableDiagnosticEvent, TableViewState } from "../table/core/types";
 import { DataTable } from "./DataTable";
 import type {
   CellEditorProps,
@@ -336,6 +336,148 @@ describe("DataTable", () => {
     session.destroy();
   });
 
+  it("opens column options in a scoped native popover and restores focus on Escape", async () => {
+    const user = userEvent.setup();
+    const showPopover = vi.spyOn(HTMLElement.prototype, "showPopover");
+    const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");
+    renderTable();
+
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Name column menu" });
+
+    expect(menu).toHaveAttribute("popover", "auto");
+    expect(menu.closest(".js-spreadsheet-data-table")).not.toBeNull();
+    expect(showPopover).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
+
+    fireEvent.keyDown(menu, { key: "Escape" });
+
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each([
+    ["top", { left: 120, right: 142, top: 0, bottom: 22 }],
+    ["right", { left: 298, right: 320, top: 90, bottom: 112 }],
+    ["bottom", { left: 120, right: 142, top: 218, bottom: 240 }],
+    ["left", { left: 0, right: 22, top: 90, bottom: 112 }]
+  ])("keeps a fixed column menu inside the viewport at the %s edge", async (_edge, anchorBounds) => {
+    vi.stubGlobal("innerWidth", 320);
+    vi.stubGlobal("innerHeight", 240);
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    const nativeRect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === trigger) return rect(anchorBounds);
+      if (this.classList.contains("js-spreadsheet-data-table__column-menu")) {
+        return rect({ left: 0, right: 248, top: 0, bottom: 180 });
+      }
+      return nativeRect.call(this);
+    });
+
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const left = Number.parseFloat(menu.style.left);
+    const top = Number.parseFloat(menu.style.top);
+
+    expect(menu).toHaveStyle({ position: "fixed" });
+    expect(left).toBeGreaterThanOrEqual(8);
+    expect(top).toBeGreaterThanOrEqual(8);
+    expect(left + 248).toBeLessThanOrEqual(312);
+    expect(top + 180).toBeLessThanOrEqual(232);
+  });
+
+  it("reclamps an open column menu when the viewport resizes", async () => {
+    vi.stubGlobal("innerWidth", 640);
+    vi.stubGlobal("innerHeight", 480);
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    const nativeRect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === trigger) return rect({ left: 590, right: 612, top: 430, bottom: 452 });
+      if (this.classList.contains("js-spreadsheet-data-table__column-menu")) {
+        return rect({ left: 0, right: 248, top: 0, bottom: 180 });
+      }
+      return nativeRect.call(this);
+    });
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Name column menu" });
+
+    vi.stubGlobal("innerWidth", 320);
+    vi.stubGlobal("innerHeight", 240);
+    fireEvent.resize(window);
+
+    expect(Number.parseFloat(menu.style.left) + 248).toBeLessThanOrEqual(312);
+    expect(Number.parseFloat(menu.style.top) + 180).toBeLessThanOrEqual(232);
+  });
+
+  it("clears menu state and restores trigger focus after native light dismiss", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const toggle = new Event("toggle");
+    Object.defineProperty(toggle, "newState", { value: "closed" });
+
+    fireEvent(menu, toggle);
+
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("closes an open column menu on viewport scroll", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+
+    fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
+
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("hides the native popover when its column trigger unmounts", async () => {
+    const user = userEvent.setup();
+    const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");
+    const { rerender } = renderTable();
+    await user.click(screen.getByRole("button", { name: "Column options for Name" }));
+
+    rerender(
+      <DataTable
+        aria-label="Employees"
+        rows={employees}
+        columns={columns.filter((column) => column.id !== "name")}
+        getRowId={getRowId}
+      />
+    );
+
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Column options for Name" })).not.toBeInTheDocument();
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes popover listeners and hides the menu when the table unmounts", async () => {
+    const user = userEvent.setup();
+    const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");
+    const getBounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+    const { unmount } = renderTable();
+    await user.click(screen.getByRole("button", { name: "Column options for Name" }));
+    const callsBeforeUnmount = getBounds.mock.calls.length;
+
+    unmount();
+    fireEvent.resize(window);
+    fireEvent.scroll(window);
+
+    expect(hidePopover).toHaveBeenCalledTimes(1);
+    expect(getBounds).toHaveBeenCalledTimes(callsBeforeUnmount);
+  });
+
   it("allows explicit visibility and pinning state to override column defaults", async () => {
     const user = userEvent.setup();
     const defaultedColumns: readonly ColumnDef<Employee>[] = [
@@ -403,6 +545,31 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1-child Name" })).toHaveTextContent("Byron");
     await user.click(screen.getByRole("button", { name: "Collapse Ada" }));
     expect(screen.queryByRole("gridcell", { name: "e1-child Name" })).not.toBeInTheDocument();
+  });
+
+  it("toggles a tree row on the first click without selecting or scrolling the grid", () => {
+    const ref = createRef<DataTableHandle>();
+    renderTable({
+      ref,
+      getSubRows: (row) => row.children,
+      defaultState: { expandedRowIds: ["e1"] }
+    });
+    const grid = screen.getByRole("grid", { name: "Employees" });
+    grid.scrollLeft = 37;
+    const selectionBefore = ref.current?.getSelection();
+    const toggle = screen.getByRole("button", { name: "Collapse Ada" });
+    const pointerDown = new Event("pointerdown", { bubbles: true, cancelable: true });
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+
+    fireEvent(toggle, pointerDown);
+    fireEvent(toggle, mouseDown);
+    fireEvent.click(toggle);
+
+    expect(pointerDown.defaultPrevented).toBe(true);
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(screen.queryByRole("gridcell", { name: "e1-child Name" })).not.toBeInTheDocument();
+    expect(ref.current?.getSelection()).toEqual(selectionBefore);
+    expect(grid.scrollLeft).toBe(37);
   });
 
   it("renders an inline typed filter row without replacing column menus", async () => {
@@ -660,6 +827,7 @@ function renderTable(
     resetKey: string | number;
     onRowsChange(updater: RowUpdater<Employee>, context: ChangeContext): void;
     getSubRows(row: Employee): readonly Employee[] | undefined;
+    defaultState: Partial<TableViewState>;
     ref: React.Ref<DataTableHandle>;
   }> = {}
 ) {
@@ -738,4 +906,28 @@ function visibleHeaderNames(): string[] {
   return screen.getAllByRole("columnheader")
     .filter((header) => header.getAttribute("aria-label") !== "Row headers")
     .map((header) => header.getAttribute("aria-label") ?? "");
+}
+
+function rect({
+  left,
+  right,
+  top,
+  bottom
+}: {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}): DOMRect {
+  return {
+    x: left,
+    y: top,
+    left,
+    right,
+    top,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+    toJSON: () => ({})
+  } as DOMRect;
 }

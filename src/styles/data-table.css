@@ -263,9 +263,9 @@
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__cell-content > button {
-  flex: 0 0 22px;
-  width: 22px;
-  min-height: 22px;
+  flex: 0 0 30px;
+  width: 30px;
+  min-height: 30px;
   padding: 0;
   color: var(--js-spreadsheet-accent-strong);
   background: transparent;
@@ -305,15 +305,14 @@
 }
 
 .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__column-menu {
-  position: absolute;
-  inset-block-start: calc(100% + 3px);
-  inset-inline-end: 2px;
+  position: fixed;
   z-index: 20;
   display: grid;
   gap: 5px;
-  width: min(248px, calc(100cqi - 20px));
-  max-height: min(520px, 76cqb);
+  width: min(248px, calc(100vw - 16px));
+  max-height: min(520px, calc(100dvh - 16px));
   padding: 8px;
+  margin: 0;
   overflow: auto;
   color: var(--js-spreadsheet-text);
   text-align: start;

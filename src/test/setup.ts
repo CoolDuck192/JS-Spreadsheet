@@ -24,3 +24,23 @@ if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.p
     }
   });
 }
+
+if (!("showPopover" in HTMLElement.prototype)) {
+  Object.defineProperty(HTMLElement.prototype, "showPopover", {
+    configurable: true,
+    value(this: HTMLElement) {
+      this.setAttribute("data-popover-open", "true");
+      this.style.display = "grid";
+    }
+  });
+}
+
+if (!("hidePopover" in HTMLElement.prototype)) {
+  Object.defineProperty(HTMLElement.prototype, "hidePopover", {
+    configurable: true,
+    value(this: HTMLElement) {
+      this.removeAttribute("data-popover-open");
+      this.style.display = "none";
+    }
+  });
+}
