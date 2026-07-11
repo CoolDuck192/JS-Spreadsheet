@@ -62,6 +62,7 @@ export function DataTableColumnMenu<TRow>({
     const view = anchor.ownerDocument.defaultView;
     if (!menu || !view) return;
     const anchorHeader = anchor.closest('[role="columnheader"]');
+    const tableRoot = anchor.closest<HTMLElement>('[data-js-spreadsheet-root="data-table"]');
 
     let closed = false;
     let shown = false;
@@ -104,7 +105,7 @@ export function DataTableColumnMenu<TRow>({
         shown = true;
       } else if (state === "closed") {
         shown = false;
-        close(true, false);
+        close(menu.contains(anchor.ownerDocument.activeElement), false);
       }
     };
     const handleScroll = (event: Event) => {
@@ -113,7 +114,7 @@ export function DataTableColumnMenu<TRow>({
         place();
         return;
       }
-      close();
+      close(menu.contains(anchor.ownerDocument.activeElement));
     };
     const handleResize = () => place();
 
@@ -125,7 +126,9 @@ export function DataTableColumnMenu<TRow>({
     const observer = new MutationObserver(() => {
       if (!anchor.isConnected || !menu.isConnected) close(false);
     });
-    observer.observe(anchor.ownerDocument, { childList: true, subtree: true });
+    if (tableRoot) {
+      observer.observe(tableRoot, { childList: true, subtree: true });
+    }
 
     if (!anchor.isConnected) {
       close(false, false);

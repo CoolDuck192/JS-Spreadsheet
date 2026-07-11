@@ -485,6 +485,24 @@ describe("DataTable", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("preserves externally acquired cell focus after native light dismiss", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const cell = screen.getByRole("gridcell", { name: "e1 Name" });
+    cell.focus();
+    const toggle = new Event("toggle");
+    Object.defineProperty(toggle, "newState", { value: "closed" });
+
+    fireEvent(menu, toggle);
+
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(cell).toHaveFocus();
+    expect(trigger).not.toHaveFocus();
+  });
+
   it("closes an open column menu on viewport scroll", async () => {
     const user = userEvent.setup();
     renderTable();
@@ -495,6 +513,21 @@ describe("DataTable", () => {
 
     expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("preserves externally acquired cell focus when incidental scrolling closes the menu", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+    const cell = screen.getByRole("gridcell", { name: "e1 Name" });
+    cell.focus();
+
+    fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
+
+    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(cell).toHaveFocus();
+    expect(trigger).not.toHaveFocus();
   });
 
   it("keeps a column menu open when focus scrolls inside its narrow header", async () => {
@@ -509,6 +542,19 @@ describe("DataTable", () => {
 
     expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("observes only the nearest DataTable root while a column menu is open", async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, "observe");
+    const user = userEvent.setup();
+    const { container } = renderTable();
+    const tableRoot = container.querySelector('[data-js-spreadsheet-root="data-table"]');
+
+    await user.click(screen.getByRole("button", { name: "Column options for Name" }));
+
+    expect(tableRoot).not.toBeNull();
+    expect(observe).toHaveBeenCalledWith(tableRoot, { childList: true, subtree: true });
+    expect(observe).not.toHaveBeenCalledWith(document, { childList: true, subtree: true });
   });
 
   it("hides the native popover when its column trigger unmounts", async () => {
