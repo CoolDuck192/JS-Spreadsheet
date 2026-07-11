@@ -512,6 +512,11 @@ describe("WorkbookSession", () => {
 
     expect(session.dispatch({
       type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" }
+      ],
       commands: [
         {
           type: "columns.insert",
@@ -548,6 +553,11 @@ describe("WorkbookSession", () => {
     const session = createWorkbookSession({ workbook });
     expect(session.dispatch({
       type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" }
+      ],
       commands: [
         { type: "cell.set", sheetId, address: "A1", input: "first" },
         { type: "selection.set", selection: firstCheckpoint }
@@ -660,6 +670,108 @@ describe("WorkbookSession", () => {
       issues: [{ code: "TABLE_RANGE_BLOCKED", message: "Table style is invalid" }]
     });
     expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it.each([
+    {
+      label: "blank id",
+      reservations: [{ kind: "table", occurrence: 0, id: " " }]
+    },
+    {
+      label: "negative occurrence",
+      reservations: [{ kind: "table", occurrence: -1, id: "table-1" }]
+    },
+    {
+      label: "duplicate occurrence",
+      reservations: [
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table", occurrence: 0, id: "table-2" }
+      ]
+    },
+    {
+      label: "duplicate id",
+      reservations: [
+        { kind: "table", occurrence: 0, id: "shared-id" },
+        { kind: "table-column", occurrence: 0, id: "shared-id" }
+      ]
+    },
+    {
+      label: "initial-workbook collision",
+      reservations: [{ kind: "table", occurrence: 0, id: "table-sales" }]
+    }
+  ] as const)("rejects a malformed $label reservation before allocating ids", ({ reservations }) => {
+    const createId = vi.fn((kind: IdKind) => `${kind}-host`);
+    const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      idReservations: reservations,
+      commands: []
+    })).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "TABLE_GENERATED_ID_INVALID",
+        message: "Generated structured-table IDs must be nonblank and unique"
+      }]
+    });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("rejects an unused transaction id reservation before allocating ids", () => {
+    const createId = vi.fn((kind: IdKind) => `${kind}-host`);
+    const session = createWorkbookSession({ workbook: createBlankWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      idReservations: [{ kind: "table", occurrence: 0, id: "table-1" }],
+      commands: []
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("rejects real allocator output that mismatches a transaction reservation", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    let sequence = 0;
+    const createId = vi.fn((kind: IdKind) => `${kind}-host-${++sequence}`);
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" }
+      ],
+      commands: [
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+          name: "People",
+          headerRow: true,
+          totalsRow: false
+        },
+        { type: "table.setStyle", tableId: "table-1", style: { theme: "TableStyleLight2" } }
+      ]
+    })).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "TABLE_GENERATED_ID_INVALID",
+        message: "Generated structured-table IDs must be nonblank and unique"
+      }]
+    });
+    expect(createId).toHaveBeenCalledTimes(3);
     expect(session.getSnapshot()).toBe(before);
   });
 
