@@ -43,7 +43,8 @@
     "exceljs": "^4.4.0",
     "fflate": "^0.8.3",
     "hyperformula": "^3.3.0",
-    "lucide-react": "^1.21.0"
+    "lucide-react": "^1.21.0",
+    "saxes": "^6.0.0"
   },
   "peerDependencies": {
     "react": ">=18.2 <20",

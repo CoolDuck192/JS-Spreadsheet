@@ -1,9 +1,5 @@
-import {
-  DOMParser,
-  type Document as XmlDocument,
-  type Element as XmlElement
-} from "@xmldom/xmldom";
 import { inflateSync } from "fflate";
+import { SaxesParser, type SaxesTagNS } from "saxes";
 
 import type { TableIssue } from "../core/commands/types";
 
@@ -17,6 +13,8 @@ export type XlsxSecurityLimits = {
   maxXmlDepth: number;
   maxXmlElements: number;
   maxXmlAttributes: number;
+  maxTotalXmlElements: number;
+  maxTotalXmlAttributes: number;
 };
 
 export const DEFAULT_XLSX_SECURITY_LIMITS: Readonly<XlsxSecurityLimits> = {
@@ -27,8 +25,10 @@ export const DEFAULT_XLSX_SECURITY_LIMITS: Readonly<XlsxSecurityLimits> = {
   maxCompressionRatio: 100,
   maxTableXmlBytes: 4 * 1024 * 1024,
   maxXmlDepth: 128,
-  maxXmlElements: 100_000,
-  maxXmlAttributes: 200_000
+  maxXmlElements: 1_000_000,
+  maxXmlAttributes: 2_000_000,
+  maxTotalXmlElements: 8_000_000,
+  maxTotalXmlAttributes: 16_000_000
 };
 
 type SecurityIssueCode =
@@ -626,77 +626,161 @@ function decodeXml(bytes: Uint8Array, name: string): string {
   }
 }
 
-function parseSafeXml(
+type XmlCounts = { elements: number; attributes: number };
+
+type TableRelationshipSummary = {
+  target: string;
+  targetMode: string;
+};
+
+type XmlPartSummary =
+  | {
+      kind: "content-types";
+      rootName: string;
+      overrides: ReadonlyMap<string, string>;
+      defaults: ReadonlyMap<string, string>;
+    }
+  | {
+      kind: "relationships";
+      rootName: string;
+      tableRelationships: readonly TableRelationshipSummary[];
+    }
+  | { kind: "other"; rootName: string };
+
+function saxAttribute(tag: SaxesTagNS, wantedName: string): string {
+  for (const attribute of Object.values(tag.attributes)) {
+    if (attribute.prefix === "" && attribute.local === wantedName) return attribute.value;
+  }
+  return "";
+}
+
+function scanSafeXml(
   xml: string,
   name: string,
   limits: XlsxSecurityLimits,
-  counts: { elements: number; attributes: number }
-): XmlDocument {
+  totalCounts: XmlCounts
+): XmlPartSummary {
   if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)) {
     reject("XLSX_XML_UNSAFE", `XML declarations are unsafe in ${name}.`);
   }
 
-  let document: XmlDocument;
+  const isContentTypes = name === "[Content_Types].xml";
+  const isRelationships = name.toLowerCase().endsWith(".rels");
+  const partCounts: XmlCounts = { elements: 0, attributes: 0 };
+  const overrides = new Map<string, string>();
+  const defaults = new Map<string, string>();
+  const relationshipIds = new Set<string>();
+  const tableRelationships: TableRelationshipSummary[] = [];
+  let depth = 0;
+  let rootName = "";
+
   try {
-    document = new DOMParser({
-      onError(_level, message) {
-        throw new Error(message);
+    const parser = new SaxesParser({
+      xmlns: true as const,
+      fileName: name,
+      position: false
+    });
+    parser.on("doctype", () => {
+      reject("XLSX_XML_UNSAFE", `XML declarations are unsafe in ${name}.`);
+    });
+    parser.on("opentagstart", () => {
+      depth += 1;
+      partCounts.elements += 1;
+      totalCounts.elements += 1;
+      if (depth > limits.maxXmlDepth) {
+        reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the depth limit.`);
       }
-    }).parseFromString(xml, "application/xml");
-  } catch {
+      if (partCounts.elements > limits.maxXmlElements) {
+        reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML element limit.`);
+      }
+      if (totalCounts.elements > limits.maxTotalXmlElements) {
+        reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML element limit.");
+      }
+    });
+    parser.on("attribute", () => {
+      partCounts.attributes += 1;
+      totalCounts.attributes += 1;
+      if (partCounts.attributes > limits.maxXmlAttributes) {
+        reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML attribute limit.`);
+      }
+      if (totalCounts.attributes > limits.maxTotalXmlAttributes) {
+        reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML attribute limit.");
+      }
+    });
+    parser.on("opentag", (tag) => {
+      if (depth === 1) rootName = tag.local;
+
+      if (isContentTypes && tag.local === "Override") {
+        const partName = normalizeAbsolutePartName(saxAttribute(tag, "PartName"));
+        const contentType = saxAttribute(tag, "ContentType");
+        if (!partName || !contentType || overrides.has(partName)) {
+          reject(
+            "XLSX_RELATIONSHIP_INVALID",
+            "The XLSX package has an invalid or duplicate content-type override."
+          );
+        }
+        if (overrides.size >= limits.maxEntries) {
+          reject("XLSX_RELATIONSHIP_INVALID", "The XLSX package has too many content-type overrides.");
+        }
+        overrides.set(partName, contentType);
+      } else if (isContentTypes && tag.local === "Default") {
+        const extension = saxAttribute(tag, "Extension").replace(/^\./, "").toLowerCase();
+        const contentType = saxAttribute(tag, "ContentType");
+        if (!extension || !contentType || defaults.has(extension)) {
+          reject(
+            "XLSX_RELATIONSHIP_INVALID",
+            "The XLSX package has an invalid or duplicate default content type."
+          );
+        }
+        if (defaults.size >= limits.maxEntries) {
+          reject("XLSX_RELATIONSHIP_INVALID", "The XLSX package has too many default content types.");
+        }
+        defaults.set(extension, contentType);
+      } else if (isRelationships && tag.local === "Relationship") {
+        const id = saxAttribute(tag, "Id");
+        if (!id || relationshipIds.has(id)) {
+          reject(
+            "XLSX_RELATIONSHIP_INVALID",
+            `Relationship part ${name} contains duplicate or blank IDs.`
+          );
+        }
+        relationshipIds.add(id);
+        const type = saxAttribute(tag, "Type");
+        if (TABLE_RELATIONSHIP_TYPES.has(type)) {
+          if (tableRelationships.length >= limits.maxEntries) {
+            reject("XLSX_RELATIONSHIP_INVALID", `Relationship part ${name} has too many table relationships.`);
+          }
+          tableRelationships.push({
+            target: saxAttribute(tag, "Target"),
+            targetMode: saxAttribute(tag, "TargetMode")
+          });
+        }
+      }
+    });
+    parser.on("closetag", () => {
+      depth -= 1;
+    });
+    parser.write(xml).close();
+  } catch (error) {
+    if (error instanceof XlsxSecurityError) throw error;
     reject("XLSX_XML_UNSAFE", `XML part ${name} is malformed.`);
   }
 
-  if (!document.documentElement) {
+  if (!rootName) {
     reject("XLSX_XML_UNSAFE", `XML part ${name} has no document element.`);
   }
-
-  const stack: Array<{ node: XmlElement; depth: number }> = [
-    { node: document.documentElement, depth: 1 }
-  ];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) break;
-    if (current.depth > limits.maxXmlDepth) {
-      reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the depth limit.`);
-    }
-    counts.elements += 1;
-    counts.attributes += current.node.attributes.length;
-    if (counts.elements > limits.maxXmlElements) {
-      reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the XML element limit.");
-    }
-    if (counts.attributes > limits.maxXmlAttributes) {
-      reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the XML attribute limit.");
-    }
-
-    for (let index = 0; index < current.node.childNodes.length; index += 1) {
-      const child = current.node.childNodes.item(index);
-      if (child?.nodeType === 1) {
-        stack.push({ node: child as XmlElement, depth: current.depth + 1 });
-      }
-    }
+  if (isContentTypes) {
+    return { kind: "content-types", rootName, overrides, defaults };
   }
-
-  return document;
+  if (isRelationships) {
+    return { kind: "relationships", rootName, tableRelationships };
+  }
+  return { kind: "other", rootName };
 }
 
 function isXmlPart(name: string): boolean {
   const lowerName = name.toLowerCase();
   return lowerName.endsWith(".xml") || lowerName.endsWith(".rels");
-}
-
-function localName(element: XmlElement): string {
-  return element.localName || element.nodeName.split(":").pop() || element.nodeName;
-}
-
-function elementsNamed(document: XmlDocument, wantedName: string): XmlElement[] {
-  const result: XmlElement[] = [];
-  const all = document.getElementsByTagName("*");
-  for (let index = 0; index < all.length; index += 1) {
-    const element = all.item(index);
-    if (element && localName(element) === wantedName) result.push(element);
-  }
-  return result;
 }
 
 function decodePackageUri(value: string): string | null {
@@ -758,15 +842,17 @@ function sourcePartForRelationships(name: string): string | null {
   return `${prefix}/${relatedName}`;
 }
 
-function validateContentTypesAndRelationships(
+type RelationshipPartSummary = Extract<XmlPartSummary, { kind: "relationships" }>;
+type ContentTypeResolver = (partName: string) => string | undefined;
+
+function validateContentTypes(
   archive: ParsedArchive,
-  documents: ReadonlyMap<string, XmlDocument>
-): void {
-  const contentTypesDocument = documents.get("[Content_Types].xml");
+  contentTypes: XmlPartSummary | undefined
+): ContentTypeResolver {
   if (
-    !contentTypesDocument ||
-    !contentTypesDocument.documentElement ||
-    localName(contentTypesDocument.documentElement) !== "Types"
+    !contentTypes ||
+    contentTypes.kind !== "content-types" ||
+    contentTypes.rootName !== "Types"
   ) {
     reject(
       "XLSX_RELATIONSHIP_INVALID",
@@ -774,39 +860,14 @@ function validateContentTypesAndRelationships(
     );
   }
 
-  const overrides = new Map<string, string>();
-  const defaults = new Map<string, string>();
-  for (const element of elementsNamed(contentTypesDocument, "Override")) {
-    const partName = normalizeAbsolutePartName(element.getAttribute("PartName") ?? "");
-    const contentType = element.getAttribute("ContentType") ?? "";
-    if (!partName || !contentType || overrides.has(partName)) {
-      reject(
-        "XLSX_RELATIONSHIP_INVALID",
-        "The XLSX package has an invalid or duplicate content-type override."
-      );
-    }
-    overrides.set(partName, contentType);
-  }
-  for (const element of elementsNamed(contentTypesDocument, "Default")) {
-    const extension = (element.getAttribute("Extension") ?? "")
-      .replace(/^\./, "")
-      .toLowerCase();
-    const contentType = element.getAttribute("ContentType") ?? "";
-    if (!extension || !contentType || defaults.has(extension)) {
-      reject(
-        "XLSX_RELATIONSHIP_INVALID",
-        "The XLSX package has an invalid or duplicate default content type."
-      );
-    }
-    defaults.set(extension, contentType);
-  }
-
-  const contentTypeFor = (partName: string): string | undefined => {
-    const exact = overrides.get(partName);
+  const contentTypeFor: ContentTypeResolver = (partName) => {
+    const exact = contentTypes.overrides.get(partName);
     if (exact) return exact;
     const fileName = partName.split("/").pop() ?? "";
     const dot = fileName.lastIndexOf(".");
-    return dot >= 0 ? defaults.get(fileName.slice(dot + 1).toLowerCase()) : undefined;
+    return dot >= 0
+      ? contentTypes.defaults.get(fileName.slice(dot + 1).toLowerCase())
+      : undefined;
   };
 
   for (const entry of archive.entries) {
@@ -820,85 +881,68 @@ function validateContentTypesAndRelationships(
       );
     }
   }
+  return contentTypeFor;
+}
 
-  for (const [relationshipPartName, document] of documents) {
-    if (!relationshipPartName.endsWith(".rels")) continue;
-
-    const isWorksheetRelationships = relationshipPartName.startsWith(
-      "xl/worksheets/_rels/"
+function validateRelationships(
+  archive: ParsedArchive,
+  relationshipPartName: string,
+  summary: RelationshipPartSummary,
+  contentTypeFor: ContentTypeResolver
+): void {
+  const isWorksheetRelationships = relationshipPartName.startsWith(
+    "xl/worksheets/_rels/"
+  );
+  const sourcePart = isWorksheetRelationships
+    ? sourcePartForRelationships(relationshipPartName)
+    : null;
+  if (
+    isWorksheetRelationships &&
+    (!sourcePart || !archive.entriesByName.has(sourcePart))
+  ) {
+    reject(
+      "XLSX_RELATIONSHIP_INVALID",
+      `Relationship source for ${relationshipPartName} is missing.`
     );
-    const sourcePart = isWorksheetRelationships
-      ? sourcePartForRelationships(relationshipPartName)
-      : null;
-    if (
-      isWorksheetRelationships &&
-      (!sourcePart || !archive.entriesByName.has(sourcePart))
-    ) {
+  }
+  if (summary.rootName !== "Relationships") {
+    reject(
+      "XLSX_RELATIONSHIP_INVALID",
+      `Relationship part ${relationshipPartName} has an invalid root element.`
+    );
+  }
+
+  for (const relationship of summary.tableRelationships) {
+    if (!isWorksheetRelationships || !sourcePart) {
       reject(
         "XLSX_RELATIONSHIP_INVALID",
-        `Relationship source for ${relationshipPartName} is missing.`
+        "Native-table relationships must belong to a worksheet."
       );
     }
-    if (
-      !document.documentElement ||
-      localName(document.documentElement) !== "Relationships"
-    ) {
+    if (relationship.targetMode && relationship.targetMode.toLowerCase() !== "internal") {
       reject(
         "XLSX_RELATIONSHIP_INVALID",
-        `Relationship part ${relationshipPartName} has an invalid root element.`
+        "External native-table relationships are not accepted."
       );
     }
-
-    const ids = new Set<string>();
-    for (const relationship of elementsNamed(document, "Relationship")) {
-      const id = relationship.getAttribute("Id") ?? "";
-      if (!id || ids.has(id)) {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          `Relationship part ${relationshipPartName} contains duplicate or blank IDs.`
-        );
-      }
-      ids.add(id);
-
-      const type = relationship.getAttribute("Type") ?? "";
-      if (!TABLE_RELATIONSHIP_TYPES.has(type)) continue;
-
-      if (!isWorksheetRelationships || !sourcePart) {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          "Native-table relationships must belong to a worksheet."
-        );
-      }
-
-      const targetMode = relationship.getAttribute("TargetMode") ?? "";
-      if (targetMode && targetMode.toLowerCase() !== "internal") {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          "External native-table relationships are not accepted."
-        );
-      }
-      const target = resolveRelationshipTarget(
-        sourcePart,
-        relationship.getAttribute("Target") ?? ""
+    const target = resolveRelationshipTarget(sourcePart, relationship.target);
+    if (!target || !target.startsWith("xl/tables/") || !isTableXmlPath(target)) {
+      reject(
+        "XLSX_RELATIONSHIP_INVALID",
+        "A native-table relationship target escapes xl/tables/."
       );
-      if (!target || !target.startsWith("xl/tables/") || !isTableXmlPath(target)) {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          "A native-table relationship target escapes xl/tables/."
-        );
-      }
-      if (!archive.entriesByName.has(target)) {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          `Native-table relationship target ${target} is missing.`
-        );
-      }
-      if (contentTypeFor(target) !== TABLE_CONTENT_TYPE) {
-        reject(
-          "XLSX_RELATIONSHIP_INVALID",
-          `Native-table relationship target ${target} has the wrong content type.`
-        );
-      }
+    }
+    if (!archive.entriesByName.has(target)) {
+      reject(
+        "XLSX_RELATIONSHIP_INVALID",
+        `Native-table relationship target ${target} is missing.`
+      );
+    }
+    if (contentTypeFor(target) !== TABLE_CONTENT_TYPE) {
+      reject(
+        "XLSX_RELATIONSHIP_INVALID",
+        `Native-table relationship target ${target} has the wrong content type.`
+      );
     }
   }
 }
@@ -952,25 +996,39 @@ function inspectXlsxArchive(
     // while central-directory and XML checks are in progress.
     const bytes = data.slice();
     const archive = parseArchive(bytes, limits);
-    const documents = new Map<string, XmlDocument>();
     const extractedEntries = new Map<string, Uint8Array>();
-    const xmlCounts = { elements: 0, attributes: 0 };
+    const totalXmlCounts: XmlCounts = { elements: 0, attributes: 0 };
+    const contentTypesEntry = archive.entriesByName.get("[Content_Types].xml");
+    let contentTypes: XmlPartSummary | undefined;
+    if (contentTypesEntry) {
+      const xmlBytes = inflateEntry(archive, contentTypesEntry);
+      if (extractAllEntries) extractedEntries.set(contentTypesEntry.name, xmlBytes);
+      contentTypes = scanSafeXml(
+        decodeXml(xmlBytes, contentTypesEntry.name),
+        contentTypesEntry.name,
+        limits,
+        totalXmlCounts
+      );
+    }
+    const contentTypeFor = validateContentTypes(archive, contentTypes);
 
     for (const entry of archive.entries) {
+      if (entry.name === contentTypesEntry?.name) continue;
       if (!extractAllEntries && !isXmlPart(entry.name)) continue;
       const xmlBytes = inflateEntry(archive, entry);
       if (extractAllEntries) extractedEntries.set(entry.name, xmlBytes);
       if (!isXmlPart(entry.name)) continue;
-      const document = parseSafeXml(
+      const summary = scanSafeXml(
         decodeXml(xmlBytes, entry.name),
         entry.name,
         limits,
-        xmlCounts
+        totalXmlCounts
       );
-      documents.set(entry.name, document);
+      if (summary.kind === "relationships") {
+        validateRelationships(archive, entry.name, summary, contentTypeFor);
+      }
     }
 
-    validateContentTypesAndRelationships(archive, documents);
     return { ok: true, entries: extractedEntries };
   } catch (error) {
     if (error instanceof XlsxSecurityError) {

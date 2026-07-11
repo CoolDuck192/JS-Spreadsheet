@@ -1,3 +1,4 @@
+import { DOMParser } from "@xmldom/xmldom";
 import { zipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
@@ -298,6 +299,47 @@ describe("validateXlsxArchive ZIP preflight", () => {
 });
 
 describe("validateXlsxArchive bounded XML validation", () => {
+  it("accepts a legitimate worksheet above the former global element budget", () => {
+    const cells = "<c/>".repeat(120_000);
+
+    expect(validateXlsxArchive(makePackage({
+      worksheetXml: `<worksheet><sheetData>${cells}</sheetData></worksheet>`
+    }))).toEqual({ ok: true });
+  });
+
+  it("applies element budgets per XML part", () => {
+    expect(validateXlsxArchive(makePackage({
+      extraEntries: {
+        "custom/one.xml": "<one><value/></one>",
+        "custom/two.xml": "<two><value/></two>"
+      }
+    }), {
+      maxXmlElements: 2,
+      maxXmlAttributes: 10
+    })).toEqual({ ok: true });
+  });
+
+  it("retains an aggregate XML element budget across parts", () => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        extraEntries: {
+          "custom/one.xml": "<one><value/></one>",
+          "custom/two.xml": "<two><value/></two>"
+        }
+      }),
+      "XLSX_XML_UNSAFE",
+      { maxTotalXmlElements: 8 }
+    );
+  });
+
+  it("retains an aggregate XML attribute budget across parts", () => {
+    expectRejectedBeforeLoad(
+      makePackage(),
+      "XLSX_XML_UNSAFE",
+      { maxTotalXmlAttributes: 12 }
+    );
+  });
+
   it.each(["DOCTYPE", "doctype"])(
     "rejects a case-insensitive %s declaration",
     (keyword) => {
@@ -350,6 +392,37 @@ describe("validateXlsxArchive bounded XML validation", () => {
     );
   });
 
+  it("rejects an over-budget part before materializing it as a DOM", () => {
+    const worksheetXml = "<worksheet><sheetData><c/><c/></sheetData></worksheet>";
+    const parseSpy = vi.spyOn(DOMParser.prototype, "parseFromString");
+
+    try {
+      expectRejectedBeforeLoad(
+        makePackage({ worksheetXml }),
+        "XLSX_XML_UNSAFE",
+        { maxXmlElements: 3 }
+      );
+      expect(parseSpy.mock.calls.some(([xml]) => xml === worksheetXml)).toBe(false);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("does not materialize ordinary XML parts as retained DOMs", () => {
+    const worksheetXml = '<worksheet xmlns="urn:test"><sheetData/></worksheet>';
+    const tableXml = '<table xmlns="urn:test" id="1"/>';
+    const parseSpy = vi.spyOn(DOMParser.prototype, "parseFromString");
+
+    try {
+      expect(validateXlsxArchive(makePackage({ worksheetXml, tableXml }))).toEqual({ ok: true });
+      const parsedInputs = parseSpy.mock.calls.map(([xml]) => xml);
+      expect(parsedInputs).not.toContain(worksheetXml);
+      expect(parsedInputs).not.toContain(tableXml);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   it("applies the table XML byte limit before DOM parsing", () => {
     expectRejectedBeforeLoad(
       makePackage({ tableXml: "<table/>" }),
@@ -360,6 +433,29 @@ describe("validateXlsxArchive bounded XML validation", () => {
 });
 
 describe("validateXlsxArchive OOXML table relationships", () => {
+  it("rejects namespace-prefixed lookalikes for required relationship attributes", () => {
+    const prefixedOnly = `
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"
+        xmlns:evil="urn:example:evil">
+        <Relationship evil:Id="rId1" evil:Type="${TABLE_RELATIONSHIP_TYPE}"
+          evil:Target="../tables/table1.xml"/>
+      </Relationships>`;
+    expectRejectedBeforeLoad(
+      makePackage({ relationshipXml: prefixedOnly }),
+      "XLSX_RELATIONSHIP_INVALID"
+    );
+  });
+
+  it("uses unqualified relationship attributes when prefixed lookalikes are also present", () => {
+    const mixedAttributes = `
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"
+        xmlns:evil="urn:example:evil">
+        <Relationship evil:Id="spoof" Id="rId1" Type="${TABLE_RELATIONSHIP_TYPE}"
+          evil:Target="../../../escape.xml" Target="../tables/table1.xml"/>
+      </Relationships>`;
+    expect(validateXlsxArchive(makePackage({ relationshipXml: mixedAttributes }))).toEqual({ ok: true });
+  });
+
   it("rejects duplicate relationship IDs", () => {
     const duplicateIds = `
       <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
