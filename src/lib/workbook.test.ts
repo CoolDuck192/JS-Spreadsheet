@@ -577,6 +577,53 @@ describe("workbook", () => {
     ]);
   });
 
+  it("keeps surviving chart anchors in bounds when deleting the sheet tail", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const workbook = {
+      ...initial,
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        rowCount: 104,
+        columnCount: 30,
+        charts: [
+          {
+            id: "chart-column-tail",
+            title: "Column tail",
+            type: "bar" as const,
+            range: range("A1", "B2"),
+            anchor: { row: 0, column: 29 }
+          },
+          {
+            id: "chart-row-tail",
+            title: "Row tail",
+            type: "bar" as const,
+            range: range("A1", "B2"),
+            anchor: { row: 103, column: 0 }
+          }
+        ]
+      }))
+    };
+
+    const withoutColumnTail = deleteColumns(workbook, sheetId, 28, 2);
+    expect(withoutColumnTail.sheets[0]).toMatchObject({
+      columnCount: 28,
+      charts: [
+        { id: "chart-column-tail", anchor: { row: 0, column: 27 } },
+        { id: "chart-row-tail", anchor: { row: 103, column: 0 } }
+      ]
+    });
+
+    const withoutRowTail = deleteRows(withoutColumnTail, sheetId, 102, 2);
+    expect(withoutRowTail.sheets[0]).toMatchObject({
+      rowCount: 102,
+      charts: [
+        { id: "chart-column-tail", anchor: { row: 0, column: 27 } },
+        { id: "chart-row-tail", anchor: { row: 101, column: 0 } }
+      ]
+    });
+  });
+
   it.each([
     ["insertRows", insertRows],
     ["deleteRows", deleteRows],

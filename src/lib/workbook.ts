@@ -2037,7 +2037,7 @@ export function shiftSheetStructurePlanes(
       if (!shiftedRange) {
         return [];
       }
-      const shiftedAnchor = shiftMetadataAnchor(chart.anchor, operation);
+      const shiftedAnchor = shiftMetadataAnchor(chart.anchor, operation, sheet);
 
       return [{ ...cloneSheetChart(chart), range: shiftedRange, anchor: shiftedAnchor }];
     });
@@ -2183,13 +2183,18 @@ function shiftRange(range: CellRange, operation: StructureOperation): CellRange 
 
 function shiftMetadataAnchor(
   anchor: { row: number; column: number },
-  operation: StructureOperation
+  operation: StructureOperation,
+  sheet: Pick<SheetModel, "rowCount" | "columnCount">
 ): { row: number; column: number } {
   const shifted = shiftCoord(anchor, operation);
   if (shifted) return shifted;
+  const projectedLastIndex = operation.axis === "row"
+    ? Math.max(DEFAULT_ROWS, sheet.rowCount - operation.count) - 1
+    : Math.max(DEFAULT_COLUMNS, sheet.columnCount - operation.count) - 1;
+  const boundary = Math.min(operation.index, projectedLastIndex);
   return operation.axis === "row"
-    ? { ...anchor, row: operation.index }
-    : { ...anchor, column: operation.index };
+    ? { ...anchor, row: boundary }
+    : { ...anchor, column: boundary };
 }
 
 function translateFillContent(
