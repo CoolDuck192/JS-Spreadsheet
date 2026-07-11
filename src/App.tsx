@@ -59,6 +59,7 @@ import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
 import { extractFormulaReferences } from "./lib/formulaReferences";
+import { GoogleSheetsError } from "./lib/googleErrors";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
@@ -348,26 +349,40 @@ function SpreadsheetWorkbook({
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const gridApiRef = useRef<GridScrollApi | null>(null);
-  const pendingGridFocusSheetIdRef = useRef<string | null>(null);
+  const pendingGridFocusRef = useRef<{
+    sheetId: string;
+    row: number;
+    column: number;
+  } | null>(null);
   const gridEditCommitInProgressRef = useRef(false);
   const googleSheetsImportButtonRef = useRef<HTMLButtonElement>(null);
   const registerGridScrollApi = useCallback((api: GridScrollApi) => {
     gridApiRef.current = api;
   }, []);
 
+  const handleGoogleSheetsImported = useCallback((imported: {
+    workbook: WorkbookModel;
+    spreadsheetTitle: string;
+  }) => {
+    const result = session.replaceWorkbook(imported.workbook, {
+      history: "preserve",
+      origin: "import"
+    });
+    if (result.status !== "committed") {
+      throw new GoogleSheetsError(
+        "unknown",
+        "The imported workbook could not replace the current workbook.",
+        true
+      );
+    }
+    resetAfterWorkbookReplacement(`Imported ${imported.spreadsheetTitle}`);
+  }, [session]);
+
   const googleSheetsImport = useGoogleSheetsImport({
     configuration: services?.googleSheets,
     deprecatedTokenProviderFactory: services?.googleTokenProviderFactory,
     origin: typeof window === "undefined" ? "null" : window.location.origin,
-    onImported(imported) {
-      const result = session.replaceWorkbook(imported.workbook, {
-        history: "preserve",
-        origin: "import"
-      });
-      if (result.status === "committed") {
-        resetAfterWorkbookReplacement(`Imported ${imported.spreadsheetTitle}`);
-      }
-    },
+    onImported: handleGoogleSheetsImported,
     onError(error) {
       invokeHostCallback(onError, {
         code: `service.google.${error.code}`,
@@ -419,12 +434,13 @@ function SpreadsheetWorkbook({
   const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
   useLayoutEffect(() => {
-    if (pendingGridFocusSheetIdRef.current !== activeSheet.id) {
+    const pending = pendingGridFocusRef.current;
+    if (!pending || pending.sheetId !== activeSheet.id) {
       return;
     }
-    gridApiRef.current?.focusCell(0, 0);
-    pendingGridFocusSheetIdRef.current = null;
-  }, [activeSheet.id]);
+    gridApiRef.current?.focusCell(pending.row, pending.column);
+    pendingGridFocusRef.current = null;
+  }, [activeSheet.id, sessionSnapshot.revision]);
   const activeTable = features?.structuredTables === false
     ? null
     : getStructuredTableForSelection(workbook, activeSheet.id, selection);
@@ -558,6 +574,19 @@ function SpreadsheetWorkbook({
 
   function setSelection(nextSelection: CellRange): WorkbookCommandResult {
     return dispatchCommand({ type: "selection.set", selection: nextSelection });
+  }
+
+  function dispatchHistory(command: "history.undo" | "history.redo", nextStatus: string) {
+    const result = dispatchCommand({ type: command }, nextStatus);
+    if (result.status === "committed" && result.changed) {
+      const next = session.getSnapshot();
+      pendingGridFocusRef.current = {
+        sheetId: next.workbook.activeSheetId,
+        row: next.selection.start.row,
+        column: next.selection.start.column
+      };
+    }
+    return result;
   }
 
   function closeFloatingPanels() {
@@ -1412,7 +1441,7 @@ function SpreadsheetWorkbook({
       normalized,
       index
     );
-    dispatchCommand({
+    const result = dispatchCommand({
       type: "transaction",
       commands: [
         {
@@ -1428,6 +1457,13 @@ function SpreadsheetWorkbook({
         } }
       ]
     }, `Inserted ${pluralize(count, "column")} ${direction}`);
+    if (result.status === "committed" && result.changed) {
+      pendingGridFocusRef.current = {
+        sheetId: activeSheet.id,
+        row: normalized.start.row,
+        column: index
+      };
+    }
   }
 
   function handleDeleteColumns() {
@@ -2059,8 +2095,8 @@ function SpreadsheetWorkbook({
 
     if (isCommand && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      dispatchCommand(
-        { type: event.shiftKey ? "history.redo" : "history.undo" },
+      dispatchHistory(
+        event.shiftKey ? "history.redo" : "history.undo",
         event.shiftKey ? "Redone" : "Undone"
       );
       return;
@@ -2068,7 +2104,7 @@ function SpreadsheetWorkbook({
 
     if (isCommand && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      dispatchCommand({ type: "history.redo" }, "Redone");
+      dispatchHistory("history.redo", "Redone");
       return;
     }
 
@@ -2289,7 +2325,7 @@ function SpreadsheetWorkbook({
     });
     if (result.status === "committed") {
       const addedSheet = getActiveSheet(session.getSnapshot().workbook);
-      pendingGridFocusSheetIdRef.current = addedSheet.id;
+      pendingGridFocusRef.current = { sheetId: addedSheet.id, row: 0, column: 0 };
       setStatus(`Added ${addedSheet.name}`);
       setRichClipboard(null);
       setFormatPainter(null);
@@ -2759,10 +2795,10 @@ function SpreadsheetWorkbook({
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
-            dispatchCommand({ type: "history.undo" }, "Undone");
+            dispatchHistory("history.undo", "Undone");
           }}
           onRedo={() => {
-            dispatchCommand({ type: "history.redo" }, "Redone");
+            dispatchHistory("history.redo", "Redone");
           }}
           onClear={handleClearSelection}
           canPasteSpecial={Boolean(richClipboard)}

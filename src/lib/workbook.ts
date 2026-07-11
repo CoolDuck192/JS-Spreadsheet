@@ -2034,10 +2034,10 @@ export function shiftSheetStructurePlanes(
 
     const nextCharts = (sheet.charts ?? []).flatMap((chart) => {
       const shiftedRange = shiftRange(chart.range, operation);
-      const shiftedAnchor = shiftCoord(chart.anchor, operation);
-      if (!shiftedRange || !shiftedAnchor) {
+      if (!shiftedRange) {
         return [];
       }
+      const shiftedAnchor = shiftMetadataAnchor(chart.anchor, operation);
 
       return [{ ...cloneSheetChart(chart), range: shiftedRange, anchor: shiftedAnchor }];
     });
@@ -2140,12 +2140,56 @@ function rewriteWorkbookFormulasForStructure(
 
 function shiftRange(range: CellRange, operation: StructureOperation): CellRange | null {
   const normalized = normalizeRange(range);
+  if (operation.mode === "delete") {
+    const start = operation.axis === "row" ? normalized.start.row : normalized.start.column;
+    const end = operation.axis === "row" ? normalized.end.row : normalized.end.column;
+    const deleteStart = operation.index;
+    const deleteEnd = operation.index + operation.count;
+    const survivingIntervals: Array<readonly [number, number]> = [];
+    if (start < deleteStart) {
+      survivingIntervals.push([start, Math.min(end, deleteStart - 1)]);
+    }
+    if (end >= deleteEnd) {
+      survivingIntervals.push([
+        Math.max(start, deleteEnd) - operation.count,
+        end - operation.count
+      ]);
+    }
+    const nonEmptyIntervals = survivingIntervals.filter(([intervalStart, intervalEnd]) =>
+      intervalStart <= intervalEnd
+    );
+    if (nonEmptyIntervals.length === 0) {
+      return null;
+    }
+    const projectedStart = Math.min(...nonEmptyIntervals.map(([intervalStart]) => intervalStart));
+    const projectedEnd = Math.max(...nonEmptyIntervals.map(([, intervalEnd]) => intervalEnd));
+    return operation.axis === "row"
+      ? {
+          start: { ...normalized.start, row: projectedStart },
+          end: { ...normalized.end, row: projectedEnd }
+        }
+      : {
+          start: { ...normalized.start, column: projectedStart },
+          end: { ...normalized.end, column: projectedEnd }
+        };
+  }
   const nextStart = shiftCoord(normalized.start, operation);
   const nextEnd = shiftCoord(normalized.end, operation);
   if (!nextStart || !nextEnd) {
     return null;
   }
   return normalizeRange({ start: nextStart, end: nextEnd });
+}
+
+function shiftMetadataAnchor(
+  anchor: { row: number; column: number },
+  operation: StructureOperation
+): { row: number; column: number } {
+  const shifted = shiftCoord(anchor, operation);
+  if (shifted) return shifted;
+  return operation.axis === "row"
+    ? { ...anchor, row: operation.index }
+    : { ...anchor, column: operation.index };
 }
 
 function translateFillContent(

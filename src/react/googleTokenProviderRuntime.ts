@@ -69,7 +69,7 @@ function resolveProviderRecord(
     provider,
     prepared: false
   };
-  records.push(record);
+  records.splice(0, records.length, record);
   return record;
 }
 

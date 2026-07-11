@@ -227,7 +227,7 @@ function projectColumnInsertion(
       const name = nextStructuredTableColumnName(ordinal, normalizedNames);
       normalizedNames.add(normalizeStructuredTableHeader(name));
       const id = services.createId("table-column");
-      if (reservedColumnIds.has(id)) {
+      if (typeof id !== "string" || id.trim().length === 0 || reservedColumnIds.has(id)) {
         return [structureIssue(
           "TABLE_COLUMN_ID_CONFLICT",
           "Worksheet structure id service returned a duplicate table-column id"

@@ -496,6 +496,96 @@ describe("WorkbookSession", () => {
     expect(createId).toHaveBeenCalledTimes(2);
   });
 
+  it("restores the selection checkpoint together with workbook undo and redo", () => {
+    const initial = createBlankWorkbook();
+    const initialSelection = {
+      start: { row: 0, column: 25 },
+      end: { row: 0, column: 25 }
+    } as const;
+    const appendedSelection = {
+      start: { row: 0, column: 26 },
+      end: { row: 0, column: 26 }
+    } as const;
+    const session = createWorkbookSession({ workbook: initial });
+    session.dispatch({ type: "selection.set", selection: initialSelection });
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "columns.insert",
+          sheetId: initial.activeSheetId,
+          index: 26,
+          count: 1
+        },
+        { type: "selection.set", selection: appendedSelection }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(session.getSnapshot()).toMatchObject({ selection: appendedSelection });
+    expect(session.getSnapshot().workbook.sheets[0].columnCount).toBe(27);
+
+    session.dispatch({ type: "history.undo" });
+    expect(session.getSnapshot()).toMatchObject({ selection: initialSelection });
+    expect(session.getSnapshot().workbook.sheets[0].columnCount).toBe(26);
+
+    session.dispatch({ type: "history.redo" });
+    expect(session.getSnapshot()).toMatchObject({ selection: appendedSelection });
+    expect(session.getSnapshot().workbook.sheets[0].columnCount).toBe(27);
+  });
+
+  it("semantic-preflights a whole transaction before consuming host ids", () => {
+    const createId = vi.fn(() => "table-column-host");
+    const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    const result = session.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "columns.insert",
+          sheetId: before.workbook.activeSheetId,
+          index: 2,
+          count: 1,
+          expandTableIds: ["table-sales"]
+        },
+        {
+          type: "rows.delete",
+          sheetId: before.workbook.activeSheetId,
+          index: -1,
+          count: 1
+        }
+      ]
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "SHEET_STRUCTURE_INDEX_INVALID" }]
+    });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("rejects invalid generated table ids without publishing any candidate state", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+    workbook = setCellContent(workbook, sheetId, "B1", "Amount");
+    const createId = vi.fn(() => " ");
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "table.create",
+      sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } },
+      name: "GeneratedIds",
+      headerRow: true,
+      totalsRow: false
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot()).toBe(before);
+  });
+
   it("keeps selection, revision, history, and ids unchanged when structure rejects", () => {
     const createId = vi.fn(() => "unused-table-column");
     const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });

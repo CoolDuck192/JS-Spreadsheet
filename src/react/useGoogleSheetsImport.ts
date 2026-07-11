@@ -91,9 +91,7 @@ export function useGoogleSheetsImport(options: Readonly<{
   const providerRef = useRef<TokenProvider | null>(null);
   const attemptGenerationRef = useRef(0);
   const importPendingRef = useRef(false);
-  const onImportedRef = useRef(options.onImported);
   const onErrorRef = useRef(options.onError);
-  onImportedRef.current = options.onImported;
   onErrorRef.current = options.onError;
 
   const managedClientId = configuration?.clientId?.trim() ?? "";
@@ -274,6 +272,24 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOperation(null);
   }, []);
 
+  useEffect(() => {
+    invalidateImportAttempt();
+    return () => {
+      attemptGenerationRef.current += 1;
+      importPendingRef.current = false;
+    };
+  }, [
+    authSource.kind,
+    authSource.kind === "provider" ? authSource.provider : undefined,
+    authSource.kind === "client" ? authSource.clientId : undefined,
+    authSource.kind === "client" ? authSource.source : undefined,
+    authSource.kind === "client" ? authSource.factory : undefined,
+    configuration?.clientIdStorage,
+    invalidateImportAttempt,
+    options.onImported,
+    origin
+  ]);
+
   const closeDialog = useCallback(() => {
     invalidateImportAttempt();
     setOpen(false);
@@ -362,6 +378,7 @@ export function useGoogleSheetsImport(options: Readonly<{
     }
 
     const generation = ++attemptGenerationRef.current;
+    const importTarget = options.onImported;
     importPendingRef.current = true;
     setOperation({ phase: "authorizing" });
 
@@ -401,7 +418,7 @@ export function useGoogleSheetsImport(options: Readonly<{
           return;
         }
         try {
-          await onImportedRef.current(imported);
+          await importTarget(imported);
         } catch (caught) {
           finishImportFailure(caught, generation);
           return;
@@ -431,7 +448,7 @@ export function useGoogleSheetsImport(options: Readonly<{
       setOperation({ phase: "error", error });
       notifyError(error);
     }
-  }, [clientIdConfiguration.isStorageBusy, notifyError, sheetDraft]);
+  }, [clientIdConfiguration.isStorageBusy, notifyError, options.onImported, sheetDraft]);
 
   const retry = useCallback(() => {
     if (clientIdConfiguration.isStorageBusy()) {

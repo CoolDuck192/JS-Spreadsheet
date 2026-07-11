@@ -121,6 +121,39 @@ describe("importWorkbookFromGoogleSheets", () => {
     expect(error.message).not.toContain("test-token");
   });
 
+  it("recognizes modern SERVICE_DISABLED details without exposing metadata or help URLs", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        {
+          error: {
+            status: "PERMISSION_DENIED",
+            message: "private response body",
+            details: [{
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              reason: "SERVICE_DISABLED",
+              metadata: {
+                consumer: "projects/private-project",
+                service: "sheets.googleapis.com"
+              }
+            }, {
+              "@type": "type.googleapis.com/google.rpc.Help",
+              links: [{ description: "private", url: "https://private.example/enable?token=secret" }]
+            }]
+          }
+        },
+        403
+      )
+    );
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
+    );
+
+    expect(error).toMatchObject({ code: "api_not_enabled", recoverable: true });
+    expect(error.message).toBe("The Google Sheets API is not enabled for this Google OAuth project.");
+    expect(error.message).not.toMatch(/private-project|private\.example|token=secret|sheets\.googleapis\.com/i);
+  });
+
   it.each([
     [404, "sheet_not_found"],
     [429, "rate_limited"],

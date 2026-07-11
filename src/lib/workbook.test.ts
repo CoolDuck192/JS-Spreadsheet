@@ -469,6 +469,114 @@ describe("workbook", () => {
     expect(getCellFormat(deleted, sheetId, "B1")).toEqual({ backgroundColor: "#eaf7f2" });
   });
 
+  it("projects partially surviving metadata across a column deletion boundary", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const partial = range("A1", "C3");
+    const dropped = range("A10", "A12");
+    const workbook = {
+      ...initial,
+      namedRanges: [
+        { name: "Partial", sheetId, range: range("A1", "C1") },
+        { name: "Dropped", sheetId, range: range("A10") }
+      ],
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        autoFilterRange: partial,
+        conditionalFormats: [
+          { id: "cf-partial", range: partial, condition: { type: "blank" as const }, format: { bold: true } },
+          { id: "cf-dropped", range: dropped, condition: { type: "blank" as const }, format: { bold: true } }
+        ],
+        filters: [
+          { id: "filter-partial", range: partial, column: 1, operator: "equals" as const, value: "x" },
+          { id: "filter-dropped", range: dropped, column: 0, operator: "equals" as const, value: "x" }
+        ],
+        charts: [
+          { id: "chart-partial", title: "Partial", type: "bar" as const, range: partial, anchor: { row: 6, column: 0 } },
+          { id: "chart-dropped", title: "Dropped", type: "bar" as const, range: dropped, anchor: { row: 14, column: 0 } }
+        ],
+        merges: [
+          { id: "merge-partial", range: range("A5", "C5") },
+          { id: "merge-dropped", range: range("A20", "A21") }
+        ]
+      }))
+    };
+
+    const deleted = deleteColumns(workbook, sheetId, 0, 1);
+    const sheet = deleted.sheets[0];
+
+    expect(deleted.namedRanges).toEqual([
+      { name: "Partial", sheetId, range: range("A1", "B1") }
+    ]);
+    expect(sheet.conditionalFormats).toMatchObject([
+      { id: "cf-partial", range: range("A1", "B3") }
+    ]);
+    expect(sheet.filters).toMatchObject([
+      { id: "filter-partial", range: range("A1", "B3"), column: 0 }
+    ]);
+    expect(sheet.autoFilterRange).toEqual(range("A1", "B3"));
+    expect(sheet.charts).toMatchObject([
+      { id: "chart-partial", range: range("A1", "B3"), anchor: { row: 6, column: 0 } }
+    ]);
+    expect(sheet.merges).toEqual([
+      { id: "merge-partial", range: range("A5", "B5") }
+    ]);
+  });
+
+  it("projects partially surviving metadata across a row deletion boundary", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const partial = range("A1", "C3");
+    const dropped = range("A1", "C1");
+    const workbook = {
+      ...initial,
+      namedRanges: [
+        { name: "Partial", sheetId, range: range("A1", "A3") },
+        { name: "Dropped", sheetId, range: range("D1") }
+      ],
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        autoFilterRange: partial,
+        conditionalFormats: [
+          { id: "cf-partial", range: partial, condition: { type: "blank" as const }, format: { bold: true } },
+          { id: "cf-dropped", range: dropped, condition: { type: "blank" as const }, format: { bold: true } }
+        ],
+        filters: [
+          { id: "filter-partial", range: partial, column: 1, operator: "equals" as const, value: "x" },
+          { id: "filter-dropped", range: dropped, column: 0, operator: "equals" as const, value: "x" }
+        ],
+        charts: [
+          { id: "chart-partial", title: "Partial", type: "bar" as const, range: partial, anchor: { row: 0, column: 6 } },
+          { id: "chart-dropped", title: "Dropped", type: "bar" as const, range: dropped, anchor: { row: 0, column: 10 } }
+        ],
+        merges: [
+          { id: "merge-partial", range: range("E1", "E3") },
+          { id: "merge-dropped", range: range("F1", "G1") }
+        ]
+      }))
+    };
+
+    const deleted = deleteRows(workbook, sheetId, 0, 1);
+    const sheet = deleted.sheets[0];
+
+    expect(deleted.namedRanges).toEqual([
+      { name: "Partial", sheetId, range: range("A1", "A2") }
+    ]);
+    expect(sheet.conditionalFormats).toMatchObject([
+      { id: "cf-partial", range: range("A1", "C2") }
+    ]);
+    expect(sheet.filters).toMatchObject([
+      { id: "filter-partial", range: range("A1", "C2"), column: 1 }
+    ]);
+    expect(sheet.autoFilterRange).toEqual(range("A1", "C2"));
+    expect(sheet.charts).toMatchObject([
+      { id: "chart-partial", range: range("A1", "C2"), anchor: { row: 0, column: 6 } }
+    ]);
+    expect(sheet.merges).toEqual([
+      { id: "merge-partial", range: range("E1", "E2") }
+    ]);
+  });
+
   it.each([
     ["insertRows", insertRows],
     ["deleteRows", deleteRows],

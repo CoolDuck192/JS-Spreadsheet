@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { Spreadsheet } from "./App";
+import { createWorkbookSession } from "./core/workbook/WorkbookSession";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
@@ -85,6 +86,44 @@ describe("App", () => {
     await openRibbonTab(user, "Home");
     await user.click(screen.getByRole("button", { name: "Undo" }));
     expect(await screen.findByRole("gridcell", { name: "A1 before" })).toBeInTheDocument();
+  });
+
+  it("keeps Google import state open when a destroyed session rejects workbook replacement", async () => {
+    const user = userEvent.setup();
+    const workbook = setCellContent(createBlankWorkbook(), "sheet-1", "A1", "before");
+    const session = createWorkbookSession({ workbook });
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("test-access-token")
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        properties: { title: "Rejected import" },
+        sheets: [{ properties: { title: "Imported" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valueRanges: [{ values: [["replacement"]] }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    render(
+      <Spreadsheet
+        session={session}
+        services={{ googleSheets: { tokenProvider } }}
+      />
+    );
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+    const sheetInput = await screen.findByLabelText("Google Sheet URL or spreadsheet ID");
+    await user.type(sheetInput, "12345678901234567890");
+    session.destroy();
+
+    await user.click(screen.getByRole("button", { name: "Import and replace workbook" }));
+
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Import Google Sheet" })).toBeInTheDocument());
+    expect(sheetInput).toHaveValue("12345678901234567890");
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent("Imported Rejected import");
+    expect(session.getSnapshot().workbook).toBe(workbook);
+    expect(getCellContent(session.getSnapshot().workbook, "sheet-1", "A1")).toBe("before");
+    expect(session.getSnapshot()).toMatchObject({ canUndo: false, canRedo: false });
   });
 
   it("edits cells and recalculates formulas", async () => {
@@ -2078,7 +2117,20 @@ describe("App", () => {
     await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
 
     expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "28");
     expect(nameBox).toHaveValue("AA1");
+    expect(screen.getByRole("gridcell", { name: "AA1" })).toHaveFocus();
+
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "27"));
+    expect(nameBox).toHaveValue("Z1");
+    expect(screen.getByRole("gridcell", { name: "Z1" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() => expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "28"));
+    expect(nameBox).toHaveValue("AA1");
+    expect(screen.getByRole("gridcell", { name: "AA1" })).toHaveFocus();
   });
 
   it("rejects right column insertion on a protected sheet", async () => {

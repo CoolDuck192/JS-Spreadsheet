@@ -8,7 +8,10 @@ import type {
 import { GoogleSheetsError } from "../lib/googleErrors";
 import type { GoogleSheetsImportResult } from "../lib/googleSheets";
 import { createBlankWorkbook } from "../lib/workbook";
-import { useGoogleSheetsImport } from "./useGoogleSheetsImport";
+import {
+  useGoogleSheetsImport,
+  type GoogleSheetsImportController
+} from "./useGoogleSheetsImport";
 
 const googleMocks = vi.hoisted(() => ({
   builtInFactory: vi.fn(),
@@ -68,10 +71,11 @@ function renderController(options: {
   onImported?: (imported: GoogleSheetsImportResult) => void | Promise<void>;
   onError?: (error: GoogleSheetsError) => void;
 }) {
+  const onImported = options.onImported ?? vi.fn();
   return renderHook(() =>
     useGoogleSheetsImport({
       origin: options.origin ?? "https://sheets.example.com",
-      onImported: options.onImported ?? vi.fn(),
+      onImported,
       onError: options.onError,
       configuration: options.configuration,
       deprecatedTokenProviderFactory: options.deprecatedTokenProviderFactory
@@ -79,7 +83,26 @@ function renderController(options: {
   );
 }
 
-async function openReady(controller: ReturnType<typeof renderController>) {
+type DynamicControllerOptions = {
+  configuration?: GoogleSheetsServiceConfiguration;
+  deprecatedTokenProviderFactory?: (clientId: string) => TokenProvider;
+  origin?: string;
+  onImported: (imported: GoogleSheetsImportResult) => void | Promise<void>;
+  onError?: (error: GoogleSheetsError) => void;
+};
+
+function renderDynamicController(options: DynamicControllerOptions) {
+  return renderHook((current: DynamicControllerOptions) =>
+    useGoogleSheetsImport({
+      origin: current.origin ?? "https://sheets.example.com",
+      onImported: current.onImported,
+      onError: current.onError,
+      configuration: current.configuration,
+      deprecatedTokenProviderFactory: current.deprecatedTokenProviderFactory
+    }), { initialProps: options });
+}
+
+async function openReady(controller: { result: { current: GoogleSheetsImportController } }) {
   act(() => controller.result.current.openDialog());
   await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
 }
@@ -629,5 +652,200 @@ describe("useGoogleSheetsImport", () => {
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(expect.objectContaining({
       spreadsheetTitle: "Current"
     })));
+  });
+
+  it("invalidates an active import on unmount", async () => {
+    const pending = deferred<GoogleSheetsImportResult>();
+    const onImported = vi.fn();
+    googleMocks.importWorkbook.mockReturnValue(pending.promise);
+    const controller = renderController({
+      configuration: { tokenProvider: provider() },
+      onImported
+    });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+
+    controller.unmount();
+    await act(async () => pending.resolve(result("Unmounted")));
+
+    expect(onImported).not.toHaveBeenCalled();
+  });
+
+  it("binds an active import to the original target callback and invalidates a target swap", async () => {
+    const pending = deferred<GoogleSheetsImportResult>();
+    const firstTarget = vi.fn();
+    const secondTarget = vi.fn();
+    const direct = provider();
+    googleMocks.importWorkbook.mockReturnValue(pending.promise);
+    const controller = renderDynamicController({
+      configuration: { tokenProvider: direct },
+      onImported: firstTarget
+    });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+
+    controller.rerender({
+      configuration: { tokenProvider: direct },
+      onImported: secondTarget
+    });
+    await act(async () => pending.resolve(result("Wrong target")));
+
+    expect(firstTarget).not.toHaveBeenCalled();
+    expect(secondTarget).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "managed client ID",
+    "direct provider",
+    "nested factory",
+    "deprecated factory"
+  ] as const)("invalidates an active import when the %s changes", async (sourceKind) => {
+    const pending = deferred<GoogleSheetsImportResult>();
+    const onImported = vi.fn();
+    const firstProvider = provider();
+    const secondProvider = provider();
+    const firstFactory = vi.fn(() => firstProvider);
+    const secondFactory = vi.fn(() => secondProvider);
+    const base = sourceKind === "direct provider"
+      ? { configuration: { tokenProvider: firstProvider } }
+      : sourceKind === "nested factory"
+        ? { configuration: { clientId: CLIENT_ID, tokenProviderFactory: firstFactory } }
+        : sourceKind === "deprecated factory"
+          ? { configuration: { clientId: CLIENT_ID }, deprecatedTokenProviderFactory: firstFactory }
+          : { configuration: { clientId: CLIENT_ID, tokenProviderFactory: firstFactory } };
+    const changed = sourceKind === "direct provider"
+      ? { configuration: { tokenProvider: secondProvider } }
+      : sourceKind === "nested factory"
+        ? { configuration: { clientId: CLIENT_ID, tokenProviderFactory: secondFactory } }
+        : sourceKind === "deprecated factory"
+          ? { configuration: { clientId: CLIENT_ID }, deprecatedTokenProviderFactory: secondFactory }
+          : { configuration: { clientId: SECOND_CLIENT_ID, tokenProviderFactory: firstFactory } };
+    googleMocks.importWorkbook.mockReturnValue(pending.promise);
+    const controller = renderDynamicController({ ...base, onImported });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+
+    controller.rerender({ ...changed, onImported });
+    await act(async () => pending.resolve(result("Stale auth")));
+
+    expect(onImported).not.toHaveBeenCalled();
+  });
+
+  it("fully resets client-ID state when storage is swapped or removed", async () => {
+    const hostFactory = vi.fn(() => provider());
+    const storageA = storage({ load: vi.fn().mockResolvedValue(STORED_CLIENT_ID) });
+    const storageB = storage({ load: vi.fn().mockResolvedValue(null) });
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientIdStorage: storageA, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("stored"));
+
+    controller.rerender({
+      configuration: { clientIdStorage: storageB, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.phase).toBe("closed"));
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("missing"));
+    expect(controller.result.current.clientIdDraft).toBe("");
+    expect(controller.result.current.storageBusy).toBe(false);
+    expect(controller.result.current.warning).toBeUndefined();
+
+    controller.rerender({
+      configuration: { clientIdStorage: false, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("missing"));
+    expect(controller.result.current.clientIdDraft).toBe("");
+  });
+
+  it("ignores a late load from a replaced storage adapter", async () => {
+    const lateLoad = deferred<string | null>();
+    const hostFactory = vi.fn(() => provider());
+    const storageA = storage({ load: vi.fn(() => lateLoad.promise) });
+    const storageB = storage({ load: vi.fn().mockResolvedValue(null) });
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientIdStorage: storageA, tokenProviderFactory: hostFactory },
+      onImported
+    });
+
+    controller.rerender({
+      configuration: { clientIdStorage: storageB, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await act(async () => lateLoad.resolve(STORED_CLIENT_ID));
+
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("missing"));
+    expect(controller.result.current.clientIdDraft).toBe("");
+  });
+
+  it("resets pending storage work and ignores its completion after an adapter swap", async () => {
+    const pendingSave = deferred<void>();
+    const hostFactory = vi.fn(() => provider());
+    const storageA = storage({ save: vi.fn(() => pendingSave.promise) });
+    const storageB = storage({ load: vi.fn().mockResolvedValue(null) });
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientIdStorage: storageA, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.clientIdSource).toBe("missing"));
+    act(() => controller.result.current.setClientIdDraft(CLIENT_ID));
+    let saving!: Promise<void>;
+    act(() => {
+      saving = controller.result.current.saveClientId();
+    });
+    expect(controller.result.current.storageBusy).toBe(true);
+
+    controller.rerender({
+      configuration: { clientIdStorage: storageB, tokenProviderFactory: hostFactory },
+      onImported
+    });
+    await waitFor(() => expect(controller.result.current.storageBusy).toBe(false));
+    expect(controller.result.current.clientIdDraft).toBe("");
+
+    await act(async () => {
+      pendingSave.resolve(undefined);
+      await saving;
+    });
+    expect(controller.result.current.clientIdSource).toBe("missing");
+    expect(controller.result.current.clientIdDraft).toBe("");
+  });
+
+  it("retains only the current provider source while reusing a stable source", async () => {
+    const providerA = provider();
+    const providerB = provider();
+    const factoryA = vi.fn(() => providerA);
+    const factoryB = vi.fn(() => providerB);
+    const onImported = vi.fn();
+    const controller = renderDynamicController({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+    await waitFor(() => expect(factoryA).toHaveBeenCalledTimes(1));
+
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryB },
+      onImported
+    });
+    await waitFor(() => expect(factoryB).toHaveBeenCalledTimes(1));
+    controller.rerender({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
+      onImported
+    });
+
+    await waitFor(() => expect(factoryA).toHaveBeenCalledTimes(2));
+    expect(providerA.prepare).toHaveBeenCalledTimes(2);
   });
 });

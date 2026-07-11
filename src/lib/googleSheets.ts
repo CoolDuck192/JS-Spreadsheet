@@ -183,6 +183,15 @@ async function isSheetsApiDisabled(response: Response): Promise<boolean> {
   if (typeof status === "string" && API_DISABLED_STATUSES.has(status)) {
     return true;
   }
+  const details = body.error.details;
+  if (Array.isArray(details) && details.some(
+    (entry) =>
+      isRecord(entry) &&
+      typeof entry.reason === "string" &&
+      API_DISABLED_STATUSES.has(entry.reason)
+  )) {
+    return true;
+  }
   const errors = body.error.errors;
   if (!Array.isArray(errors)) {
     return false;

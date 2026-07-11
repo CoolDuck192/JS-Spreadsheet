@@ -592,6 +592,26 @@ describe("worksheet structure reducer", () => {
     expect(insertionServices.createId).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { label: "blank", ids: ["   "] },
+    { label: "duplicate", ids: ["new-column", "new-column"] }
+  ])("rejects a $label generated insertion id before publishing", ({ ids }) => {
+    const workbook = structuredWorkbook();
+    const insertionServices = deterministicServices(ids);
+    const result = reduceWorksheetStructureCommand(workbook, {
+      type: "columns.insert",
+      sheetId: workbook.activeSheetId,
+      index: 1,
+      count: ids.length
+    }, insertionServices);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      issues: [{ code: "TABLE_COLUMN_ID_CONFLICT" }]
+    });
+    expect(result.workbook).toBe(workbook);
+  });
+
   it("creates insertion metadata without writing a header when the table header row is disabled", () => {
     const workbook = structuredWorkbook({ headerRow: false });
     const result = reduceWorksheetStructureCommand(workbook, {

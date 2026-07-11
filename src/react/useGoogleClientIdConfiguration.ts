@@ -55,10 +55,11 @@ export function useGoogleClientIdConfiguration(options: Readonly<{
   const [storageAction, setStorageAction] = useState<"save" | "forget" | undefined>();
   const [clientIdError, setClientIdError] = useState<GoogleSheetsError | undefined>();
   const [warning, setWarning] = useState<GoogleSheetsError | undefined>();
-  const [storageQueue] = useState(createSerialOperationQueue);
+  const storageQueueRef = useRef(createSerialOperationQueue());
 
   const editableClientIdRef = useRef<EditableGoogleClientId | null>(null);
   const storageLoadRef = useRef<StorageLoad | null>(null);
+  const storageScopeRef = useRef(0);
   const storageVersionRef = useRef(0);
   const storagePendingRef = useRef(0);
   const clientIdTouchedRef = useRef(false);
@@ -80,13 +81,33 @@ export function useGoogleClientIdConfiguration(options: Readonly<{
     setStorageAction(action);
   }, []);
 
-  const finishStorageOperation = useCallback(() => {
+  const finishStorageOperation = useCallback((scope: number) => {
+    if (scope !== storageScopeRef.current) {
+      return;
+    }
     storagePendingRef.current = Math.max(0, storagePendingRef.current - 1);
     setStoragePendingCount(storagePendingRef.current);
     if (storagePendingRef.current === 0) {
       setStorageAction(undefined);
     }
   }, []);
+
+  useEffect(() => {
+    storageScopeRef.current += 1;
+    storageVersionRef.current += 1;
+    storagePendingRef.current = 0;
+    clientIdTouchedRef.current = false;
+    storageLoadRef.current = null;
+    storageQueueRef.current = createSerialOperationQueue();
+    updateEditableClientId(null);
+    setClientIdDraftState("");
+    setEditingClientId(false);
+    setStoragePendingCount(0);
+    setStorageAction(undefined);
+    setClientIdError(undefined);
+    setWarning(undefined);
+    setStorageStatus(isClientIdStorage(storage) ? "loading" : "loaded");
+  }, [storage, updateEditableClientId]);
 
   useEffect(() => {
     if (!isClientIdStorage(storage)) {
@@ -172,29 +193,30 @@ export function useGoogleClientIdConfiguration(options: Readonly<{
     }
 
     const version = ++storageVersionRef.current;
+    const scope = storageScopeRef.current;
+    const queue = storageQueueRef.current;
     beginStorageOperation("save");
     try {
-      await storageQueue.enqueue(() => storage.save(normalizedClientId));
-      if (version === storageVersionRef.current) {
+      await queue.enqueue(() => storage.save(normalizedClientId));
+      if (scope === storageScopeRef.current && version === storageVersionRef.current) {
         updateEditableClientId({ value: normalizedClientId, source: "stored" });
         setWarning(undefined);
       }
     } catch {
-      if (version === storageVersionRef.current) {
+      if (scope === storageScopeRef.current && version === storageVersionRef.current) {
         updateEditableClientId({ value: normalizedClientId, source: "session" });
         const error = storageError(STORAGE_SAVE_ERROR_MESSAGE);
         setWarning(error);
         notifyError(error);
       }
     } finally {
-      finishStorageOperation();
+      finishStorageOperation(scope);
     }
   }, [
     beginStorageOperation,
     finishStorageOperation,
     notifyError,
     storage,
-    storageQueue,
     updateEditableClientId
   ]);
 
@@ -206,24 +228,26 @@ export function useGoogleClientIdConfiguration(options: Readonly<{
     }
 
     const version = ++storageVersionRef.current;
+    const scope = storageScopeRef.current;
+    const queue = storageQueueRef.current;
     beginStorageOperation("forget");
     try {
-      await storageQueue.enqueue(() => storage.clear());
-      if (version !== storageVersionRef.current) {
+      await queue.enqueue(() => storage.clear());
+      if (scope !== storageScopeRef.current || version !== storageVersionRef.current) {
         return { status: "retained" };
       }
       clearEditableClientId();
       setWarning(undefined);
       return { status: "cleared" };
     } catch {
-      if (version === storageVersionRef.current) {
+      if (scope === storageScopeRef.current && version === storageVersionRef.current) {
         const error = storageError(STORAGE_CLEAR_ERROR_MESSAGE);
         setWarning(error);
         notifyError(error);
       }
       return { status: "retained" };
     } finally {
-      finishStorageOperation();
+      finishStorageOperation(scope);
     }
 
     function clearEditableClientId() {
@@ -237,7 +261,6 @@ export function useGoogleClientIdConfiguration(options: Readonly<{
     finishStorageOperation,
     notifyError,
     storage,
-    storageQueue,
     updateEditableClientId
   ]);
 
