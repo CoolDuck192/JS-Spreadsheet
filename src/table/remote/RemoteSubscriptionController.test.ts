@@ -106,6 +106,67 @@ describe("RemoteSubscriptionController", () => {
     })]);
   });
 
+  it("settles a matching uncertain batch from subscription authority", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost after commit");
+    });
+    await harness.mutations.execute("operation-uncertain-match", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({
+      kind: "rows-upserted",
+      revision: "2",
+      rows: [{ id: "1", salary: 120, group: "A" }]
+    });
+
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.mutations.getConflicts()).toEqual([]);
+  });
+
+  it("turns an uncertain subscription mismatch into a terminal conflict", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost");
+    });
+    await harness.mutations.execute("operation-uncertain-conflict", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({
+      kind: "rows-upserted",
+      revision: "2",
+      rows: [{ id: "1", salary: 115, group: "A" }]
+    });
+
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.mutations.getConflicts()).toEqual([expect.objectContaining({
+      operationId: "operation-uncertain-conflict",
+      attemptedValue: 120,
+      authoritativeValue: 115
+    })]);
+  });
+
   it("turns delete-versus-pending-edit into a conflict instead of dropping the attempt", async () => {
     const acknowledgement = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const harness = await createHarness(undefined, async () => acknowledgement.promise);

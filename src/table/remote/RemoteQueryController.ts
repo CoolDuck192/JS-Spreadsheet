@@ -11,6 +11,13 @@ export type RemoteQuerySnapshot<TRow> = {
   error?: { code: string; message: string; retryable: boolean };
 };
 
+export type RemoteQueryAcceptance<TRow> = {
+  generation: number;
+  revision: string;
+  items: readonly QueryRow<TRow>[];
+  completeness: QueryResult<TRow>["completeness"];
+};
+
 export type RemoteTableErrorCode =
   | "NO_QUERY"
   | "REMOTE_SESSION_DESTROYED"
@@ -28,6 +35,7 @@ export class RemoteQueryController<TRow> {
   private abortController: AbortController | null = null;
   private snapshot: RemoteQuerySnapshot<TRow> = emptySnapshot();
   private readonly listeners = new Set<() => void>();
+  private readonly acceptanceListeners = new Set<(acceptance: RemoteQueryAcceptance<TRow>) => void>();
   private readonly cache: RemotePageCache<TRow>;
   private destroyed = false;
   private lastQuery: QueryRequest | null = null;
@@ -99,6 +107,12 @@ export class RemoteQueryController<TRow> {
       this.cache.put(query, result);
       const combined = this.cache.combine() ?? result;
       this.currentRevision = result.revision;
+      this.publishAcceptance({
+        generation,
+        revision: result.revision,
+        items: result.items,
+        completeness: result.completeness
+      });
       this.publish({ status: "ready", ...combined, error: undefined });
     } catch (error) {
       if (!this.isCurrent(generation, abortController)) return;
@@ -133,6 +147,14 @@ export class RemoteQueryController<TRow> {
     if (this.destroyed) return () => {};
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  subscribeAccepted = (
+    listener: (acceptance: RemoteQueryAcceptance<TRow>) => void
+  ): (() => void) => {
+    if (this.destroyed) return () => {};
+    this.acceptanceListeners.add(listener);
+    return () => this.acceptanceListeners.delete(listener);
   };
 
   getCanonicalRow(rowId: string): TRow | undefined {
@@ -194,6 +216,7 @@ export class RemoteQueryController<TRow> {
     this.abortController = null;
     this.cache.clear();
     this.listeners.clear();
+    this.acceptanceListeners.clear();
   }
 
   private publishFromCache(): void {
@@ -207,6 +230,13 @@ export class RemoteQueryController<TRow> {
     this.snapshot = next;
     for (const listener of [...this.listeners]) {
       try { listener(); } catch { /* Host listeners are isolated. */ }
+    }
+  }
+
+  private publishAcceptance(acceptance: RemoteQueryAcceptance<TRow>): void {
+    if (this.destroyed) return;
+    for (const listener of [...this.acceptanceListeners]) {
+      try { listener(acceptance); } catch { /* Reconciliation listeners are isolated. */ }
     }
   }
 

@@ -8,7 +8,7 @@ import { RemoteQueryController } from "./RemoteQueryController";
 import { createDeferred } from "./testUtils";
 import type { RemoteMutationResult } from "./types";
 
-type Row = { id: string; salary: number; label: string };
+type Row = { id: string; salary: number; label: string; rowVersion?: string };
 
 describe("RemoteMutationController", () => {
   it("keeps canonical rows untouched while pending and commits the acknowledged row", async () => {
@@ -169,6 +169,163 @@ describe("RemoteMutationController", () => {
     expect(harness.controller.getPendingOperations()).toHaveLength(1);
   });
 
+  it("acknowledges and clears an uncertain batch when a later accepted query matches", async () => {
+    let queryResult = canonicalResult();
+    const onAcknowledged = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost after commit"); },
+      undefined,
+      { query: async () => queryResult, onAcknowledged }
+    );
+
+    await harness.controller.execute("operation-uncertain-match", [valueMutation(120)]);
+    queryResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 120, label: "server", rowVersion: "row-2" }
+    });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.overlays.size).toBe(0);
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.controller.getConflicts()).toEqual([]);
+    expect(onAcknowledged).toHaveBeenCalledWith({
+      operationId: "operation-uncertain-match",
+      revision: "2",
+      rowVersions: [{ rowId: "1", columnId: "salary", rowVersion: "row-2" }]
+    });
+  });
+
+  it("waits for authority from a query started after the uncertain transition", async () => {
+    const mutation = createDeferred<readonly RemoteMutationResult<Row>[]>();
+    const earlyRefresh = createDeferred<QueryResult<Row>>();
+    let queryCalls = 0;
+    const matchingResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 120, label: "server", rowVersion: "row-2" }
+    });
+    const harness = await createHarness(
+      async () => mutation.promise,
+      undefined,
+      {
+        query: async () => {
+          queryCalls += 1;
+          if (queryCalls === 1) return canonicalResult();
+          if (queryCalls === 2) return earlyRefresh.promise;
+          return matchingResult;
+        }
+      }
+    );
+
+    const execution = harness.controller.execute("operation-racing-refresh", [valueMutation(120)]);
+    const refreshStartedBeforeFailure = harness.queryController.refresh("early-refresh");
+    mutation.reject(new Error("connection lost"));
+    await execution;
+    earlyRefresh.resolve(matchingResult);
+    await refreshStartedBeforeFailure;
+
+    expect(harness.overlays.getLatest("1", "salary")).toMatchObject({ status: "uncertain" });
+    expect(harness.controller.getPendingOperations()).toHaveLength(1);
+
+    await harness.queryController.refresh("post-failure-refresh");
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+  });
+
+  it("turns an uncertain mismatch into a terminal conflict with the authoritative row version", async () => {
+    let queryResult = canonicalResult();
+    const onReconciled = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost"); },
+      undefined,
+      { query: async () => queryResult, onReconciled }
+    );
+
+    await harness.controller.execute("operation-uncertain-conflict", [valueMutation(120)]);
+    queryResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 105, label: "server", rowVersion: "row-2" }
+    });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.overlays.getLatest("1", "salary")).toMatchObject({ status: "conflict" });
+    expect(harness.controller.getConflicts()).toEqual([expect.objectContaining({
+      operationId: "operation-uncertain-conflict",
+      attemptedValue: 120,
+      authoritativeValue: 105,
+      revision: "2"
+    })]);
+    expect(harness.controller.consumeConflictForRetry(
+      "operation-uncertain-conflict",
+      "1",
+      "2"
+    )).toEqual([expect.objectContaining({ rowVersion: "row-2" })]);
+    expect(onReconciled).toHaveBeenCalledWith({
+      operationId: "operation-uncertain-conflict",
+      outcome: "conflict"
+    });
+  });
+
+  it("never reveals an older uncertain overlay after a later same-cell commit", async () => {
+    const onReconciled = vi.fn();
+    const mutate = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockImplementationOnce(async (batch) => [{
+        clientMutationId: batch[0].clientMutationId,
+        status: "committed" as const,
+        revision: "2",
+        row: { id: "1", salary: 130, label: "latest", rowVersion: "row-2" },
+        rowVersion: "row-2"
+      }]);
+    const harness = await createHarness(mutate, undefined, { onReconciled });
+
+    await harness.controller.execute("operation-old", [valueMutation(120)]);
+    await expect(harness.controller.execute("operation-new", [valueMutation(130)]))
+      .resolves.toMatchObject({ status: "committed" });
+
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.queryController.getCanonicalRow("1")?.salary).toBe(130);
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(onReconciled).toHaveBeenCalledWith({
+      operationId: "operation-old",
+      outcome: "superseded"
+    });
+  });
+
+  it("reclaims operation backpressure after authoritative reconciliation", async () => {
+    let queryResult = canonicalResult();
+    const mutate = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost"))
+      .mockImplementationOnce(async (batch) => [{
+        clientMutationId: batch[0].clientMutationId,
+        status: "committed" as const,
+        revision: "3",
+        row: { id: "1", salary: 100, label: "next", rowVersion: "row-3" }
+      }]);
+    const harness = await createHarness(mutate, { maxPendingOperations: 1 }, {
+      query: async () => queryResult
+    });
+
+    await harness.controller.execute("operation-uncertain", [valueMutation(120)]);
+    queryResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 100, label: "original", rowVersion: "row-2" }
+    });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    const labelMutation: PreparedRemoteMutation = {
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "label",
+      rawText: "next",
+      parsedValue: "next",
+      optimisticCell: { storedValue: "next", evaluatedValue: "next", displayValue: "next", metadata: {} }
+    };
+    await expect(harness.controller.execute("operation-after-refresh", [labelMutation]))
+      .resolves.toMatchObject({ status: "committed" });
+    expect(mutate).toHaveBeenCalledTimes(2);
+  });
+
   it("shows the latest concurrent same-cell overlay while reconciling each acknowledgement once", async () => {
     const first = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const second = createDeferred<readonly RemoteMutationResult<Row>[]>();
@@ -258,7 +415,19 @@ function valueMutation(value: number): PreparedRemoteMutation {
 
 async function createHarness(
   mutateImplementation: NonNullable<Parameters<typeof createRemoteTableSource<Row>>[0]["mutate"]>,
-  limits?: { maxPendingOperations?: number; maxPendingCells?: number }
+  limits?: { maxPendingOperations?: number; maxPendingCells?: number },
+  options: {
+    query?: () => Promise<QueryResult<Row>>;
+    onAcknowledged?: (acknowledgement: {
+      operationId: string;
+      revision: string;
+      rowVersions: readonly { rowId: string; columnId: string; rowVersion?: string }[];
+    }) => void;
+    onReconciled?: (reconciliation: {
+      operationId: string;
+      outcome: "conflict" | "superseded";
+    }) => void;
+  } = {}
 ) {
   const mutate = vi.fn(mutateImplementation);
   const source = createRemoteTableSource<Row>({
@@ -270,9 +439,9 @@ async function createHarness(
     compareRevisions: numericComparator,
     readCell: (row, columnId) => {
       const value = row[columnId as keyof Row];
-      return { storedValue: value, evaluatedValue: value };
+      return { storedValue: value, evaluatedValue: value, rowVersion: row.rowVersion };
     },
-    query: async () => canonicalResult(),
+    query: options.query ?? (async () => canonicalResult()),
     mutate
   });
   const queryController = new RemoteQueryController(source);
@@ -284,6 +453,8 @@ async function createHarness(
     overlays,
     getActiveQuery: query,
     onChange: vi.fn(),
+    onAcknowledged: options.onAcknowledged,
+    onReconciled: options.onReconciled,
     limits
   });
   return { source, queryController, overlays, controller, mutate };
@@ -303,11 +474,13 @@ function query(): QueryRequest {
   return { sorting: [], filter: null, grouping: [], aggregates: [], pagination: { kind: "none" } };
 }
 
-function canonicalResult(): QueryResult<Row> {
-  const row = { id: "1", salary: 100, label: "original" };
+function canonicalResult(options: { revision?: string; row?: Row } = {}): QueryResult<Row> {
+  const row = options.row ?? {
+    id: "1", salary: 100, label: "original", rowVersion: "row-1"
+  };
   return {
     items: [{ kind: "data", id: row.id, original: row, depth: 0 }],
-    revision: "1",
+    revision: options.revision ?? "1",
     completeness: "completeDataset",
     pageInfo: { kind: "none", total: { kind: "known", value: 1 } }
   };

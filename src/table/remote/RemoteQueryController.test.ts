@@ -94,6 +94,35 @@ describe("RemoteQueryController", () => {
     });
   });
 
+  it("notifies reconciliation listeners only for revision-accepted query results", async () => {
+    const responses = [
+      result("1", [{ id: "1", name: "Ada" }]),
+      result("0", [{ id: "stale", name: "Stale" }]),
+      result("2", [{ id: "2", name: "Grace" }])
+    ];
+    const source = createTestRemoteSource<Row>({
+      compareRevisions: numericComparator,
+      query: async () => responses.shift()!
+    });
+    const controller = new RemoteQueryController(source);
+    const accepted = vi.fn();
+    controller.subscribeAccepted(accepted);
+
+    await controller.load(queryWithFilter("Ada"), "query-1");
+    await controller.load(queryWithFilter("Stale"), "query-2");
+    await controller.load(queryWithFilter("Grace"), "query-3");
+
+    expect(accepted).toHaveBeenCalledTimes(2);
+    expect(accepted.mock.calls.map(([acceptance]) => ({
+      generation: acceptance.generation,
+      revision: acceptance.revision,
+      rowIds: acceptance.items.map((item: { id: string }) => item.id)
+    }))).toEqual([
+      { generation: 1, revision: "1", rowIds: ["1"] },
+      { generation: 3, revision: "2", rowIds: ["2"] }
+    ]);
+  });
+
   it("replaces offset pages but appends infinite pages in request order", async () => {
     const offsetResponses = [
       result("1", [{ id: "1", name: "Ada" }], 0),

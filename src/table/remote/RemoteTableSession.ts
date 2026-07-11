@@ -32,7 +32,8 @@ import {
 import {
   RemoteMutationController,
   type PreparedRemoteMutation,
-  type RemoteMutationAcknowledgement
+  type RemoteMutationAcknowledgement,
+  type RemoteMutationReconciliation
 } from "./RemoteMutationController";
 import {
   RemoteOperationJournal,
@@ -219,6 +220,7 @@ class RemoteTableSessionImpl<
           this.publish();
         },
         onAcknowledged: (acknowledgement) => this.handleMutationAcknowledged(acknowledgement),
+        onReconciled: (reconciliation) => this.handleMutationReconciled(reconciliation),
         limits: this.options.mutationLimits
       });
       if (source.capabilities.subscription) {
@@ -734,6 +736,23 @@ class RemoteTableSessionImpl<
     this.snapshot = null;
   }
 
+  private handleMutationReconciled(reconciliation: RemoteMutationReconciliation): void {
+    const compensatedOperationId = this.compensationTargets.get(reconciliation.operationId);
+    if (compensatedOperationId) {
+      this.compensationTargets.delete(reconciliation.operationId);
+      if (reconciliation.outcome === "conflict") {
+        this.compensationConflictTargets.set(
+          reconciliation.operationId,
+          compensatedOperationId
+        );
+      }
+      this.operationJournal.releaseCompensation(compensatedOperationId);
+    } else {
+      this.operationJournal.discardPending(reconciliation.operationId);
+    }
+    this.publishJournalChange();
+  }
+
   private undoRemote(commandId: string): CommandResult<TRow> {
     const controller = this.controller;
     const mutations = this.mutationController;
@@ -787,12 +806,14 @@ class RemoteTableSessionImpl<
     void mutations.execute(commandId, prepared, baseRevision === undefined ? {} : { baseRevision }).then((result) => {
       const retryableOperationId = this.compensationTargets.get(commandId);
       if (retryableOperationId) {
-        this.compensationTargets.delete(commandId);
-        if (result.status === "conflict") {
-          this.compensationConflictTargets.set(commandId, retryableOperationId);
+        if (result.status !== "pending") {
+          this.compensationTargets.delete(commandId);
+          if (result.status === "conflict") {
+            this.compensationConflictTargets.set(commandId, retryableOperationId);
+          }
+          this.operationJournal.releaseCompensation(retryableOperationId);
+          this.publishJournalChange();
         }
-        this.operationJournal.releaseCompensation(retryableOperationId);
-        this.publishJournalChange();
       }
       this.snapshot = null;
       this.refreshAfterInvalidation(commandId);

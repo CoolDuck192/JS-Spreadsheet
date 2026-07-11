@@ -415,6 +415,72 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("reconciles an uncertain refresh and never lets it mask a later committed edit", async () => {
+    let serverRow = { ...employees[0] };
+    let revision = "1";
+    let rowVersion = "row-1";
+    const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+      if (mutate.mock.calls.length === 1) throw new Error("connection lost");
+      serverRow = { ...serverRow, name: "Marie" };
+      revision = "2";
+      rowVersion = "row-2";
+      return batch.map((mutation) => ({
+        clientMutationId: mutation.clientMutationId,
+        status: "committed" as const,
+        revision,
+        row: serverRow,
+        rowVersion
+      }));
+    });
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: false,
+      subscription: false,
+      undo: false
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "none",
+      undoMode: "none",
+      query: async () => unpaginatedResult(revision, [serverRow]),
+      mutate,
+      compareRevisions: numericRevisionComparator,
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return { storedValue: value, evaluatedValue: value, rowVersion };
+      }
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Grace" }]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(1));
+
+    await session.refresh();
+    expect(session.getSnapshot().pendingOperations).toEqual([]);
+    expect(session.getSnapshot().conflicts).toEqual([expect.objectContaining({
+      attemptedValue: "Grace",
+      authoritativeValue: "Ada",
+      revision: "1"
+    })]);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Marie" }]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
+
+    expect(session.getSnapshot().getCell("employee-1", "name").storedValue).toBe("Marie");
+    expect(session.getSnapshot().conflicts).toEqual([]);
+    expect(session.getDiagnostics().pendingMutations).toBe(0);
+
+    session.destroy();
+  });
+
   it("cancels a pending batch, retains tombstone reconciliation, and lets refresh win over a late acknowledgement", async () => {
     const acknowledgement = createDeferredMutation<Employee>();
     const refresh = createDeferredResult<QueryResult<Employee>>();
@@ -757,6 +823,62 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("completes the original journal entry when authority confirms an uncertain compensation", async () => {
+    let serverRow = { ...employees[0] };
+    let revision = "1";
+    let rowVersion = "row-1";
+    const mutate = vi.fn(async (batch: readonly RemoteMutation[]) => {
+      if (mutate.mock.calls.length === 1) {
+        serverRow = { ...serverRow, salary: 120 };
+        revision = "2";
+        rowVersion = "row-2";
+        return batch.map((mutation) => ({
+          clientMutationId: mutation.clientMutationId,
+          status: "committed" as const,
+          revision,
+          row: serverRow,
+          rowVersion
+        }));
+      }
+      serverRow = { ...serverRow, salary: 100 };
+      revision = "3";
+      rowVersion = "row-3";
+      throw new Error("connection lost after compensation committed");
+    });
+    const source = createTestRemoteSource<Employee>({
+      capabilities: unpaginatedUndoCapabilities(),
+      paginationMode: "none",
+      query: async () => unpaginatedResult(revision, [serverRow]),
+      mutate,
+      compareRevisions: numericRevisionComparator,
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return { storedValue: value, evaluatedValue: value, rowVersion };
+      }
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "salary", rawText: "120" }]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getDiagnostics().journalEntries).toBe(1));
+
+    expect(await session.undo()).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(1));
+    expect(session.getSnapshot().canUndo).toBe(false);
+    await session.refresh();
+
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(100);
+    expect(session.getSnapshot().pendingOperations).toEqual([]);
+    expect(session.getDiagnostics().journalEntries).toBe(0);
+    expect(session.getSnapshot().canUndo).toBe(false);
+
+    session.destroy();
+  });
+
   it.each(["rejected", "conflict", "uncertain"] as const)(
     "keeps %s compensation retryable and never advertises remote redo",
     async (failure) => {
@@ -828,7 +950,12 @@ describe("RemoteTableSession", () => {
       await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
 
       expect(await session.undo()).toMatchObject({ status: "pending" });
-      await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+      if (failure === "uncertain") {
+        await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(1));
+        expect(session.getSnapshot().canUndo).toBe(false);
+      } else {
+        await vi.waitFor(() => expect(session.getSnapshot().canUndo).toBe(true));
+      }
       expect(session.getDiagnostics().journalEntries).toBe(1);
       if (failure === "conflict") {
         const conflict = session.getSnapshot().conflicts[0];

@@ -6,7 +6,10 @@ import type {
   TablePendingOperation
 } from "../core/types";
 import type { OptimisticCell, OptimisticOverlayStore } from "./OptimisticOverlayStore";
-import type { RemoteQueryController } from "./RemoteQueryController";
+import type {
+  RemoteQueryAcceptance,
+  RemoteQueryController
+} from "./RemoteQueryController";
 import type {
   RemoteMutation,
   RemoteMutationResult,
@@ -23,6 +26,14 @@ export type PreparedRemoteMutation = {
   | { kind: "cell-metadata"; metadata: OptimisticCell["metadata"] }
 );
 
+type AuthoritativeMutationCell = {
+  storedValue: unknown;
+  evaluatedValue: unknown;
+  formula?: string;
+  metadata: OptimisticCell["metadata"];
+  rowVersion?: string;
+};
+
 export type RemoteMutationControllerOptions<TRow> = {
   source: RemoteTableSource<TRow>;
   queryController: RemoteQueryController<TRow>;
@@ -30,6 +41,7 @@ export type RemoteMutationControllerOptions<TRow> = {
   getActiveQuery(): QueryRequest;
   onChange(): void;
   onAcknowledged?(acknowledgement: RemoteMutationAcknowledgement): void;
+  onReconciled?(reconciliation: RemoteMutationReconciliation): void;
   limits?: { maxPendingOperations?: number; maxPendingCells?: number };
 };
 
@@ -37,6 +49,11 @@ export type RemoteMutationAcknowledgement = {
   operationId: string;
   revision: string;
   rowVersions: readonly { rowId: string; columnId: string; rowVersion?: string }[];
+};
+
+export type RemoteMutationReconciliation = {
+  operationId: string;
+  outcome: "conflict" | "superseded";
 };
 
 export type RemoteMutationExecutionOptions = {
@@ -55,6 +72,9 @@ type MutationBatch = {
   cancelled: boolean;
   cancelledAtQueryGeneration: number;
   authoritativeRefreshCompleted: boolean;
+  uncertainAtQueryGeneration: number;
+  acknowledgeable: boolean;
+  resolvedMutationIds: Set<string>;
 };
 
 export type RemoteMutationCancellation = {
@@ -71,6 +91,8 @@ export class RemoteMutationController<TRow> {
   private readonly getActiveQuery: () => QueryRequest;
   private readonly onChange: () => void;
   private readonly onAcknowledged: ((acknowledgement: RemoteMutationAcknowledgement) => void) | undefined;
+  private readonly onReconciled: ((reconciliation: RemoteMutationReconciliation) => void) | undefined;
+  private readonly unsubscribeAcceptedQuery: () => void;
   private readonly maxPendingOperations: number;
   private readonly maxPendingCells: number;
   private readonly batches = new Map<string, MutationBatch>();
@@ -87,6 +109,10 @@ export class RemoteMutationController<TRow> {
     this.getActiveQuery = options.getActiveQuery;
     this.onChange = options.onChange;
     this.onAcknowledged = options.onAcknowledged;
+    this.onReconciled = options.onReconciled;
+    this.unsubscribeAcceptedQuery = this.queryController.subscribeAccepted((acceptance) => {
+      this.acceptAcceptedQuery(acceptance);
+    });
     this.maxPendingOperations = positiveLimit(
       options.limits?.maxPendingOperations,
       DEFAULT_MAX_PENDING_OPERATIONS,
@@ -157,7 +183,10 @@ export class RemoteMutationController<TRow> {
       status: "pending",
       cancelled: false,
       cancelledAtQueryGeneration: 0,
-      authoritativeRefreshCompleted: false
+      authoritativeRefreshCompleted: false,
+      uncertainAtQueryGeneration: 0,
+      acknowledgeable: true,
+      resolvedMutationIds: new Set()
     };
     this.batches.set(operationId, batch);
     this.publish();
@@ -183,6 +212,7 @@ export class RemoteMutationController<TRow> {
       }
       for (const mutationId of batch.mutationIds) this.overlays.updateStatus(mutationId, "uncertain");
       batch.status = "uncertain";
+      batch.uncertainAtQueryGeneration = this.queryController.getDiagnostics().generation;
       this.publish();
       return { status: "pending", operationId };
     }
@@ -257,6 +287,7 @@ export class RemoteMutationController<TRow> {
       switch (result.status) {
         case "committed":
         case "corrected":
+          this.supersedeOlderUncertainOverlays(overlay);
           committedRows.push(result.row);
           this.queryController.applyCanonicalRows([result.row], result.revision, false);
           this.overlays.remove(result.clientMutationId);
@@ -407,7 +438,124 @@ export class RemoteMutationController<TRow> {
     return this.overlays.values().some((overlay) => overlay.rowId === rowId);
   }
 
+  private acceptAcceptedQuery(acceptance: RemoteQueryAcceptance<TRow>): void {
+    const rows = acceptance.items.flatMap((item) => item.kind === "data" ? [item.original] : []);
+    this.reconcileUncertainBatches(rows, acceptance.revision, acceptance.generation);
+  }
+
+  private reconcileUncertainBatches(
+    rows: readonly TRow[],
+    revision: string,
+    generation?: number
+  ): void {
+    if (this.destroyed) return;
+    const rowsById = new Map(rows.map((row) => [this.source.getRowId(row), row]));
+    let changed = false;
+
+    for (const batch of [...this.batches.values()]) {
+      if (
+        batch.status !== "uncertain"
+        || (generation !== undefined && generation <= batch.uncertainAtQueryGeneration)
+      ) continue;
+
+      const resolutions: Array<{
+        mutationId: string;
+        overlay: NonNullable<ReturnType<OptimisticOverlayStore["get"]>>;
+        attempt: PreparedRemoteMutation;
+        row: TRow;
+        authoritative: AuthoritativeMutationCell;
+      }> = [];
+      let authoritativeForWholeBatch = true;
+
+      for (const mutationId of batch.mutationIds) {
+        if (batch.resolvedMutationIds.has(mutationId)) continue;
+        const overlay = this.overlays.get(mutationId);
+        const attempt = this.attempts.get(mutationId);
+        if (!overlay || !attempt) {
+          batch.resolvedMutationIds.add(mutationId);
+          batch.acknowledgeable = false;
+          changed = true;
+          continue;
+        }
+
+        const latest = this.overlays.getLatest(overlay.rowId, overlay.columnId);
+        if (latest && latest.sequence > overlay.sequence) {
+          this.overlays.remove(mutationId);
+          this.attempts.delete(mutationId);
+          this.conflicts.delete(mutationId);
+          batch.resolvedMutationIds.add(mutationId);
+          batch.acknowledgeable = false;
+          changed = true;
+          continue;
+        }
+
+        const comparison = this.source.compareRevisions(revision, overlay.baseRevision);
+        const row = rowsById.get(overlay.rowId);
+        const authoritative = row && comparison !== "older" && comparison !== "unknown"
+          ? this.readAuthoritativeCell(row, overlay.columnId)
+          : null;
+        if (!row || !authoritative) {
+          authoritativeForWholeBatch = false;
+          break;
+        }
+        resolutions.push({ mutationId, overlay, attempt, row, authoritative });
+      }
+
+      if (!authoritativeForWholeBatch) continue;
+      let hasConflict = false;
+      const rowVersions = new Map<string, string | undefined>();
+      for (const resolution of resolutions) {
+        const { mutationId, overlay, attempt, row, authoritative } = resolution;
+        rowVersions.set(mutationId, authoritative.rowVersion);
+        batch.resolvedMutationIds.add(mutationId);
+        if (attemptMatchesAuthority(attempt, authoritative)) {
+          this.overlays.remove(mutationId);
+          this.attempts.delete(mutationId);
+          this.conflicts.delete(mutationId);
+        } else {
+          hasConflict = true;
+          this.overlays.updateStatus(mutationId, "conflict");
+          if (authoritative.rowVersion !== undefined) {
+            this.attempts.set(mutationId, { ...attempt, rowVersion: authoritative.rowVersion });
+          }
+          this.conflicts.set(mutationId, {
+            operationId: overlay.operationId,
+            rowId: overlay.rowId,
+            columnId: overlay.columnId,
+            attemptedValue: overlay.cell.evaluatedValue,
+            authoritativeValue: authoritative.evaluatedValue,
+            current: row,
+            revision
+          });
+        }
+        changed = true;
+      }
+
+      if (batch.resolvedMutationIds.size !== batch.mutationIds.length) continue;
+      this.batches.delete(batch.operationId);
+      if (batch.acknowledgeable && !hasConflict) {
+        this.notifyAcknowledged({
+          operationId: batch.operationId,
+          revision,
+          rowVersions: batch.cells.map((cell, index) => {
+            const rowVersion = rowVersions.get(batch.mutationIds[index]);
+            return { ...cell, ...(rowVersion === undefined ? {} : { rowVersion }) };
+          })
+        });
+      } else {
+        this.notifyReconciled({
+          operationId: batch.operationId,
+          outcome: hasConflict ? "conflict" : "superseded"
+        });
+      }
+      changed = true;
+    }
+
+    if (changed) this.publish();
+  }
+
   acceptAuthoritativeRows(rows: readonly TRow[], revision: string): void {
+    this.reconcileUncertainBatches(rows, revision);
     for (const row of rows) {
       const rowId = this.source.getRowId(row);
       for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
@@ -517,6 +665,7 @@ export class RemoteMutationController<TRow> {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.unsubscribeAcceptedQuery();
     for (const batch of this.batches.values()) batch.abortController.abort();
     this.batches.clear();
     this.conflicts.clear();
@@ -524,6 +673,66 @@ export class RemoteMutationController<TRow> {
     this.reconciliationTombstones.clear();
     this.issues = [];
     this.overlays.clear();
+  }
+
+  private readAuthoritativeCell(row: TRow, columnId: string): AuthoritativeMutationCell | null {
+    if (!this.source.readCell) return null;
+    try {
+      const cell = this.source.readCell(row, columnId);
+      return {
+        storedValue: cell.storedValue,
+        evaluatedValue: cell.evaluatedValue,
+        ...(cell.formula === undefined ? {} : { formula: cell.formula }),
+        metadata: cell.metadata ?? {},
+        ...(cell.rowVersion === undefined ? {} : { rowVersion: cell.rowVersion })
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private supersedeOlderUncertainOverlays(
+    current: NonNullable<ReturnType<OptimisticOverlayStore["get"]>>
+  ): void {
+    const affected = new Set<MutationBatch>();
+    for (const candidate of this.overlays.values()) {
+      if (
+        candidate.clientMutationId === current.clientMutationId
+        || (candidate.status !== "uncertain" && candidate.status !== "conflict")
+        || candidate.rowId !== current.rowId
+        || candidate.columnId !== current.columnId
+        || candidate.sequence >= current.sequence
+      ) continue;
+      const batch = this.batches.get(candidate.operationId);
+      this.overlays.remove(candidate.clientMutationId);
+      this.attempts.delete(candidate.clientMutationId);
+      this.conflicts.delete(candidate.clientMutationId);
+      if (!batch) continue;
+      batch.resolvedMutationIds.add(candidate.clientMutationId);
+      batch.acknowledgeable = false;
+      affected.add(batch);
+    }
+    for (const batch of affected) {
+      if (batch.resolvedMutationIds.size !== batch.mutationIds.length) continue;
+      this.batches.delete(batch.operationId);
+      this.notifyReconciled({ operationId: batch.operationId, outcome: "superseded" });
+    }
+  }
+
+  private notifyAcknowledged(acknowledgement: RemoteMutationAcknowledgement): void {
+    try {
+      this.onAcknowledged?.(acknowledgement);
+    } catch {
+      // Journal callbacks never alter remote mutation reconciliation.
+    }
+  }
+
+  private notifyReconciled(reconciliation: RemoteMutationReconciliation): void {
+    try {
+      this.onReconciled?.(reconciliation);
+    } catch {
+      // Journal callbacks never alter remote mutation reconciliation.
+    }
   }
 
   private removeBatch(batch: MutationBatch, silent: boolean): void {
@@ -584,6 +793,20 @@ export class RemoteMutationController<TRow> {
     batch.abortController.abort();
     this.batches.delete(operationId);
   }
+}
+
+function attemptMatchesAuthority(
+  attempt: PreparedRemoteMutation,
+  authoritative: AuthoritativeMutationCell
+): boolean {
+  if (attempt.kind === "cell-metadata") {
+    return JSON.stringify(authoritative.metadata) === JSON.stringify(attempt.metadata);
+  }
+  if (attempt.formula !== undefined) {
+    return authoritative.formula === attempt.formula;
+  }
+  return Object.is(authoritative.storedValue, attempt.parsedValue)
+    || Object.is(authoritative.evaluatedValue, attempt.optimisticCell.evaluatedValue);
 }
 
 function validateResults<TRow>(
