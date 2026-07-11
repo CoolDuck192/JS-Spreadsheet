@@ -26,7 +26,7 @@ export type PreparedRemoteMutation = {
   | { kind: "cell-metadata"; metadata: OptimisticCell["metadata"] }
 );
 
-type AuthoritativeMutationCell = {
+export type RemoteAuthoritativeMutationCell = {
   storedValue: unknown;
   evaluatedValue: unknown;
   formula?: string;
@@ -40,6 +40,11 @@ export type RemoteMutationControllerOptions<TRow> = {
   overlays: OptimisticOverlayStore;
   getActiveQuery(): QueryRequest;
   onChange(): void;
+  readAuthoritativeCell?(
+    row: TRow,
+    rowId: string,
+    columnId: string
+  ): RemoteAuthoritativeMutationCell | null;
   onAcknowledged?(acknowledgement: RemoteMutationAcknowledgement): void;
   onReconciled?(reconciliation: RemoteMutationReconciliation): void;
   limits?: { maxPendingOperations?: number; maxPendingCells?: number };
@@ -90,6 +95,9 @@ export class RemoteMutationController<TRow> {
   private readonly overlays: OptimisticOverlayStore;
   private readonly getActiveQuery: () => QueryRequest;
   private readonly onChange: () => void;
+  private readonly authoritativeCellReader:
+    | RemoteMutationControllerOptions<TRow>["readAuthoritativeCell"]
+    | undefined;
   private readonly onAcknowledged: ((acknowledgement: RemoteMutationAcknowledgement) => void) | undefined;
   private readonly onReconciled: ((reconciliation: RemoteMutationReconciliation) => void) | undefined;
   private readonly unsubscribeAcceptedQuery: () => void;
@@ -108,6 +116,7 @@ export class RemoteMutationController<TRow> {
     this.overlays = options.overlays;
     this.getActiveQuery = options.getActiveQuery;
     this.onChange = options.onChange;
+    this.authoritativeCellReader = options.readAuthoritativeCell;
     this.onAcknowledged = options.onAcknowledged;
     this.onReconciled = options.onReconciled;
     this.unsubscribeAcceptedQuery = this.queryController.subscribeAccepted((acceptance) => {
@@ -463,7 +472,7 @@ export class RemoteMutationController<TRow> {
         overlay: NonNullable<ReturnType<OptimisticOverlayStore["get"]>>;
         attempt: PreparedRemoteMutation;
         row: TRow;
-        authoritative: AuthoritativeMutationCell;
+        authoritative: RemoteAuthoritativeMutationCell;
       }> = [];
       let authoritativeForWholeBatch = true;
 
@@ -492,7 +501,7 @@ export class RemoteMutationController<TRow> {
         const comparison = this.source.compareRevisions(revision, overlay.baseRevision);
         const row = rowsById.get(overlay.rowId);
         const authoritative = row && comparison !== "older" && comparison !== "unknown"
-          ? this.readAuthoritativeCell(row, overlay.columnId)
+          ? this.readAuthoritativeCell(row, overlay.rowId, overlay.columnId)
           : null;
         if (!row || !authoritative) {
           authoritativeForWholeBatch = false;
@@ -559,12 +568,7 @@ export class RemoteMutationController<TRow> {
     for (const row of rows) {
       const rowId = this.source.getRowId(row);
       for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
-        let authoritativeValue: unknown;
-        try {
-          authoritativeValue = this.source.readCell?.(row, overlay.columnId).evaluatedValue;
-        } catch {
-          authoritativeValue = undefined;
-        }
+        const authoritativeValue = this.readAuthoritativeCell(row, rowId, overlay.columnId)?.evaluatedValue;
         if (!Object.is(authoritativeValue, overlay.cell.evaluatedValue)) {
           this.overlays.updateStatus(overlay.clientMutationId, "conflict");
           this.conflicts.set(overlay.clientMutationId, {
@@ -675,9 +679,16 @@ export class RemoteMutationController<TRow> {
     this.overlays.clear();
   }
 
-  private readAuthoritativeCell(row: TRow, columnId: string): AuthoritativeMutationCell | null {
-    if (!this.source.readCell) return null;
+  private readAuthoritativeCell(
+    row: TRow,
+    rowId: string,
+    columnId: string
+  ): RemoteAuthoritativeMutationCell | null {
     try {
+      if (this.authoritativeCellReader) {
+        return this.authoritativeCellReader(row, rowId, columnId);
+      }
+      if (!this.source.readCell) return null;
       const cell = this.source.readCell(row, columnId);
       return {
         storedValue: cell.storedValue,
@@ -797,7 +808,7 @@ export class RemoteMutationController<TRow> {
 
 function attemptMatchesAuthority(
   attempt: PreparedRemoteMutation,
-  authoritative: AuthoritativeMutationCell
+  authoritative: RemoteAuthoritativeMutationCell
 ): boolean {
   if (attempt.kind === "cell-metadata") {
     return JSON.stringify(authoritative.metadata) === JSON.stringify(attempt.metadata);

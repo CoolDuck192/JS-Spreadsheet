@@ -481,6 +481,50 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("reconciles an uncertain edit from accessor-backed query rows when readCell is absent", async () => {
+    let serverRow = { ...employees[0] };
+    let revision = "1";
+    const mutate = vi.fn(async () => {
+      serverRow = { ...serverRow, name: "Grace" };
+      revision = "2";
+      throw new Error("connection lost after mutation committed");
+    });
+    const source = createTestRemoteSource<Employee>({
+      capabilities: {
+        ...defaultRemoteCapabilities(),
+        pagination: false,
+        metadata: false,
+        formula: "none",
+        subscription: false,
+        undo: false
+      },
+      paginationMode: "none",
+      undoMode: "none",
+      readCell: undefined,
+      query: async () => unpaginatedResult(revision, [serverRow]),
+      mutate,
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "name", rawText: "Grace" }]
+    })).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(1));
+
+    await session.refresh();
+
+    expect(session.getSnapshot().pendingOperations).toEqual([]);
+    expect(session.getSnapshot().conflicts).toEqual([]);
+    expect(session.getSnapshot().getCell("employee-1", "name").storedValue).toBe("Grace");
+    expect(session.getDiagnostics()).toMatchObject({ pendingMutations: 0, journalEntries: 0 });
+
+    session.destroy();
+  });
+
   it("cancels a pending batch, retains tombstone reconciliation, and lets refresh win over a late acknowledgement", async () => {
     const acknowledgement = createDeferredMutation<Employee>();
     const refresh = createDeferredResult<QueryResult<Employee>>();

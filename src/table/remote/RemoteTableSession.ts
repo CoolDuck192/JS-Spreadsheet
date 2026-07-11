@@ -213,6 +213,21 @@ class RemoteTableSessionImpl<
         queryController: controller,
         overlays: this.overlays,
         getActiveQuery: () => this.lastQuery ?? queryFromState(this.state),
+        readAuthoritativeCell: (row, rowId, columnId) => {
+          const authoritative = this.readAuthoritativeCell(row, rowId, columnId);
+          if ("issue" in authoritative) return null;
+          return {
+            storedValue: authoritative.cell.storedValue,
+            evaluatedValue: authoritative.cell.evaluatedValue,
+            ...(authoritative.cell.formula === undefined
+              ? {}
+              : { formula: authoritative.cell.formula }),
+            metadata: authoritative.cell.metadata,
+            ...(authoritative.rowVersion === undefined
+              ? {}
+              : { rowVersion: authoritative.rowVersion })
+          };
+        },
         onChange: () => {
           if (this.destroyed || this.controller !== controller) return;
           this.localRevision += 1;
