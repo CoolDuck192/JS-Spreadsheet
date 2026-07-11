@@ -2,6 +2,7 @@ import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createFormulaEngine } from "../lib/formulaEngine";
+import { WORKBOOK_STORAGE_KEY } from "../lib/persistence";
 import { createBlankWorkbook, getCellContent, setCellContent } from "../lib/workbook";
 import type { WorkbookModel } from "../types";
 import type { WorkbookStorage } from "./Spreadsheet";
@@ -122,6 +123,38 @@ describe("useWorkbookSession", () => {
     await act(async () => Promise.resolve());
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("honors the default workbook after one empty browser-storage load", async () => {
+    window.localStorage.removeItem(WORKBOOK_STORAGE_KEY);
+    const getItem = vi.spyOn(Storage.prototype, "getItem");
+    const initial = withCell("default");
+    const { result, unmount } = renderHook(() => useWorkbookSession({ defaultWorkbook: initial }));
+
+    await act(async () => Promise.resolve());
+
+    expect(result.current.getSnapshot().workbook).toBe(initial);
+    expect(
+      getItem.mock.calls.filter(([key]) => key === WORKBOOK_STORAGE_KEY)
+    ).toHaveLength(1);
+
+    unmount();
+    await act(async () => Promise.resolve());
+    getItem.mockRestore();
+  });
+
+  it("creates a blank workbook when browser storage and the default are absent", async () => {
+    window.localStorage.removeItem(WORKBOOK_STORAGE_KEY);
+    const { result, unmount } = renderHook(() => useWorkbookSession());
+
+    await act(async () => Promise.resolve());
+
+    const workbook = result.current.getSnapshot().workbook;
+    expect(workbook.sheets).toHaveLength(1);
+    expect(workbook.sheets[0]?.cells).toEqual({});
+
+    unmount();
+    await act(async () => Promise.resolve());
   });
 
   it("discards stale async hydration after an uncontrolled edit", async () => {

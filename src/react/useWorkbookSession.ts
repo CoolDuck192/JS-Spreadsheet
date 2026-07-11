@@ -208,8 +208,10 @@ function createOwnedSessionState(
   if (defaultBrowserStorage) {
     try {
       const loaded = defaultBrowserStorage.load();
-      if (!isPromiseLike(loaded) && loaded) {
-        initialWorkbook = loaded;
+      if (!isPromiseLike(loaded)) {
+        if (loaded) {
+          initialWorkbook = loaded;
+        }
         prehydrated = true;
       }
     } catch (error) {
