@@ -3,7 +3,11 @@ import type { TableCapabilities } from "../core/capabilities";
 import type { QueryRequest, QueryResult } from "../core/query";
 import { createRemoteTableSource } from "./createRemoteTableSource";
 import { OptimisticOverlayStore } from "./OptimisticOverlayStore";
-import { RemoteMutationController, type PreparedRemoteMutation } from "./RemoteMutationController";
+import {
+  RemoteMutationController,
+  type PreparedRemoteMutation,
+  type RemoteAuthoritativeMutationCell
+} from "./RemoteMutationController";
 import { RemoteQueryController } from "./RemoteQueryController";
 import { createDeferred } from "./testUtils";
 import type { RemoteMutationResult } from "./types";
@@ -344,6 +348,131 @@ describe("RemoteMutationController", () => {
     });
   });
 
+  it("acknowledges structurally equal metadata when authority reorders object keys", async () => {
+    let queryResult = canonicalResult();
+    const onAcknowledged = vi.fn();
+    const attemptedMetadata = {
+      comment: "reviewed",
+      format: { bold: true, italic: false }
+    };
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost after commit"); },
+      undefined,
+      {
+        query: async () => queryResult,
+        onAcknowledged,
+        readAuthoritativeCell: () => ({
+          storedValue: 100,
+          evaluatedValue: 100,
+          metadata: {
+            format: { italic: false, bold: true },
+            comment: "reviewed"
+          },
+          rowVersion: "row-2"
+        })
+      }
+    );
+    const mutation: PreparedRemoteMutation = {
+      kind: "cell-metadata",
+      rowId: "1",
+      columnId: "salary",
+      metadata: attemptedMetadata,
+      optimisticCell: {
+        storedValue: 100,
+        evaluatedValue: 100,
+        displayValue: "100",
+        metadata: attemptedMetadata
+      }
+    };
+
+    await harness.controller.execute("operation-metadata-order", [mutation]);
+    queryResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 100, label: "server", rowVersion: "row-2" }
+    });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.controller.getConflicts()).toEqual([]);
+    expect(onAcknowledged).toHaveBeenCalledOnce();
+  });
+
+  it("acknowledges equivalent formulas after trimming and leading-equals normalization", async () => {
+    let queryResult = canonicalResult();
+    const onAcknowledged = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost after commit"); },
+      undefined,
+      {
+        query: async () => queryResult,
+        onAcknowledged,
+        readAuthoritativeCell: () => ({
+          storedValue: "SUM(A1:A2)",
+          evaluatedValue: 3,
+          formula: "  SUM(A1:A2)  ",
+          metadata: {}
+        })
+      }
+    );
+    const mutation: PreparedRemoteMutation = {
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "=SUM(A1:A2)",
+      parsedValue: "=SUM(A1:A2)",
+      formula: " =SUM(A1:A2) ",
+      optimisticCell: {
+        storedValue: "=SUM(A1:A2)",
+        evaluatedValue: 3,
+        displayValue: "3",
+        formula: "=SUM(A1:A2)",
+        metadata: {}
+      }
+    };
+
+    await harness.controller.execute("operation-formula-normalized", [mutation]);
+    queryResult = canonicalResult({ revision: "2" });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.controller.getConflicts()).toEqual([]);
+    expect(onAcknowledged).toHaveBeenCalledOnce();
+  });
+
+  it("does not acknowledge a plain-value attempt from an equal evaluated formula result", async () => {
+    let queryResult = canonicalResult();
+    const onReconciled = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost"); },
+      undefined,
+      {
+        query: async () => queryResult,
+        onReconciled,
+        readAuthoritativeCell: () => ({
+          storedValue: "=1+1",
+          evaluatedValue: 2,
+          formula: "=1+1",
+          metadata: {}
+        })
+      }
+    );
+
+    await harness.controller.execute("operation-plain-value", [valueMutation(2)]);
+    queryResult = canonicalResult({ revision: "2" });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.controller.getConflicts()).toEqual([expect.objectContaining({
+      operationId: "operation-plain-value",
+      attemptedValue: 2,
+      authoritativeValue: 2
+    })]);
+    expect(onReconciled).toHaveBeenCalledWith({
+      operationId: "operation-plain-value",
+      outcome: "conflict"
+    });
+  });
+
   it("never reveals an older uncertain overlay after a later same-cell commit", async () => {
     const onReconciled = vi.fn();
     const mutate = vi.fn()
@@ -505,6 +634,11 @@ async function createHarness(
       operationId: string;
       outcome: "conflict" | "superseded";
     }) => void;
+    readAuthoritativeCell?: (
+      row: Row,
+      rowId: string,
+      columnId: string
+    ) => RemoteAuthoritativeMutationCell | null;
   } = {}
 ) {
   const mutate = vi.fn(mutateImplementation);
@@ -531,6 +665,7 @@ async function createHarness(
     overlays,
     getActiveQuery: query,
     onChange: vi.fn(),
+    readAuthoritativeCell: options.readAuthoritativeCell,
     onAcknowledged: options.onAcknowledged,
     onReconciled: options.onReconciled,
     limits

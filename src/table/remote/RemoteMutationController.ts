@@ -873,13 +873,41 @@ function attemptMatchesAuthority(
   authoritative: RemoteAuthoritativeMutationCell
 ): boolean {
   if (attempt.kind === "cell-metadata") {
-    return JSON.stringify(authoritative.metadata) === JSON.stringify(attempt.metadata);
+    return structurallyEqual(authoritative.metadata, attempt.metadata);
   }
   if (attempt.formula !== undefined) {
-    return authoritative.formula === attempt.formula;
+    return authoritative.formula !== undefined
+      && normalizeFormula(authoritative.formula) === normalizeFormula(attempt.formula);
   }
+  if (authoritative.formula !== undefined) return false;
   return Object.is(authoritative.storedValue, attempt.parsedValue)
     || Object.is(authoritative.evaluatedValue, attempt.optimisticCell.evaluatedValue);
+}
+
+function normalizeFormula(formula: string): string {
+  const trimmed = formula.trim();
+  const expression = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  return `=${expression}`;
+}
+
+function structurallyEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((value, index) => structurallyEqual(value, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
+      && structurallyEqual(left[key], right[key]));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function validateResults<TRow>(
