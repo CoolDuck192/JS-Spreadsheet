@@ -162,12 +162,38 @@ describe("importWorkbookFromGoogleSheets", () => {
     expect(error.message).not.toContain("private-token");
     expect(error.message).not.toContain("private OAuth response body");
   });
+
+  it("remaps typed provider failures to a library-owned safe message", async () => {
+    getAccessToken.mockRejectedValueOnce(
+      new GoogleSheetsError(
+        "access_denied",
+        "Bearer private-token from https://private.example/response-body",
+        false
+      )
+    );
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, vi.fn() as unknown as typeof fetch)
+    );
+
+    expect(error).toMatchObject({ code: "access_denied", recoverable: false });
+    expect(error.message).toBe("Google Sheets access was denied. Sign in again or check the sheet sharing settings.");
+    expect(error.message).not.toMatch(/private-token|private\.example|response-body/i);
+  });
 });
 
 describe("toGoogleSheetsError", () => {
-  it("retains typed failures and sanitizes arbitrary failures", () => {
-    const typed = new GoogleSheetsError("popup_closed", "The sign-in window was closed.", true);
-    expect(toGoogleSheetsError(typed)).toBe(typed);
+  it("remaps typed and arbitrary failures to library-owned safe messages", () => {
+    const typed = new GoogleSheetsError(
+      "popup_closed",
+      "Bearer private-token from https://private.example/response-body",
+      false
+    );
+    const sanitizedTyped = toGoogleSheetsError(typed);
+    expect(sanitizedTyped).not.toBe(typed);
+    expect(sanitizedTyped).toMatchObject({ code: "popup_closed", recoverable: false });
+    expect(sanitizedTyped.message).toBe("Google sign-in was closed before access was granted.");
+    expect(sanitizedTyped.message).not.toMatch(/private-token|private\.example|response-body/i);
 
     const sanitized = toGoogleSheetsError(new Error("Bearer private-token: private response body"));
     expect(sanitized).toMatchObject({ code: "unknown", recoverable: true });

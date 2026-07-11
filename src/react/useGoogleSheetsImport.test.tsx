@@ -26,6 +26,7 @@ vi.mock("../lib/googleSheets", async () => {
 });
 
 const CLIENT_ID = "123-abc.apps.googleusercontent.com";
+const SECOND_CLIENT_ID = "456-def.apps.googleusercontent.com";
 const STORED_CLIENT_ID = "stored.apps.googleusercontent.com";
 const SHEET_ID = "12345678901234567890";
 
@@ -108,8 +109,27 @@ describe("useGoogleSheetsImport", () => {
     act(() => controller.result.current.setSheetDraft(SHEET_ID));
     act(() => controller.result.current.importSheet());
 
-    expect(googleMocks.importWorkbook).toHaveBeenCalledWith(SHEET_ID, direct);
+    expect(googleMocks.importWorkbook).toHaveBeenCalledWith(
+      SHEET_ID,
+      expect.objectContaining({ getAccessToken: expect.any(Function) })
+    );
+    expect(googleMocks.importWorkbook.mock.calls[0][1]).not.toBe(direct);
     await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
+  });
+
+  it("classifies a fresh raw-LAN instance as blocked built-in auth", async () => {
+    const controller = renderController({
+      origin: "http://192.168.6.232:4173"
+    });
+
+    act(() => controller.result.current.openDialog());
+
+    await waitFor(() => expect(controller.result.current.phase).toBe("blocked"));
+    expect(controller.result.current.clientIdSource).toBe("missing");
+    expect(controller.result.current.hostAuthentication).toBe(false);
+    expect(controller.result.current.clientIdEditable).toBe(false);
+    expect(controller.result.current.error).toMatchObject({ code: "incompatible_origin" });
+    expect(googleMocks.builtInFactory).not.toHaveBeenCalled();
   });
 
   it("prefers a managed ID over stored state and the nested factory over the deprecated one", async () => {
@@ -166,7 +186,28 @@ describe("useGoogleSheetsImport", () => {
     expect(googleMocks.builtInFactory).toHaveBeenCalledWith(CLIENT_ID);
     expect(hostProvider.prepare).toHaveBeenCalledTimes(1);
     expect(controller.result.current.originAssessment.status).toBe("blocked");
+    expect(controller.result.current.hostAuthentication).toBe(true);
   });
+
+  it.each(["nested", "deprecated"] as const)(
+    "lets a %s host factory bypass raw-LAN built-in blocking",
+    async (kind) => {
+      const hostProvider = provider();
+      const hostFactory = vi.fn(() => hostProvider);
+      const controller = renderController({
+        configuration: {
+          clientId: CLIENT_ID,
+          ...(kind === "nested" ? { tokenProviderFactory: hostFactory } : {})
+        },
+        deprecatedTokenProviderFactory: kind === "deprecated" ? hostFactory : undefined,
+        origin: "http://192.168.6.232:4173"
+      });
+
+      await openReady(controller);
+      expect(hostFactory).toHaveBeenCalledWith(CLIENT_ID);
+      expect(controller.result.current.hostAuthentication).toBe(true);
+    }
+  );
 
   it("reports load and save failures safely while continuing with session state", async () => {
     const sensitiveLoad = new Error("storage payload and token");
@@ -184,19 +225,20 @@ describe("useGoogleSheetsImport", () => {
 
     act(() => controller.result.current.openDialog());
     await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
-    expect(controller.result.current.error?.message).not.toMatch(/payload|token|secret|response/i);
+    expect(controller.result.current.warning?.message).not.toMatch(/payload|token|secret|response/i);
 
     act(() => controller.result.current.setClientIdDraft(CLIENT_ID));
     await act(async () => controller.result.current.saveClientId());
 
     await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
     expect(controller.result.current.clientIdSource).toBe("session");
-    expect(controller.result.current.error?.message).not.toMatch(/payload|token|secret|response/i);
+    expect(controller.result.current.warning?.message).not.toMatch(/payload|token|secret|response/i);
     expect(onError).toHaveBeenCalled();
   });
 
-  it("returns to setup and invalidates the provider cache when forgetting a stored ID", async () => {
-    const clear = vi.fn().mockRejectedValue(new Error("sensitive clear failure"));
+  it("retains the usable stored ID when clearing storage fails", async () => {
+    const pendingClear = deferred<void>();
+    const clear = vi.fn(() => pendingClear.promise);
     const clientIdStorage = storage({
       load: vi.fn().mockResolvedValue(STORED_CLIENT_ID),
       clear
@@ -209,12 +251,124 @@ describe("useGoogleSheetsImport", () => {
     await openReady(controller);
     expect(controller.result.current.clientIdSource).toBe("stored");
 
-    await act(async () => controller.result.current.forgetClientId());
+    let forgetting!: Promise<void>;
+    act(() => {
+      forgetting = controller.result.current.forgetClientId();
+    });
 
     expect(clear).toHaveBeenCalledTimes(1);
-    expect(controller.result.current.phase).toBe("setup");
-    expect(controller.result.current.clientIdSource).toBe("missing");
-    expect(controller.result.current.error?.message).not.toContain("sensitive clear failure");
+    expect(controller.result.current.storageBusy).toBe(true);
+    expect(controller.result.current.clientIdSource).toBe("stored");
+
+    await act(async () => {
+      pendingClear.reject(new Error("sensitive clear failure"));
+      await forgetting;
+    });
+
+    expect(controller.result.current.phase).toBe("ready");
+    expect(controller.result.current.clientIdSource).toBe("stored");
+    expect(controller.result.current.clientIdDraft).toBe(STORED_CLIENT_ID);
+    expect(controller.result.current.warning?.message).not.toContain("sensitive clear failure");
+  });
+
+  it("serializes save, forget, and newer save so the newest stored ID wins", async () => {
+    const firstSave = deferred<void>();
+    const pendingClear = deferred<void>();
+    const secondSave = deferred<void>();
+    const calls: string[] = [];
+    const clientIdStorage = storage({
+      save: vi.fn((clientId: string) => {
+        calls.push(`save:${clientId}`);
+        return clientId === CLIENT_ID ? firstSave.promise : secondSave.promise;
+      }),
+      clear: vi.fn(() => {
+        calls.push("clear");
+        return pendingClear.promise;
+      })
+    });
+    const controller = renderController({
+      configuration: { clientIdStorage, tokenProviderFactory: vi.fn(() => provider()) }
+    });
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+
+    act(() => controller.result.current.setClientIdDraft(CLIENT_ID));
+    let savingFirst!: Promise<void>;
+    act(() => {
+      savingFirst = controller.result.current.saveClientId();
+    });
+    let forgetting!: Promise<void>;
+    act(() => {
+      forgetting = controller.result.current.forgetClientId();
+    });
+    act(() => controller.result.current.setClientIdDraft(SECOND_CLIENT_ID));
+    let savingSecond!: Promise<void>;
+    act(() => {
+      savingSecond = controller.result.current.saveClientId();
+    });
+
+    expect(calls).toEqual([`save:${CLIENT_ID}`]);
+    expect(controller.result.current.storageBusy).toBe(true);
+    expect(controller.result.current.canImport).toBe(false);
+
+    await act(async () => firstSave.resolve(undefined));
+    await waitFor(() => expect(calls).toEqual([`save:${CLIENT_ID}`, "clear"]));
+    await act(async () => pendingClear.resolve(undefined));
+    await waitFor(() => expect(calls).toEqual([
+      `save:${CLIENT_ID}`,
+      "clear",
+      `save:${SECOND_CLIENT_ID}`
+    ]));
+    await act(async () => secondSave.resolve(undefined));
+    await act(async () => Promise.all([savingFirst, forgetting, savingSecond]));
+
+    expect(controller.result.current.storageBusy).toBe(false);
+    expect(controller.result.current.clientIdSource).toBe("stored");
+    expect(controller.result.current.clientIdDraft).toBe(SECOND_CLIENT_ID);
+    expect(controller.result.current.warning).toBeUndefined();
+  });
+
+  it("keeps a failed save usable and visible after import-generation changes", async () => {
+    const pendingSave = deferred<void>();
+    const clientIdStorage = storage({ save: vi.fn(() => pendingSave.promise) });
+    const hostProvider = provider();
+    const onError = vi.fn();
+    const controller = renderController({
+      configuration: {
+        clientIdStorage,
+        tokenProviderFactory: vi.fn(() => hostProvider)
+      },
+      onError
+    });
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    act(() => controller.result.current.setClientIdDraft(` ${CLIENT_ID} `));
+    let saving!: Promise<void>;
+    act(() => {
+      saving = controller.result.current.saveClientId();
+    });
+
+    expect(controller.result.current.storageBusy).toBe(true);
+    expect(controller.result.current.canImport).toBe(false);
+    act(() => {
+      controller.result.current.setSheetDraft(SHEET_ID);
+      controller.result.current.importSheet();
+      controller.result.current.closeDialog();
+    });
+    expect(googleMocks.importWorkbook).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingSave.reject(new Error("secret storage response body"));
+      await saving;
+    });
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+
+    expect(controller.result.current.clientIdSource).toBe("session");
+    expect(controller.result.current.clientIdDraft).toBe(CLIENT_ID);
+    expect(controller.result.current.warning?.message).toMatch(/could not be saved/i);
+    expect(controller.result.current.warning?.message).not.toMatch(/secret|response body/i);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "unknown" }));
   });
 
   it("caches and prepares a factory provider once per hook instance", async () => {
@@ -274,12 +428,97 @@ describe("useGoogleSheetsImport", () => {
     expect(controller.result.current.sheetDraft).toBe(SHEET_ID);
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "popup_closed" }));
 
-    act(() => controller.result.current.importSheet());
+    act(() => controller.result.current.retry());
     expect(googleMocks.importWorkbook).toHaveBeenCalledTimes(2);
     await act(async () => secondAttempt.resolve(result("Retried")));
     await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
     expect(controller.result.current.open).toBe(false);
     expect(controller.result.current.sheetDraft).toBe("");
+  });
+
+  it("reconstructs a provider when a factory throws and Retry is selected", async () => {
+    const prepared = provider();
+    const factory = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new GoogleSheetsError(
+          "gis_load_failed",
+          "Bearer private-token from https://private.example/response-body",
+          true
+        );
+      })
+      .mockReturnValueOnce(prepared);
+    const onError = vi.fn();
+    const controller = renderController({
+      configuration: { clientId: CLIENT_ID, tokenProviderFactory: factory },
+      onError
+    });
+
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("error"));
+    expect(controller.result.current.canRetry).toBe(true);
+    expect(controller.result.current.showSheetInput).toBe(false);
+    expect(controller.result.current.error?.message).not.toMatch(/private-token|private\.example|response-body/i);
+    expect(onError.mock.calls[0][0].message).not.toMatch(/private-token|private\.example|response-body/i);
+
+    act(() => controller.result.current.retry());
+
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(prepared.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps authorizing until token acquisition resolves, then reports importing", async () => {
+    const token = deferred<string>();
+    const response = deferred<void>();
+    const direct = provider({ getAccessToken: vi.fn(() => token.promise) });
+    googleMocks.importWorkbook.mockImplementation(async (_sheet: string, importProvider: TokenProvider) => {
+      await importProvider.getAccessToken([]);
+      await response.promise;
+      return result("Tracked phases");
+    });
+    const onImported = vi.fn();
+    const controller = renderController({
+      configuration: { tokenProvider: direct },
+      onImported
+    });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+
+    act(() => controller.result.current.importSheet());
+    expect(controller.result.current.phase).toBe("authorizing");
+    expect(direct.getAccessToken).toHaveBeenCalledTimes(1);
+
+    await act(async () => token.resolve("ephemeral-token"));
+    await waitFor(() => expect(controller.result.current.phase).toBe("importing"));
+    await act(async () => response.resolve(undefined));
+    await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
+  });
+
+  it("sanitizes typed provider errors before dialog and host output", async () => {
+    const direct = provider({
+      getAccessToken: vi.fn().mockRejectedValue(
+        new GoogleSheetsError(
+          "access_denied",
+          "Bearer private-token from https://private.example/response-body",
+          false
+        )
+      )
+    });
+    googleMocks.importWorkbook.mockImplementation(async (_sheet: string, importProvider: TokenProvider) => {
+      await importProvider.getAccessToken([]);
+      return result();
+    });
+    const onError = vi.fn();
+    const controller = renderController({ configuration: { tokenProvider: direct }, onError });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+
+    act(() => controller.result.current.importSheet());
+    await waitFor(() => expect(controller.result.current.phase).toBe("error"));
+
+    expect(controller.result.current.error).toMatchObject({ code: "access_denied", recoverable: false });
+    expect(controller.result.current.error?.message).not.toMatch(/private-token|private\.example|response-body/i);
+    expect(onError.mock.calls[0][0].message).not.toMatch(/private-token|private\.example|response-body/i);
   });
 
   it("invalidates a closed attempt and suppresses its late result", async () => {

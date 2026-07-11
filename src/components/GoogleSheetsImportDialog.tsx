@@ -21,6 +21,7 @@ export function GoogleSheetsImportDialog({
   opener
 }: GoogleSheetsImportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const originRef = useRef<HTMLInputElement>(null);
   const clientIdRef = useRef<HTMLInputElement>(null);
   const sheetRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -29,11 +30,9 @@ export function GoogleSheetsImportDialog({
   const clientErrorId = useId();
   const [clientFieldError, setClientFieldError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
-  const busy = PENDING_PHASES.has(controller.phase);
-  const setupVisible =
-    controller.phase === "setup" &&
-    (controller.clientIdSource === "missing" || controller.clientIdSource === "session");
-  const sheetVisible = showsSheetInput(controller);
+  const busy = PENDING_PHASES.has(controller.phase) || controller.storageBusy;
+  const setupVisible = controller.clientIdEditable;
+  const sheetVisible = controller.showSheetInput;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -60,11 +59,7 @@ export function GoogleSheetsImportDialog({
         clientIdRef.current?.focus();
         return;
       }
-      if (
-        sheetVisible &&
-        (controller.phase === "ready" ||
-          controller.error?.code === "invalid_sheet_url")
-      ) {
+      if (sheetVisible && ["ready", "error"].includes(controller.phase)) {
         sheetRef.current?.focus();
       }
     });
@@ -90,10 +85,11 @@ export function GoogleSheetsImportDialog({
         return;
       }
       setClientFieldError(null);
-      controller.setClientIdDraft(validation.value);
-      void (controller.saveClientId as (clientId?: string) => Promise<void>)(
-        validation.value
-      );
+      void controller.saveClientId();
+      return;
+    }
+    if (controller.phase === "error") {
+      controller.retry();
       return;
     }
     controller.importSheet();
@@ -105,9 +101,26 @@ export function GoogleSheetsImportDialog({
 
   function copyOrigin() {
     setCopyStatus(null);
-    void navigator.clipboard?.writeText(controller.origin).then(
-      () => setCopyStatus("Origin copied."),
-      () => setCopyStatus("Origin could not be copied. Select and copy it manually.")
+    try {
+      const clipboard = navigator.clipboard;
+      if (!clipboard?.writeText) {
+        selectOriginForManualCopy();
+        return;
+      }
+      void Promise.resolve(clipboard.writeText(controller.origin)).then(
+        () => setCopyStatus("Origin copied."),
+        selectOriginForManualCopy
+      );
+    } catch {
+      selectOriginForManualCopy();
+    }
+  }
+
+  function selectOriginForManualCopy() {
+    originRef.current?.focus();
+    originRef.current?.select();
+    setCopyStatus(
+      "Copy is unavailable. The origin is selected; press Ctrl+C or Command+C."
     );
   }
 
@@ -137,14 +150,24 @@ export function GoogleSheetsImportDialog({
         </header>
 
         <div className="google-sheets-import-body">
-          <section className="google-sheets-import-section" aria-labelledby={`${titleId}-origin`}>
+          <section className="google-sheets-import-section">
             <div className="google-sheets-import-section-heading">
               <h3 id={`${titleId}-origin`}>OAuth origin</h3>
               <button className="google-sheets-import-button secondary" type="button" onClick={copyOrigin}>
                 Copy
               </button>
             </div>
-            <code className="google-sheets-import-origin">{controller.origin}</code>
+            <input
+              ref={originRef}
+              className="google-sheets-import-origin"
+              aria-label="OAuth origin"
+              value={controller.origin}
+              readOnly
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <span className="visually-hidden" aria-hidden="true">
+              {controller.origin}
+            </span>
             <OriginStatus controller={controller} />
             {copyStatus ? <p className="google-sheets-import-copy-status" role="status">{copyStatus}</p> : null}
           </section>
@@ -219,29 +242,49 @@ export function GoogleSheetsImportDialog({
             </p>
           ) : null}
 
-          {busy ? <ImportProgress phase={controller.phase} /> : null}
+          {controller.warning ? (
+            <p className="google-sheets-import-alert" role="alert">
+              {controller.warning.message}
+            </p>
+          ) : null}
+
+          {busy ? (
+            <ImportProgress
+              phase={controller.phase}
+              storageAction={controller.storageAction}
+            />
+          ) : null}
         </div>
 
         <footer className="google-sheets-import-actions">
-          {controller.phase === "blocked" ? (
+          {controller.phase === "blocked" ||
+          (controller.phase === "error" && !controller.canRetry) ? (
             <button ref={closeRef} className="google-sheets-import-button primary" type="button" onClick={close}>
               Close
             </button>
           ) : (
             <>
               {setupVisible ? (
-                <button className="google-sheets-import-button primary" type="submit" disabled={busy}>
+                <button
+                  className="google-sheets-import-button primary"
+                  type="submit"
+                  disabled={!controller.canSaveClientId}
+                >
                   Save and continue
                 </button>
-              ) : controller.phase === "error" ? (
-                <button className="google-sheets-import-button primary" type="submit">
+              ) : controller.phase === "error" && controller.canRetry ? (
+                <button
+                  className="google-sheets-import-button primary"
+                  type="submit"
+                  disabled={!controller.canRetry}
+                >
                   Retry
                 </button>
               ) : (
                 <button
                   className="google-sheets-import-button primary"
                   type="submit"
-                  disabled={controller.phase !== "ready"}
+                  disabled={!controller.canImport}
                 >
                   Import and replace workbook
                 </button>
@@ -272,7 +315,7 @@ function OriginStatus({ controller }: { controller: GoogleSheetsImportController
       </p>
     );
   }
-  if (controller.phase !== "blocked") {
+  if (controller.hostAuthentication) {
     return (
       <p className="google-sheets-import-origin-status eligible">
         Authentication is provided by this app&apos;s host, so the built-in browser OAuth origin restriction
@@ -285,7 +328,8 @@ function OriginStatus({ controller }: { controller: GoogleSheetsImportController
       <p className="google-sheets-import-origin-status blocked">
         Google browser OAuth cannot use a raw LAN IP origin. Keep the app available at its current
         address, expose it through an HTTPS DNS name, and add that exact HTTPS DNS origin to
-        Authorized JavaScript origins.
+        Authorized JavaScript origins. Alternatively, ask the app host to provide a Google
+        token provider.
       </p>
     );
   }
@@ -325,13 +369,19 @@ function ConfigurationSummary({ controller }: { controller: GoogleSheetsImportCo
       </p>
       {controller.clientIdSource === "stored" ? (
         <div className="google-sheets-import-inline-actions">
-          <button className="google-sheets-import-button secondary" type="button" onClick={controller.changeClientId}>
+          <button
+            className="google-sheets-import-button secondary"
+            type="button"
+            onClick={controller.changeClientId}
+            disabled={!controller.canChangeClientId}
+          >
             Change client ID
           </button>
           <button
             className="google-sheets-import-button secondary danger"
             type="button"
             onClick={() => void controller.forgetClientId()}
+            disabled={!controller.canForgetClientId}
           >
             Forget client ID
           </button>
@@ -341,26 +391,21 @@ function ConfigurationSummary({ controller }: { controller: GoogleSheetsImportCo
   );
 }
 
-function ImportProgress({ phase }: { phase: GoogleSheetsImportController["phase"] }) {
-  const message = phase === "preparing"
-    ? "Preparing Google sign-in…"
-    : phase === "authorizing"
-      ? "Waiting for Google sign-in…"
-      : "Importing Google Sheet…";
+function ImportProgress({
+  phase,
+  storageAction
+}: {
+  phase: GoogleSheetsImportController["phase"];
+  storageAction?: GoogleSheetsImportController["storageAction"];
+}) {
+  const message = storageAction === "save"
+    ? "Saving Google OAuth client ID…"
+    : storageAction === "forget"
+      ? "Forgetting saved Google OAuth client ID…"
+      : phase === "preparing"
+        ? "Preparing Google sign-in…"
+        : phase === "authorizing"
+          ? "Waiting for Google sign-in…"
+          : "Importing Google Sheet…";
   return <p className="google-sheets-import-progress" role="status" aria-live="polite">{message}</p>;
-}
-
-function showsSheetInput(controller: GoogleSheetsImportController): boolean {
-  if (["ready", "authorizing", "importing"].includes(controller.phase)) {
-    return true;
-  }
-  if (controller.phase !== "error") {
-    return false;
-  }
-  return ![
-    "configuration_missing",
-    "incompatible_origin",
-    "invalid_client",
-    "gis_load_failed"
-  ].includes(controller.error?.code ?? "unknown");
 }

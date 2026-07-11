@@ -11,18 +11,32 @@ const CLIENT_ID = "123-abc.apps.googleusercontent.com";
 function setupController(
   overrides: Partial<GoogleSheetsImportController> = {}
 ): GoogleSheetsImportController {
+  const phase = overrides.phase ?? "setup";
+  const clientIdSource = overrides.clientIdSource ?? "missing";
+  const storageBusy = overrides.storageBusy ?? false;
+  const clientIdEditable = phase === "setup" && ["missing", "session"].includes(clientIdSource);
+  const showSheetInput = ["ready", "authorizing", "importing"].includes(phase) || phase === "error";
   return {
     open: true,
-    phase: "setup",
+    phase,
     origin: "https://sheets.example.com",
     originAssessment: {
       status: "eligible",
       origin: "https://sheets.example.com",
       registration: "unverified"
     },
-    clientIdSource: "missing",
+    clientIdSource,
     clientIdDraft: "",
     sheetDraft: "",
+    hostAuthentication: phase !== "blocked" && clientIdSource === "missing",
+    clientIdEditable,
+    showSheetInput,
+    storageBusy,
+    canSaveClientId: clientIdEditable && !storageBusy,
+    canChangeClientId: clientIdSource === "stored" && !storageBusy,
+    canForgetClientId: clientIdSource === "stored" && !storageBusy,
+    canImport: phase === "ready" && !storageBusy,
+    canRetry: phase === "error" && !storageBusy,
     setClientIdDraft: vi.fn(),
     setSheetDraft: vi.fn(),
     openDialog: vi.fn(),
@@ -31,6 +45,7 @@ function setupController(
     forgetClientId: vi.fn().mockResolvedValue(undefined),
     changeClientId: vi.fn(),
     importSheet: vi.fn(),
+    retry: vi.fn(),
     ...overrides
   };
 }
@@ -53,7 +68,7 @@ describe("GoogleSheetsImportDialog", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens as a labelled modal, focuses setup, and saves the normalized public ID", async () => {
+  it("opens as a labelled modal, focuses setup, and uses the typed no-arg save action", async () => {
     const user = userEvent.setup();
     const saveClientId = vi.fn().mockResolvedValue(undefined);
     const setClientIdDraft = vi.fn();
@@ -74,8 +89,7 @@ describe("GoogleSheetsImportDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Save and continue" }));
 
-    expect(setClientIdDraft).toHaveBeenCalledWith(CLIENT_ID);
-    expect(saveClientId).toHaveBeenCalledWith(CLIENT_ID);
+    expect(saveClientId).toHaveBeenCalledWith();
   });
 
   it("shows and copies the exact eligible-but-unverified origin", async () => {
@@ -92,7 +106,7 @@ describe("GoogleSheetsImportDialog", () => {
       />
     );
 
-    expect(screen.getByText("https://sheets.example.com", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByLabelText("OAuth origin")).toHaveValue("https://sheets.example.com");
     expect(screen.getByText(/registration cannot be verified until Google sign-in/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Copy" }));
@@ -126,6 +140,8 @@ describe("GoogleSheetsImportDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Import Google Sheet" });
     expect(dialog).toHaveTextContent("http://192.168.6.232:4173");
     expect(dialog).toHaveTextContent(/HTTPS DNS (name|origin)/i);
+    expect(dialog).toHaveTextContent(/host.*token provider/i);
+    expect(dialog).not.toHaveTextContent(/authentication is provided by this app's host/i);
     expect(dialog).not.toHaveTextContent(/localhost/i);
     await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
   });
@@ -199,6 +215,8 @@ describe("GoogleSheetsImportDialog", () => {
   });
 
   it("focuses an invalid sheet field and keeps the typed error inline", async () => {
+    const retry = vi.fn();
+    const importSheet = vi.fn();
     render(
       <GoogleSheetsImportDialog
         controller={setupController({
@@ -210,7 +228,9 @@ describe("GoogleSheetsImportDialog", () => {
             "invalid_sheet_url",
             "Enter a valid Google Sheets URL or spreadsheet ID.",
             true
-          )
+          ),
+          retry,
+          importSheet
         })}
         opener={dialogOpener()}
       />
@@ -218,8 +238,98 @@ describe("GoogleSheetsImportDialog", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(/valid Google Sheets URL/i);
     await waitFor(() => expect(screen.getByLabelText("Google Sheet URL or spreadsheet ID")).toHaveFocus());
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(importSheet).not.toHaveBeenCalled();
   });
+
+  it("disables conflicting configuration actions while storage is busy", () => {
+    render(
+      <GoogleSheetsImportDialog
+        controller={setupController({
+          phase: "loading",
+          clientIdSource: "stored",
+          clientIdDraft: CLIENT_ID,
+          storageBusy: true,
+          storageAction: "forget",
+          showSheetInput: true,
+          canChangeClientId: false,
+          canForgetClientId: false,
+          canImport: false
+        })}
+        opener={dialogOpener()}
+      />
+    );
+
+    expect(screen.getByRole("dialog", { name: "Import Google Sheet" })).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("button", { name: "Change client ID" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Forget client ID" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Import and replace workbook" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(/forgetting saved Google OAuth client ID/i);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+
+  it("shows a nonfatal storage warning without disabling a ready import", () => {
+    render(
+      <GoogleSheetsImportDialog
+        controller={setupController({
+          phase: "ready",
+          clientIdSource: "session",
+          clientIdDraft: CLIENT_ID,
+          warning: new GoogleSheetsError(
+            "unknown",
+            "The Google OAuth client ID could not be saved. You can continue for this session.",
+            true
+          ),
+          showSheetInput: true,
+          canImport: true
+        })}
+        opener={dialogOpener()}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be saved/i);
+    expect(screen.getByRole("button", { name: "Import and replace workbook" })).toBeEnabled();
+  });
+
+  it.each(["missing", "rejected"] as const)(
+    "selects the exact origin for manual copy when clipboard is %s",
+    async (clipboardState) => {
+      const user = userEvent.setup();
+      const writeText = clipboardState === "rejected"
+        ? vi.fn().mockRejectedValue(new Error("private clipboard detail"))
+        : undefined;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: writeText ? { writeText } : undefined
+      });
+      const origin = "http://192.168.6.232:4173";
+      render(
+        <GoogleSheetsImportDialog
+          controller={setupController({
+            phase: "blocked",
+            origin,
+            originAssessment: { status: "blocked", origin, reason: "ip_literal" },
+            hostAuthentication: false,
+            clientIdEditable: false,
+            showSheetInput: false,
+            canRetry: false,
+            error: new GoogleSheetsError("incompatible_origin", "Safe origin guidance.", true)
+          })}
+          opener={dialogOpener()}
+        />
+      );
+
+      await user.click(screen.getByRole("button", { name: "Copy" }));
+
+      const originField = screen.getByLabelText("OAuth origin") as HTMLInputElement;
+      expect(originField).toHaveFocus();
+      expect(originField.selectionStart).toBe(0);
+      expect(originField.selectionEnd).toBe(origin.length);
+      expect(screen.getByRole("status")).toHaveTextContent(/selected.*(Ctrl\+C|Command\+C)/i);
+      expect(document.body).not.toHaveTextContent(/localhost|private clipboard detail/i);
+    }
+  );
 
   it.each([
     ["preparing", "Preparing Google sign-in"],

@@ -18,6 +18,7 @@ import {
   parseSpreadsheetId,
   type GoogleSheetsImportResult
 } from "../lib/googleSheets";
+import { createSerialOperationQueue } from "./serialOperationQueue";
 
 export type GoogleSheetsImportPhase =
   | "closed"
@@ -38,7 +39,18 @@ export type GoogleSheetsImportController = Readonly<{
   clientIdSource: "managed" | "stored" | "session" | "missing";
   clientIdDraft: string;
   sheetDraft: string;
+  hostAuthentication: boolean;
+  clientIdEditable: boolean;
+  showSheetInput: boolean;
+  storageBusy: boolean;
+  storageAction?: "save" | "forget";
+  canSaveClientId: boolean;
+  canChangeClientId: boolean;
+  canForgetClientId: boolean;
+  canImport: boolean;
+  canRetry: boolean;
   error?: GoogleSheetsError;
+  warning?: GoogleSheetsError;
   setClientIdDraft(value: string): void;
   setSheetDraft(value: string): void;
   openDialog(): void;
@@ -47,6 +59,7 @@ export type GoogleSheetsImportController = Readonly<{
   forgetClientId(): Promise<void>;
   changeClientId(): void;
   importSheet(): void;
+  retry(): void;
 }>;
 
 type ReadinessPhase = "loading" | "setup" | "blocked" | "preparing" | "ready" | "error";
@@ -74,7 +87,7 @@ const STORAGE_LOAD_ERROR_MESSAGE =
 const STORAGE_SAVE_ERROR_MESSAGE =
   "The Google OAuth client ID could not be saved. You can continue for this session.";
 const STORAGE_CLEAR_ERROR_MESSAGE =
-  "The saved Google OAuth client ID could not be cleared. It is forgotten for this session.";
+  "The saved Google OAuth client ID could not be cleared. The existing ID remains available.";
 
 export function useGoogleSheetsImport(options: Readonly<{
   configuration?: GoogleSheetsServiceConfiguration;
@@ -88,20 +101,28 @@ export function useGoogleSheetsImport(options: Readonly<{
   const [storageStatus, setStorageStatus] = useState<"loading" | "loaded">(
     isClientIdStorage(configuration?.clientIdStorage) ? "loading" : "loaded"
   );
-  const [editableClientId, setEditableClientId] = useState<EditableGoogleClientId | null>(null);
+  const [editableClientId, setEditableClientIdState] = useState<EditableGoogleClientId | null>(null);
   const [clientIdDraft, setClientIdDraftState] = useState("");
   const [sheetDraft, setSheetDraftState] = useState("");
   const [editingClientId, setEditingClientId] = useState(false);
   const [readiness, setReadinessState] = useState<ReadinessPhase>("loading");
   const [readinessError, setReadinessError] = useState<GoogleSheetsError | undefined>();
-  const [noticeError, setNoticeError] = useState<GoogleSheetsError | undefined>();
+  const [readinessRetryable, setReadinessRetryableState] = useState(false);
+  const [warning, setWarning] = useState<GoogleSheetsError | undefined>();
   const [operation, setOperation] = useState<ImportOperation | null>(null);
   const [preparationAttempt, setPreparationAttempt] = useState(0);
+  const [storagePendingCount, setStoragePendingCount] = useState(0);
+  const [storageAction, setStorageAction] = useState<"save" | "forget" | undefined>();
 
   const readinessRef = useRef<ReadinessPhase>("loading");
+  const readinessRetryableRef = useRef(false);
+  const editableClientIdRef = useRef<EditableGoogleClientId | null>(null);
   const providerRef = useRef<TokenProvider | null>(null);
   const providerRecordsRef = useRef<ProviderRecord[]>([]);
   const storageLoadRef = useRef<StorageLoad | null>(null);
+  const storageQueueRef = useRef(createSerialOperationQueue());
+  const storageVersionRef = useRef(0);
+  const storagePendingRef = useRef(0);
   const clientIdTouchedRef = useRef(false);
   const attemptGenerationRef = useRef(0);
   const importPendingRef = useRef(false);
@@ -118,10 +139,12 @@ export function useGoogleSheetsImport(options: Readonly<{
     deprecatedTokenProviderFactory,
     createBrowserTokenProvider
   );
-  const usesBuiltInGoogleAuth =
-    authSource.kind === "client" &&
-    !configuration?.tokenProviderFactory &&
-    !deprecatedTokenProviderFactory;
+  const hostAuthentication = Boolean(
+    configuration?.tokenProvider ||
+    configuration?.tokenProviderFactory ||
+    deprecatedTokenProviderFactory
+  );
+  const usesBuiltInGoogleAuth = !hostAuthentication;
   const clientIdSource = authSource.kind === "client" ? authSource.source : "missing";
   const displayedClientId = clientIdSource === "managed" ? managedClientId : clientIdDraft;
 
@@ -130,11 +153,35 @@ export function useGoogleSheetsImport(options: Readonly<{
     setReadinessState(next);
   }, []);
 
+  const updateReadinessRetryable = useCallback((next: boolean) => {
+    readinessRetryableRef.current = next;
+    setReadinessRetryableState(next);
+  }, []);
+
+  const updateEditableClientId = useCallback((next: EditableGoogleClientId | null) => {
+    editableClientIdRef.current = next;
+    setEditableClientIdState(next);
+  }, []);
+
   const notifyError = useCallback((error: GoogleSheetsError) => {
     try {
       onErrorRef.current?.(error);
     } catch {
       // Host observability must never replace the dialog's safe inline error.
+    }
+  }, []);
+
+  const beginStorageOperation = useCallback((action: "save" | "forget") => {
+    storagePendingRef.current += 1;
+    setStoragePendingCount(storagePendingRef.current);
+    setStorageAction(action);
+  }, []);
+
+  const finishStorageOperation = useCallback(() => {
+    storagePendingRef.current = Math.max(0, storagePendingRef.current - 1);
+    setStoragePendingCount(storagePendingRef.current);
+    if (storagePendingRef.current === 0) {
+      setStorageAction(undefined);
     }
   }, []);
 
@@ -162,13 +209,13 @@ export function useGoogleSheetsImport(options: Readonly<{
       const validation = validateGoogleClientId(storedValue);
       if (!validation.valid) {
         if (!configuration?.tokenProvider && !managedClientId) {
-          const error = new GoogleSheetsError("invalid_client", validation.message, true);
-          setReadinessError(error);
-          updateReadiness("setup");
+          setReadinessError(
+            new GoogleSheetsError("invalid_client", validation.message, true)
+          );
         }
         return;
       }
-      setEditableClientId({ value: validation.value, source: "stored" });
+      updateEditableClientId({ value: validation.value, source: "stored" });
       setClientIdDraftState(validation.value);
     };
     const applyStorageFailure = () => {
@@ -177,7 +224,7 @@ export function useGoogleSheetsImport(options: Readonly<{
         return;
       }
       const error = storageError(STORAGE_LOAD_ERROR_MESSAGE);
-      setNoticeError(error);
+      setWarning(error);
       updateReadiness("setup");
       notifyError(error);
     };
@@ -190,30 +237,47 @@ export function useGoogleSheetsImport(options: Readonly<{
     let active = true;
     loadResult.then(
       (storedValue) => {
-        if (!active) {
-          return;
+        if (active) {
+          applyStoredValue(storedValue);
         }
-        applyStoredValue(storedValue);
       },
       () => {
-        if (!active) {
-          return;
+        if (active) {
+          applyStorageFailure();
         }
-        applyStorageFailure();
       }
     );
 
     return () => {
       active = false;
     };
-  }, [configuration?.clientIdStorage, configuration?.tokenProvider, managedClientId, notifyError, updateReadiness]);
+  }, [
+    configuration?.clientIdStorage,
+    configuration?.tokenProvider,
+    managedClientId,
+    notifyError,
+    updateEditableClientId,
+    updateReadiness
+  ]);
 
   useEffect(() => {
     let active = true;
 
+    if (usesBuiltInGoogleAuth && originAssessment.status === "blocked") {
+      providerRef.current = null;
+      const error = incompatibleOriginError(originAssessment);
+      setReadinessError(error);
+      updateReadinessRetryable(false);
+      updateReadiness("blocked");
+      return () => {
+        active = false;
+      };
+    }
+
     if (authSource.kind === "missing") {
       providerRef.current = null;
       setReadinessError(undefined);
+      updateReadinessRetryable(false);
       updateReadiness(storageStatus === "loading" ? "loading" : "setup");
       return () => {
         active = false;
@@ -223,6 +287,7 @@ export function useGoogleSheetsImport(options: Readonly<{
     if (authSource.kind === "client" && editingClientId && authSource.source !== "managed") {
       providerRef.current = null;
       setReadinessError(undefined);
+      updateReadinessRetryable(false);
       updateReadiness("setup");
       return () => {
         active = false;
@@ -235,19 +300,8 @@ export function useGoogleSheetsImport(options: Readonly<{
         providerRef.current = null;
         const error = new GoogleSheetsError("invalid_client", validation.message, true);
         setReadinessError(error);
+        updateReadinessRetryable(false);
         updateReadiness(authSource.source === "managed" ? "error" : "setup");
-        return () => {
-          active = false;
-        };
-      }
-      if (
-        usesBuiltInGoogleAuth &&
-        originAssessment.status === "blocked"
-      ) {
-        providerRef.current = null;
-        const error = incompatibleOriginError(originAssessment);
-        setReadinessError(error);
-        updateReadiness("blocked");
         return () => {
           active = false;
         };
@@ -261,6 +315,7 @@ export function useGoogleSheetsImport(options: Readonly<{
       const error = toGoogleSheetsError(caught);
       providerRef.current = null;
       setReadinessError(error);
+      updateReadinessRetryable(true);
       updateReadiness("error");
       notifyError(error);
       return () => {
@@ -270,6 +325,7 @@ export function useGoogleSheetsImport(options: Readonly<{
 
     providerRef.current = record.provider;
     setReadinessError(undefined);
+    updateReadinessRetryable(false);
     updateReadiness("preparing");
     prepareProvider(record).then(
       () => {
@@ -277,6 +333,7 @@ export function useGoogleSheetsImport(options: Readonly<{
           return;
         }
         setReadinessError(undefined);
+        updateReadinessRetryable(false);
         updateReadiness("ready");
       },
       (caught) => {
@@ -285,6 +342,7 @@ export function useGoogleSheetsImport(options: Readonly<{
         }
         const error = toGoogleSheetsError(caught);
         setReadinessError(error);
+        updateReadinessRetryable(true);
         updateReadiness("error");
         notifyError(error);
       }
@@ -305,6 +363,7 @@ export function useGoogleSheetsImport(options: Readonly<{
     preparationAttempt,
     storageStatus,
     updateReadiness,
+    updateReadinessRetryable,
     usesBuiltInGoogleAuth
   ]);
 
@@ -330,25 +389,24 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOpen(false);
   }, []);
 
-  const saveClientId = useCallback(async (candidate?: string) => {
-    const validation = validateGoogleClientId(candidate ?? clientIdDraft);
+  const saveClientId = useCallback(async () => {
+    const validation = validateGoogleClientId(clientIdDraft);
     if (!validation.valid) {
       const error = new GoogleSheetsError("invalid_client", validation.message, true);
       setReadinessError(error);
+      updateReadinessRetryable(false);
       setOperation(null);
       setEditingClientId(true);
       updateReadiness("setup");
       return;
     }
 
-    const generation = ++attemptGenerationRef.current;
-    importPendingRef.current = false;
     clientIdTouchedRef.current = true;
     setClientIdDraftState(validation.value);
-    setEditableClientId({ value: validation.value, source: "session" });
+    updateEditableClientId({ value: validation.value, source: "session" });
     setEditingClientId(false);
     setReadinessError(undefined);
-    setNoticeError(undefined);
+    updateReadinessRetryable(false);
     setOperation(null);
 
     const storage = configuration?.clientIdStorage;
@@ -356,79 +414,104 @@ export function useGoogleSheetsImport(options: Readonly<{
       return;
     }
 
+    const version = ++storageVersionRef.current;
+    beginStorageOperation("save");
     try {
-      await storage.save(validation.value);
-      if (generation !== attemptGenerationRef.current) {
-        return;
+      await storageQueueRef.current.enqueue(() => storage.save(validation.value));
+      if (version === storageVersionRef.current) {
+        updateEditableClientId({ value: validation.value, source: "stored" });
+        setWarning(undefined);
       }
-      setEditableClientId({ value: validation.value, source: "stored" });
     } catch {
-      if (generation !== attemptGenerationRef.current) {
-        return;
+      if (version === storageVersionRef.current) {
+        updateEditableClientId({ value: validation.value, source: "session" });
+        const error = storageError(STORAGE_SAVE_ERROR_MESSAGE);
+        setWarning(error);
+        notifyError(error);
       }
-      const error = storageError(STORAGE_SAVE_ERROR_MESSAGE);
-      setNoticeError(error);
-      notifyError(error);
+    } finally {
+      finishStorageOperation();
     }
-  }, [clientIdDraft, configuration?.clientIdStorage, notifyError, updateReadiness]);
+  }, [
+    beginStorageOperation,
+    clientIdDraft,
+    configuration?.clientIdStorage,
+    finishStorageOperation,
+    notifyError,
+    updateEditableClientId,
+    updateReadiness,
+    updateReadinessRetryable
+  ]);
 
   const forgetClientId = useCallback(async () => {
-    const generation = ++attemptGenerationRef.current;
-    importPendingRef.current = false;
     clientIdTouchedRef.current = true;
-    providerRecordsRef.current = [];
-    providerRef.current = null;
-    setEditableClientId(null);
-    setClientIdDraftState("");
-    setEditingClientId(true);
-    setReadinessError(undefined);
-    setNoticeError(undefined);
-    setOperation(null);
-    updateReadiness("setup");
-
     const storage = configuration?.clientIdStorage;
     if (!isClientIdStorage(storage)) {
+      clearEditableClientId();
       return;
     }
+
+    const version = ++storageVersionRef.current;
+    beginStorageOperation("forget");
     try {
-      await storage.clear();
-    } catch {
-      if (generation !== attemptGenerationRef.current) {
-        return;
+      await storageQueueRef.current.enqueue(() => storage.clear());
+      if (version === storageVersionRef.current) {
+        clearEditableClientId();
+        setWarning(undefined);
       }
-      const error = storageError(STORAGE_CLEAR_ERROR_MESSAGE);
-      setNoticeError(error);
-      notifyError(error);
+    } catch {
+      if (version === storageVersionRef.current) {
+        const error = storageError(STORAGE_CLEAR_ERROR_MESSAGE);
+        setWarning(error);
+        notifyError(error);
+      }
+    } finally {
+      finishStorageOperation();
     }
-  }, [configuration?.clientIdStorage, notifyError, updateReadiness]);
+
+    function clearEditableClientId() {
+      providerRecordsRef.current = [];
+      providerRef.current = null;
+      updateEditableClientId(null);
+      setClientIdDraftState("");
+      setEditingClientId(true);
+      setReadinessError(undefined);
+      updateReadinessRetryable(false);
+      setOperation(null);
+      updateReadiness("setup");
+    }
+  }, [
+    beginStorageOperation,
+    configuration?.clientIdStorage,
+    finishStorageOperation,
+    notifyError,
+    updateEditableClientId,
+    updateReadiness,
+    updateReadinessRetryable
+  ]);
 
   const changeClientId = useCallback(() => {
+    if (storagePendingRef.current > 0) {
+      return;
+    }
     attemptGenerationRef.current += 1;
     importPendingRef.current = false;
     clientIdTouchedRef.current = true;
     providerRecordsRef.current = [];
     providerRef.current = null;
-    setEditableClientId((current) => current
-      ? { value: current.value, source: "session" }
+    updateEditableClientId(editableClientIdRef.current
+      ? { value: editableClientIdRef.current.value, source: "session" }
       : null);
     setEditingClientId(true);
     setReadinessError(undefined);
-    setNoticeError(undefined);
+    updateReadinessRetryable(false);
+    setWarning(undefined);
     setOperation(null);
     updateReadiness("setup");
-  }, [updateReadiness]);
+  }, [updateEditableClientId, updateReadiness, updateReadinessRetryable]);
 
   const importSheet = useCallback(() => {
-    if (importPendingRef.current) {
-      return;
-    }
-
-    if (readinessRef.current === "error" && providerRef.current) {
-      attemptGenerationRef.current += 1;
-      setReadinessError(undefined);
-      setOperation(null);
-      updateReadiness("preparing");
-      setPreparationAttempt((current) => current + 1);
+    if (importPendingRef.current || storagePendingRef.current > 0) {
       return;
     }
 
@@ -437,7 +520,6 @@ export function useGoogleSheetsImport(options: Readonly<{
       return;
     }
 
-    const generation = ++attemptGenerationRef.current;
     if (!parseSpreadsheetId(sheetDraft)) {
       const error = new GoogleSheetsError(
         "invalid_sheet_url",
@@ -449,28 +531,39 @@ export function useGoogleSheetsImport(options: Readonly<{
       return;
     }
 
+    const generation = ++attemptGenerationRef.current;
     importPendingRef.current = true;
-    setNoticeError(undefined);
     setOperation({ phase: "authorizing" });
+
+    const trackedProvider: TokenProvider = {
+      getAccessToken(scopes) {
+        let pendingToken: Promise<string>;
+        try {
+          pendingToken = provider.getAccessToken(scopes);
+        } catch (caught) {
+          return Promise.reject(caught);
+        }
+        return Promise.resolve(pendingToken).then((token) => {
+          if (
+            generation === attemptGenerationRef.current &&
+            importPendingRef.current
+          ) {
+            setOperation({ phase: "importing" });
+          }
+          return token;
+        });
+      }
+    };
 
     let pendingImport: Promise<GoogleSheetsImportResult>;
     try {
       // This call intentionally occurs before any await so OAuth can consume the
       // button's user activation synchronously.
-      pendingImport = importWorkbookFromGoogleSheets(sheetDraft, provider);
+      pendingImport = importWorkbookFromGoogleSheets(sheetDraft, trackedProvider);
     } catch (caught) {
       finishImportFailure(caught, generation);
       return;
     }
-
-    queueMicrotask(() => {
-      if (
-        generation === attemptGenerationRef.current &&
-        importPendingRef.current
-      ) {
-        setOperation({ phase: "importing" });
-      }
-    });
 
     pendingImport.then(
       async (imported) => {
@@ -490,7 +583,6 @@ export function useGoogleSheetsImport(options: Readonly<{
         attemptGenerationRef.current += 1;
         setSheetDraftState("");
         setReadinessError(undefined);
-        setNoticeError(undefined);
         setOperation(null);
         setOpen(false);
       },
@@ -509,12 +601,43 @@ export function useGoogleSheetsImport(options: Readonly<{
       setOperation({ phase: "error", error });
       notifyError(error);
     }
-  }, [notifyError, sheetDraft, updateReadiness]);
+  }, [notifyError, sheetDraft]);
 
+  const retry = useCallback(() => {
+    if (storagePendingRef.current > 0) {
+      return;
+    }
+    if (operation?.phase === "error" && operation.error?.recoverable !== false) {
+      importSheet();
+      return;
+    }
+    if (readinessRef.current !== "error" || !readinessRetryableRef.current) {
+      return;
+    }
+    attemptGenerationRef.current += 1;
+    setReadinessError(undefined);
+    updateReadinessRetryable(false);
+    setOperation(null);
+    updateReadiness("preparing");
+    setPreparationAttempt((current) => current + 1);
+  }, [importSheet, operation, updateReadiness, updateReadinessRetryable]);
+
+  const storageBusy = storagePendingCount > 0;
   const phase: GoogleSheetsImportPhase = !open
     ? "closed"
-    : operation?.phase ?? readiness;
-  const error = operation?.error ?? readinessError ?? noticeError;
+    : storageBusy
+      ? "loading"
+      : operation?.phase ?? readiness;
+  const error = operation?.error ?? readinessError;
+  const clientIdEditable =
+    readiness === "setup" &&
+    authSource.kind !== "provider" &&
+    clientIdSource !== "managed";
+  const showSheetInput = readiness === "ready" || operation !== null;
+  const canRetry =
+    !storageBusy &&
+    ((operation?.phase === "error" && operation.error?.recoverable !== false) ||
+      (readiness === "error" && readinessRetryable));
 
   return {
     open,
@@ -524,7 +647,19 @@ export function useGoogleSheetsImport(options: Readonly<{
     clientIdSource,
     clientIdDraft: displayedClientId,
     sheetDraft,
+    hostAuthentication,
+    clientIdEditable,
+    showSheetInput,
+    storageBusy,
+    ...(storageAction ? { storageAction } : {}),
+    canSaveClientId: clientIdEditable && !storageBusy,
+    canChangeClientId: clientIdSource === "stored" && !storageBusy,
+    canForgetClientId: clientIdSource === "stored" && !storageBusy,
+    canImport:
+      readiness === "ready" && operation === null && !storageBusy && !importPendingRef.current,
+    canRetry,
     ...(error ? { error } : {}),
+    ...(warning ? { warning } : {}),
     setClientIdDraft,
     setSheetDraft,
     openDialog,
@@ -532,7 +667,8 @@ export function useGoogleSheetsImport(options: Readonly<{
     saveClientId,
     forgetClientId,
     changeClientId,
-    importSheet
+    importSheet,
+    retry
   };
 }
 
