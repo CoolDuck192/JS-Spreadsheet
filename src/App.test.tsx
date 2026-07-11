@@ -1970,6 +1970,81 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B1 4" })).toHaveTextContent("4");
   });
 
+  it("sorts a structured table from the ribbon through the row-id-aware command", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A2 West" }));
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "A2 East" })).toHaveTextContent("East");
+    expect(screen.getByRole("gridcell", { name: "B2 8" })).toHaveTextContent("8");
+    expect(screen.getByRole("gridcell", { name: "A3 West" })).toHaveTextContent("West");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: {
+        type: "table.sort",
+        tableId: "table-sales",
+        sorting: [{ columnId: "sales-region", direction: "asc" }]
+      },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("sorts a structured AutoFilter column through the row-id-aware command", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    const workbook = structuredTableWorkbook();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      autoFilterRange: workbook.tables[0].range
+    };
+    render(<Spreadsheet defaultWorkbook={workbook} storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("button", { name: "Open AutoFilter menu for Sales" }));
+    await user.click(within(screen.getByRole("menu", { name: "AutoFilter menu for Sales" }))
+      .getByRole("menuitem", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "B2 8" })).toHaveTextContent("8");
+    expect(screen.getByRole("gridcell", { name: "B3 10" })).toHaveTextContent("10");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: {
+        type: "table.sort",
+        tableId: "table-sales",
+        sorting: [{ columnId: "sales-value", direction: "asc" }]
+      },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("explains how to remove duplicates when the selection is inside a structured table", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A2 West" }));
+    await user.click(screen.getByRole("button", { name: "Remove duplicates" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Remove duplicates is not supported for structured tables. Convert the table to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.removeDuplicates" })
+    }));
+  });
+
   it("sorts formula rows by evaluated values and keeps moved formulas relative", async () => {
     const user = userEvent.setup();
     render(<App />);
