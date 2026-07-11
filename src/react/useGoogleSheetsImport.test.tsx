@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -691,6 +692,51 @@ describe("useGoogleSheetsImport", () => {
       onImported: secondTarget
     });
     await act(async () => pending.resolve(result("Wrong target")));
+
+    expect(firstTarget).not.toHaveBeenCalled();
+    expect(secondTarget).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a stale target before a later layout effect can settle the import", async () => {
+    const pending = deferred<GoogleSheetsImportResult>();
+    const firstTarget = vi.fn();
+    const secondTarget = vi.fn();
+    const direct = provider();
+    googleMocks.importWorkbook.mockReturnValue(pending.promise);
+    const controller = renderHook((current: DynamicControllerOptions & { settleInLayout: boolean }) => {
+      const importController = useGoogleSheetsImport({
+        origin: current.origin ?? "https://sheets.example.com",
+        onImported: current.onImported,
+        onError: current.onError,
+        configuration: current.configuration,
+        deprecatedTokenProviderFactory: current.deprecatedTokenProviderFactory
+      });
+      useLayoutEffect(() => {
+        if (current.settleInLayout) {
+          pending.resolve(result("Stale layout completion"));
+        }
+      }, [current.settleInLayout]);
+      return importController;
+    }, {
+      initialProps: {
+        configuration: { tokenProvider: direct },
+        onImported: firstTarget,
+        settleInLayout: false
+      }
+    });
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+
+    controller.rerender({
+      configuration: { tokenProvider: direct },
+      onImported: secondTarget,
+      settleInLayout: true
+    });
+    await act(async () => {
+      await pending.promise;
+      await Promise.resolve();
+    });
 
     expect(firstTarget).not.toHaveBeenCalled();
     expect(secondTarget).not.toHaveBeenCalled();

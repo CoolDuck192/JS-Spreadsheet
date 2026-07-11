@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   GoogleSheetsServiceConfiguration,
   TokenProvider
@@ -272,7 +272,9 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOperation(null);
   }, []);
 
-  useEffect(() => {
+  // Invalidate during the commit itself so a settled import microtask cannot
+  // reach a stale target between a target/auth change and passive cleanup.
+  useLayoutEffect(() => {
     invalidateImportAttempt();
     return () => {
       attemptGenerationRef.current += 1;
