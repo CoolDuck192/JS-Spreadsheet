@@ -110,6 +110,25 @@ export function getStructuredTableBodyRange(table: StructuredTable): CellRange |
       };
 }
 
+export function regenerateStructuredTableTotals(
+  workbook: WorkbookModel,
+  table: StructuredTable
+): WorkbookModel {
+  if (!table.totalsRow) return workbook;
+  let next = workbook;
+  for (const column of table.columns) {
+    const aggregate = column.totalsFunction;
+    if (!aggregate || aggregate === "none") continue;
+    next = setRawCell(
+      next,
+      table.sheetId,
+      { row: table.range.end.row, column: column.sheetColumn },
+      totalsFormula(table, column, aggregate)
+    );
+  }
+  return next;
+}
+
 export function reconcileStructuredTableContentWrites(
   workbook: WorkbookModel,
   sheetId: string,

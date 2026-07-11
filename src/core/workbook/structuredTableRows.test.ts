@@ -30,6 +30,23 @@ describe("structured table rows", () => {
     expect(getCellContent(next, "sheet-1", "D3")).toBe("unrelated-right");
   });
 
+  it.each([
+    ["appending", {}],
+    ["prepending", { beforeRowId: "row-1" }]
+  ])("regenerates generated totals after %s table rows", (_label, anchor) => {
+    const workbook = totalsFixture();
+
+    const result = insertStructuredTableRows(
+      workbook,
+      "table-1",
+      { count: 1, ...anchor },
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "B6")).toBe("=SUBTOTAL(109,B2:B5)");
+  });
+
   it("deletes non-contiguous stable row IDs atomically", () => {
     const workbook = rowFixture();
     const result = deleteStructuredTableRows(workbook, "table-1", ["row-1", "row-3"], servicesFor(workbook));
@@ -431,6 +448,22 @@ function calculatedFixture(): WorkbookModel {
         A1: "A", B1: "B", C1: "Quantity", D1: "Price", E1: "Total",
         C2: 2, D2: 4, C3: 3, D3: 5, C4: 4, D4: 6
       }
+    }]
+  };
+}
+
+function totalsFixture(): WorkbookModel {
+  const workbook = rowFixture({ B5: "=SUBTOTAL(109,B2:B4)" });
+  const current = workbook.tables[0];
+  return {
+    ...workbook,
+    tables: [{
+      ...current,
+      range: { ...current.range, end: { ...current.range.end, row: 4 } },
+      totalsRow: true,
+      columns: current.columns.map((column) => column.id === "column-score"
+        ? { ...column, totalsFunction: "sum" }
+        : column)
     }]
   };
 }

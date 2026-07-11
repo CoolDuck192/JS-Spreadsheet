@@ -17,6 +17,7 @@ import {
 import {
   getStructuredTable,
   getStructuredTableBodyRange,
+  regenerateStructuredTableTotals,
   reduceStructuredTableCommand,
   type StructuredTableCommandServices,
   type StructuredTableReduction
@@ -99,7 +100,9 @@ export function insertStructuredTableRows(
     ...table.rowIds.slice(insertionIndex)
   ];
   next = replaceTable(next, { ...resizedTable, rowIds });
-  next = regenerateCalculatedColumns(next, getStructuredTable(next, tableId)!);
+  const nextTable = getStructuredTable(next, tableId)!;
+  next = regenerateCalculatedColumns(next, nextTable);
+  next = regenerateStructuredTableTotals(next, nextTable);
   return { status: "committed", workbook: next };
 }
 
