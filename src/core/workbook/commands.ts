@@ -392,6 +392,15 @@ export function applyWorkbookMutation(
     }
     case "range.validation.set": {
       const range = checkedRange(command.range);
+      const rangeIssue = rangeBoundsValidation(
+        workbook,
+        command.sheetId,
+        range,
+        "Validation range must be inside the sheet"
+      );
+      if (rangeIssue) return rangeIssue;
+      const ruleIssue = validationRuleValidation(command.rule, command.sheetId);
+      if (ruleIssue) return ruleIssue;
       const permission = writableAddresses(workbook, command.sheetId, getRangeAddresses(range));
       return permission ?? applied(setCellValidation(workbook, command.sheetId, range, command.rule));
     }
@@ -681,17 +690,45 @@ export function applyWorkbookMutation(
       }
       return applied(candidate);
     }
-    case "sheet.chart.add":
-      return applied(addChart(workbook, command.sheetId, command.chart));
+    case "sheet.chart.add": {
+      const shapeIssue = chartShapeValidation(command.chart, command.sheetId);
+      if (shapeIssue) return shapeIssue;
+      const range = checkedRange(command.chart.range);
+      const rangeIssue = rangeBoundsValidation(
+        workbook,
+        command.sheetId,
+        range,
+        "Chart data range must be inside the sheet"
+      );
+      if (rangeIssue) return rangeIssue;
+      const anchor = checkedCoordinate(command.chart.anchor);
+      const anchorIssue = coordinateBoundsValidation(
+        workbook,
+        command.sheetId,
+        anchor,
+        "Chart anchor must be inside the sheet"
+      );
+      if (anchorIssue) return anchorIssue;
+      return applied(addChart(workbook, command.sheetId, { ...command.chart, range, anchor }));
+    }
     case "sheet.chart.delete":
       return applied(deleteSheetChart(workbook, command.sheetId, command.chartId));
-    case "namedRange.define":
+    case "namedRange.define": {
+      const range = checkedRange(command.namedRange.range);
+      const rangeIssue = rangeBoundsValidation(
+        workbook,
+        command.namedRange.sheetId,
+        range,
+        "Named range must be inside the sheet"
+      );
+      if (rangeIssue) return rangeIssue;
       return applied(defineNamedRange(
         workbook,
         command.namedRange.sheetId,
         command.namedRange.name,
-        checkedRange(command.namedRange.range)
+        range
       ));
+    }
     case "namedRange.remove":
       return applied(removeNamedRange(workbook, command.name));
     case "transaction":
@@ -955,6 +992,113 @@ function writableAddresses(
     }
   }
   return null;
+}
+
+function rangeBoundsValidation(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  message: string
+): WorkbookMutationResult | null {
+  const sheet = workbook.sheets.find((candidate) => candidate.id === sheetId);
+  if (sheet
+    && range.start.row >= 0
+    && range.start.column >= 0
+    && range.end.row >= range.start.row
+    && range.end.column >= range.start.column
+    && range.end.row < sheet.rowCount
+    && range.end.column < sheet.columnCount) {
+    return null;
+  }
+  return {
+    status: "rejected",
+    reason: "validation",
+    issues: [{ code: "range.outOfBounds", message, sheetId }]
+  };
+}
+
+function coordinateBoundsValidation(
+  workbook: WorkbookModel,
+  sheetId: string,
+  coordinate: CellCoord,
+  message: string
+): WorkbookMutationResult | null {
+  const sheet = workbook.sheets.find((candidate) => candidate.id === sheetId);
+  if (sheet
+    && coordinate.row >= 0
+    && coordinate.column >= 0
+    && coordinate.row < sheet.rowCount
+    && coordinate.column < sheet.columnCount) {
+    return null;
+  }
+  return {
+    status: "rejected",
+    reason: "validation",
+    issues: [{ code: "coordinate.outOfBounds", message, sheetId }]
+  };
+}
+
+function validationRuleValidation(
+  rule: unknown,
+  sheetId: string
+): WorkbookMutationResult | null {
+  const candidate = typeof rule === "object" && rule !== null && !Array.isArray(rule)
+    ? rule as Record<string, unknown>
+    : null;
+  const allowBlankIsValid = candidate
+    && (candidate.allowBlank === undefined || typeof candidate.allowBlank === "boolean");
+  let valid = false;
+  if (allowBlankIsValid && candidate.type === "list") {
+    valid = Array.isArray(candidate.values)
+      && candidate.values.every((value) => typeof value === "string");
+  } else if (allowBlankIsValid
+    && (candidate.type === "number" || candidate.type === "textLength")) {
+    const minIsValid = candidate.min === undefined
+      || (typeof candidate.min === "number" && Number.isFinite(candidate.min));
+    const maxIsValid = candidate.max === undefined
+      || (typeof candidate.max === "number" && Number.isFinite(candidate.max));
+    valid = minIsValid
+      && maxIsValid
+      && !(typeof candidate.min === "number"
+        && typeof candidate.max === "number"
+        && candidate.min > candidate.max);
+  }
+  return valid
+    ? null
+    : {
+        status: "rejected",
+        reason: "validation",
+        issues: [{
+          code: "validation.rule.invalid",
+          message: "Validation rule must have a supported shape and valid bounds",
+          sheetId
+        }]
+      };
+}
+
+function chartShapeValidation(
+  chart: unknown,
+  sheetId: string
+): WorkbookMutationResult | null {
+  const candidate = typeof chart === "object" && chart !== null && !Array.isArray(chart)
+    ? chart as Record<string, unknown>
+    : null;
+  const valid = candidate !== null
+    && typeof candidate.id === "string"
+    && candidate.id.trim().length > 0
+    && typeof candidate.title === "string"
+    && (candidate.type === "bar" || candidate.type === "line" || candidate.type === "pie");
+  return valid
+    ? null
+    : {
+        status: "rejected",
+        reason: "validation",
+        issues: [{
+          code: "chart.invalid",
+          message: "Chart id, title, and type must be valid",
+          sheetId
+        }]
+      };
 }
 
 function checkedRange(range: CellRange): CellRange {
