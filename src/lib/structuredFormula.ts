@@ -166,6 +166,8 @@ function parseStructuredReference(
   }
 
   if (!trimmed.startsWith("[")) {
+    const selector = parseSelector(trimmed);
+    if (selector) return resolveStructuredColumns(selector, [], table);
     const columnName = decodeStructuredHeader(trimmed);
     return resolveStructuredColumns("data", [columnName], table);
   }

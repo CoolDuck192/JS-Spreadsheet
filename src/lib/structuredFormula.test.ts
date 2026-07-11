@@ -70,6 +70,25 @@ describe("structuredFormula", () => {
     ).toBe("=SUM(D2:F5)");
   });
 
+  it("imports single item specifiers without treating them as column names", () => {
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Headers]", salesTable, 1))).toBe("=A1:G1");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Data]", salesTable, 1))).toBe("=A2:G5");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Totals]", salesTable, 1))).toBe("=A6:G6");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#All]", salesTable, 1))).toBe("=A1:G6");
+
+    const escapedSelectorColumn: StructuredTable = {
+      ...salesTable,
+      range: { ...salesTable.range, end: { ...salesTable.range.end, column: 7 } },
+      columns: [
+        ...salesTable.columns,
+        { id: "selector-column", name: "#Data", sheetColumn: 7 }
+      ]
+    };
+    expect(expectFormula(
+      structuredFormulaToA1("=SalesTable['#Data]", escapedSelectorColumn, 1)
+    )).toBe("=H2:H5");
+  });
+
   it("decodes and re-encodes escaped right brackets, pound signs, and apostrophes in headers", () => {
     const structured = "=SalesTable[@[Net']'#'' Amount]]";
     const imported = structuredFormulaToA1(structured, salesTable, 1);

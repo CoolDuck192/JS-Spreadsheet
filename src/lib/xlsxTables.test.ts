@@ -108,6 +108,31 @@ describe("xlsxTables", () => {
     expect(worksheet.getCell("B2").value).toBeInstanceOf(Date);
   });
 
+  it("imports a custom totals formula with a single structured item specifier", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const metadata = readNativeTableXml(bytes).map((entry) => entry.name === "SalesTable"
+      ? {
+          ...entry,
+          totals: {
+            ...entry.totals,
+            Amount: {
+              ...entry.totals.Amount,
+              formula: "=COUNTA(SalesTable[#Data])"
+            }
+          }
+        }
+      : entry);
+
+    await expect(importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      metadata,
+      { idGenerator: sequencedIds("single-selector") }
+    )).resolves.toHaveLength(1);
+    expect(worksheet.getCell("F6").formula).toBe("COUNTA(A2:F5)");
+  });
+
   it("imports both independently authored tables with default headers and native filters", async () => {
     const { bytes, workbook } = await loadFixture(realFixturePath);
     const metadata = readNativeTableXml(bytes);
