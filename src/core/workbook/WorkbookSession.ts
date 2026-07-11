@@ -618,8 +618,11 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
       const baseHistory = state.workbook === currentHistory.present
         ? currentHistory
         : commitWorkbookHistory(currentHistory, state.workbook);
-      const baseSelectionHistory = baseHistory === currentHistory
+      const alignedSelectionHistory = rangesEqual(currentSelectionHistory.present, state.selection)
         ? currentSelectionHistory
+        : { ...currentSelectionHistory, present: cloneRange(state.selection) };
+      const baseSelectionHistory = baseHistory === currentHistory
+        ? alignedSelectionHistory
         : commitSelectionHistory(currentSelectionHistory, baseHistory, state.selection);
       const nextHistory = command.type === "history.undo"
         ? undoWorkbookHistory(baseHistory)
