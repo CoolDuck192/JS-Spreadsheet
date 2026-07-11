@@ -434,9 +434,10 @@ export function applyWorkbookMutation(
       return validatedMutation(candidate, command.sheetId, addresses, context);
     }
     case "range.autoFill": {
-      checkedRange(command.source);
+      const source = checkedRange(command.source);
       const target = checkedRange(command.target);
-      const addresses = getRangeAddresses(target);
+      const sourceAddresses = new Set(getRangeAddresses(source));
+      const addresses = getRangeAddresses(target).filter((address) => !sourceAddresses.has(address));
       const permission = writableAddresses(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;

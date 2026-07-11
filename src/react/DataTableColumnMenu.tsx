@@ -61,6 +61,7 @@ export function DataTableColumnMenu<TRow>({
     const menu = menuRef.current;
     const view = anchor.ownerDocument.defaultView;
     if (!menu || !view) return;
+    const anchorHeader = anchor.closest('[role="columnheader"]');
 
     let closed = false;
     let shown = false;
@@ -108,6 +109,10 @@ export function DataTableColumnMenu<TRow>({
     };
     const handleScroll = (event: Event) => {
       if (event.target instanceof Node && menu.contains(event.target)) return;
+      if (event.target instanceof Node && anchorHeader?.contains(event.target)) {
+        place();
+        return;
+      }
       close();
     };
     const handleResize = () => place();

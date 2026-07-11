@@ -452,14 +452,67 @@ case-normalized duplicates, unsafe XML, encrypted/ZIP64 archives whose bounds
 cannot be proven, archive bombs, and external or escaping table relationships
 are rejected rather than partially imported.
 
+## Google Sheets import
+
+**File → Import Google Sheet** is a one-time, read-only workbook replacement;
+it does not create a live link, refresh job, write-back path, or synchronization
+state. Hide the command when it does not belong in the host workflow:
+
+```tsx
+<Spreadsheet features={{ googleSheets: false }} />
+```
+
+Embedded hosts configure authentication through `services.googleSheets`:
+
+```tsx
+<Spreadsheet
+  services={{
+    googleSheets: {
+      tokenProvider,
+      // Or use a managed client ID and a host factory:
+      // clientId,
+      // tokenProviderFactory: (configuredClientId) => createProvider(configuredClientId),
+      // clientIdStorage
+    }
+  }}
+/>
+```
+
+Use `tokenProvider` to integrate an existing host Google session. Otherwise,
+pass `clientId` and optionally `tokenProviderFactory`; without a custom factory,
+the component uses the built-in Google Identity Services provider. Embedded
+client-ID persistence is opt-in: the reusable `Spreadsheet` writes nothing
+unless the host supplies a `GoogleClientIdStorage` as `clientIdStorage`. The
+standalone app is the only surface that automatically stores the public client
+ID, under `javascript-spreadsheet.google-client-id.v1`. Access tokens stay in
+memory.
+
+Built-in browser OAuth requires an eligible HTTPS DNS origin registered exactly
+in the Google OAuth client's Authorized JavaScript origins. A raw LAN IP is
+diagnosed as incompatible; serve the host from an HTTPS DNS name or inject a
+host `tokenProvider`. The host Content Security Policy must allow:
+
+- `script-src https://accounts.google.com`
+- `connect-src https://accounts.google.com https://sheets.googleapis.com`
+- `frame-src https://accounts.google.com`
+
+A sandboxed iframe must also permit popup sign-in, for example with
+`sandbox="allow-scripts allow-same-origin allow-popups"`, and the top-level host
+must not block the Google sign-in popup. See
+[google-sheets-connector.md](google-sheets-connector.md) for standalone setup,
+failure behavior, and connector exports.
+
 ## Styling, sizing, and accessibility
 
 The default stylesheet is scoped below
 `.js-spreadsheet-root.js-spreadsheet-workbook` and
 `.js-spreadsheet-root.js-spreadsheet-data-table`; it does not intentionally
 restyle host `body`, `button`, `input`, or `select` elements. Both surfaces size
-against their container, so give the host container an explicit height when a
-full-height grid is desired.
+against their container. A spreadsheet host must provide at least `420px` of
+block size and remains responsible for the component's height; set an explicit
+host height and render the spreadsheet at `height: 100%` when a full-height grid
+is desired. The component's `420px` minimum remains in effect, and an embedded
+spreadsheet does not take ownership of the browser viewport.
 
 Theme variables use the `--js-spreadsheet-*` namespace. Override them on one
 component root or a wrapping host class to keep multiple embedded instances
@@ -485,12 +538,21 @@ http://<machine-ip>:5173/             # spreadsheet
 http://<machine-ip>:5173/datatable    # DataTable demo
 ```
 
-Do not hand off a `localhost` URL. Production preview also binds all interfaces:
+Production preview also binds all interfaces:
 
 ```bash
-corepack pnpm run build:app
-corepack pnpm run preview -- --host 0.0.0.0 --port 4173
+corepack pnpm run build
+corepack pnpm exec vite preview --host 0.0.0.0 --port 4173 --strictPort
 ```
+
+Keep that single preview running while Playwright reuses it:
+
+```bash
+E2E_BASE_URL=http://192.168.6.232:4173 corepack pnpm run test:e2e
+```
+
+With `E2E_BASE_URL` set, Playwright omits its configured web server and does not
+start a second development listener.
 
 ## Licensing
 

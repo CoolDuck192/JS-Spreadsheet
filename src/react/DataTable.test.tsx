@@ -497,6 +497,20 @@ describe("DataTable", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("keeps a column menu open when focus scrolls inside its narrow header", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+    const header = trigger.closest('[role="columnheader"]');
+
+    expect(header).not.toBeNull();
+    fireEvent.scroll(header!);
+
+    expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("hides the native popover when its column trigger unmounts", async () => {
     const user = userEvent.setup();
     const hidePopover = vi.spyOn(HTMLElement.prototype, "hidePopover");

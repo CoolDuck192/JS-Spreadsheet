@@ -11,7 +11,9 @@ import {
   setActiveSheet,
   setCellContent,
   setCellFormat,
-  setCellValidation
+  setCellValidation,
+  setRangeReadOnly,
+  setSheetProtection
 } from "../../lib/workbook";
 import type { CommandEnvelope, CommandResult } from "../commands/types";
 import { applyWorkbookMutation, type WorkbookCommand } from "./commands";
@@ -303,6 +305,47 @@ describe("WorkbookCommand", () => {
     if (replaced.status !== "applied") return;
     expect(getCellFormat(replaced.workbook, "sheet-1", "A1")).toEqual({ italic: true });
     expect(getCellConditionalFormatRules(replaced.workbook, "sheet-1", "A1")).toHaveLength(1);
+  });
+
+  it("validates AutoFill permissions only for destination cells", () => {
+    const source = { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } } as const;
+    const target = { start: source.start, end: { row: 4, column: 0 } } as const;
+    const destinations = { start: { row: 2, column: 0 }, end: target.end } as const;
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "1");
+    workbook = setCellContent(workbook, sheetId, "A2", "3");
+    workbook = setSheetProtection(workbook, sheetId, true);
+    workbook = setRangeReadOnly(workbook, sheetId, destinations, false);
+
+    const filled = apply(workbook, {
+      type: "range.autoFill",
+      sheetId,
+      source,
+      target
+    });
+
+    expect(filled.status).toBe("applied");
+    if (filled.status !== "applied") return;
+    expect(["A3", "A4", "A5"].map((address) => getCellContent(filled.workbook, sheetId, address)))
+      .toEqual([5, 7, 9]);
+
+    const blockedWorkbook = setRangeReadOnly(workbook, sheetId, {
+      start: { row: 3, column: 0 },
+      end: { row: 3, column: 0 }
+    }, true);
+    const blocked = apply(blockedWorkbook, {
+      type: "range.autoFill",
+      sheetId,
+      source,
+      target
+    });
+
+    expect(blocked).toMatchObject({
+      status: "rejected",
+      reason: "permission",
+      issues: [{ code: "permission.readOnly", address: "A4" }]
+    });
   });
 
   it("clears only conditional-format rules intersecting the requested range", () => {
