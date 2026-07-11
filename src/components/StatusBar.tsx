@@ -1,5 +1,6 @@
 type StatusBarProps = {
   status: string;
+  statusIsError?: boolean;
   activeAddress: string;
   selectedCount: number;
   selectionSummary: string;
@@ -12,6 +13,7 @@ type StatusBarProps = {
 
 export function StatusBar({
   status,
+  statusIsError = false,
   activeAddress,
   selectedCount,
   selectionSummary,
@@ -23,7 +25,7 @@ export function StatusBar({
 }: StatusBarProps) {
   return (
     <div className="status-bar" aria-label="Status">
-      <span>{status}</span>
+      <span role={statusIsError ? "alert" : undefined}>{status}</span>
       <span>{activeAddress}</span>
       <span>{selectedCount} selected</span>
       <span>{selectionSummary}</span>

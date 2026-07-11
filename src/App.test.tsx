@@ -38,6 +38,19 @@ describe("App", () => {
     ));
   });
 
+  it("shows a sanitized status-bar alert when autosave fails", async () => {
+    const user = userEvent.setup();
+    const save = vi.fn().mockRejectedValue(new Error("secret quota detail"));
+    render(<Spreadsheet storage={{ load: () => null, save }} />);
+
+    await editCell(user, "A1", "unsaved");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Workbook could not be saved");
+    expect(screen.getByLabelText("Status").firstElementChild).toBe(alert);
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent("secret quota detail");
+  });
+
   it("always opens standalone Google setup and stores only the normalized public client ID", async () => {
     vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "");
     const prompt = vi.spyOn(window, "prompt");
