@@ -642,7 +642,6 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
         }]
       };
     }
-    projectTransactionWorkbook(mutation.workbook);
     return {
       status: "applied",
       state: {
