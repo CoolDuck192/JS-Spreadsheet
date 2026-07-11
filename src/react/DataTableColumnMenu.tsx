@@ -67,17 +67,20 @@ export function DataTableColumnMenu<TRow>({
     let closed = false;
     let shown = false;
 
-    const close = (restoreFocus = true, hide = true) => {
+    const hide = () => {
+      if (!shown) return;
+      shown = false;
+      try {
+        menu.hidePopover();
+      } catch {
+        // The browser may already have light-dismissed the popover.
+      }
+    };
+
+    const close = (restoreFocus = true, shouldHide = true) => {
       if (closed) return;
       closed = true;
-      if (hide && shown) {
-        shown = false;
-        try {
-          menu.hidePopover();
-        } catch {
-          // The browser may already have light-dismissed the popover.
-        }
-      }
+      if (shouldHide) hide();
       if (restoreFocus && anchor.isConnected) anchor.focus();
       onClose(anchor);
     };
@@ -149,7 +152,7 @@ export function DataTableColumnMenu<TRow>({
       view.removeEventListener("resize", handleResize);
       observer.disconnect();
       closeRef.current = () => {};
-      close(false);
+      hide();
     };
   }, [anchor, onClose]);
 

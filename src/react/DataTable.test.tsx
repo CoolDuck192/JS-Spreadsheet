@@ -1,5 +1,6 @@
 import {
   createRef,
+  StrictMode,
   type KeyboardEvent,
   type ReactNode
 } from "react";
@@ -356,6 +357,27 @@ describe("DataTable", () => {
     expect(hidePopover).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("keeps a column menu open through StrictMode effect replay", async () => {
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <DataTable
+          aria-label="Strict employees"
+          rows={employees}
+          columns={columns}
+          getRowId={getRowId}
+        />
+      </StrictMode>
+    );
+
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+
+    expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
   });
 
   it("closes and cleanly reopens a column menu from the same trigger", async () => {
