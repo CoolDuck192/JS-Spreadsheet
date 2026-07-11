@@ -215,6 +215,83 @@ describe("structured table rows", () => {
     expect(table(result.workbook).columns[4].calculatedFormula).toBe("=C2*D2+$A$1");
   });
 
+  it("translates structured current-row references before evaluating a calculated column", () => {
+    const workbook = calculatedFixture();
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=[@Quantity]*[@Price]",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(table(result.workbook).columns[4].calculatedFormula).toBe("=C2*D2");
+    expect(getCellContent(result.workbook, "sheet-1", "E2")).toBe("=C2*D2");
+    expect(getCellContent(result.workbook, "sheet-1", "E3")).toBe("=C3*D3");
+    expect(getCellContent(result.workbook, "sheet-1", "E4")).toBe("=C4*D4");
+    const engine = createFormulaEngine(result.workbook);
+    try {
+      expect(engine.getComputedValue("sheet-1", "E2")).toBe(8);
+      expect(engine.getComputedValue("sheet-1", "E3")).toBe(15);
+      expect(engine.getComputedValue("sheet-1", "E4")).toBe(24);
+    } finally {
+      engine.destroy();
+    }
+  });
+
+  it("rejects an unknown structured calculated-column reference atomically", () => {
+    const workbook = calculatedFixture();
+
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=[@Missing]*2",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.workbook).toBe(workbook);
+    expect(result).toMatchObject({
+      issues: [{ code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }]
+    });
+  });
+
+  it("normalizes a structured calculated formula before an empty table receives rows", () => {
+    const base = calculatedFixture();
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [{
+        ...base.sheets[0],
+        cells: { A1: "A", B1: "B", C1: "Quantity", D1: "Price", E1: "Total" }
+      }],
+      tables: [{
+        ...base.tables[0],
+        range: { ...base.tables[0].range, end: { row: 0, column: 4 } },
+        rowIds: []
+      }]
+    };
+    const calculated = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=[@Quantity]*[@Price]",
+      servicesFor(workbook)
+    );
+    const inserted = insertStructuredTableRows(
+      calculated.workbook,
+      "table-calc",
+      { count: 1 },
+      servicesFor(calculated.workbook)
+    );
+
+    expect(calculated.status).toBe("committed");
+    expect(table(calculated.workbook).columns[4].calculatedFormula).toBe("=C2*D2");
+    expect(inserted.status).toBe("committed");
+    expect(getCellContent(inserted.workbook, "sheet-1", "E2")).toBe("=C2*D2");
+  });
+
   it("keeps a calculated-column anchor at the first body row when prepending", () => {
     const workbook = calculatedFixture();
     const calculated = setStructuredTableCalculatedColumn(

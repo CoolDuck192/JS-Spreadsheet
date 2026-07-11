@@ -8,6 +8,7 @@ import type { TableSort } from "../../table/core/query";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { compareDeterministicText } from "../../lib/filters";
 import { formatCellAddress } from "../../lib/addressing";
+import { structuredFormulaToA1 } from "../../lib/structuredFormula";
 import {
   rewriteFormulaForRectangularRowEdit,
   rewriteRowIntervalForRectangularEdit,
@@ -163,16 +164,26 @@ export function setStructuredTableCalculatedColumn(
   if (formula !== undefined && !formula.startsWith("=")) {
     return rejected(workbook, "TABLE_FORMULA_INVALID", "Calculated column formulas must begin with equals");
   }
+  let normalizedFormula = formula;
+  if (formula !== undefined) {
+    const body = getStructuredTableBodyRange(table);
+    const anchorBodyRow = body?.start.row ?? table.range.start.row + Number(table.headerRow);
+    const translated = structuredFormulaToA1(formula, table, anchorBodyRow);
+    if (!translated.ok) {
+      return { status: "rejected", workbook, issues: [translated.issue] };
+    }
+    normalizedFormula = translated.formula;
+  }
   const current = table.columns[columnIndex].calculatedFormula;
-  if (current === formula) return { status: "unchanged", workbook };
+  if (current === normalizedFormula) return { status: "unchanged", workbook };
   const columns = table.columns.map((column, index) => {
     if (index !== columnIndex) return column;
     const { calculatedFormula: _current, ...base } = column;
-    return formula === undefined ? base : { ...base, calculatedFormula: formula };
+    return normalizedFormula === undefined ? base : { ...base, calculatedFormula: normalizedFormula };
   });
   const nextTable = { ...table, columns };
   let next = replaceTable(workbook, nextTable);
-  if (formula !== undefined) next = regenerateCalculatedColumns(next, nextTable);
+  if (normalizedFormula !== undefined) next = regenerateCalculatedColumns(next, nextTable);
   return { status: "committed", workbook: next };
 }
 

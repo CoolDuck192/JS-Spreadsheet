@@ -107,7 +107,10 @@ function validateTableGeometry(table: StructuredTable, anchorBodyRow: number): s
   if (table.columns.length === 0) return "A structured table must contain at least one column";
   if (!Number.isInteger(anchorBodyRow)) return "The formula anchor must be an integer body row";
   const { bodyStart, bodyEnd } = tableRows(table);
-  if (anchorBodyRow < bodyStart || anchorBodyRow > bodyEnd) {
+  const validBodyAnchor = bodyStart <= bodyEnd
+    ? anchorBodyRow >= bodyStart && anchorBodyRow <= bodyEnd
+    : anchorBodyRow === bodyStart;
+  if (!validBodyAnchor) {
     return "The formula anchor must be inside the table body";
   }
   const seen = new Set<number>();
