@@ -33,7 +33,8 @@
     "build:app": "vite build --outDir dist/app --emptyOutDir",
     "build:lib": "tsc -p tsconfig.build.json && vite build --config vite.lib.config.ts",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "vitest run",
+    "test": "vitest run --exclude '**/*.perf.test.ts' --exclude '**/*.perf.test.tsx'",
+    "test:perf": "vitest run .perf.test.",
     "test:watch": "vitest",
     "test:e2e": "playwright test"
   },

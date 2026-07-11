@@ -96,4 +96,16 @@ describe("public entrypoints", () => {
       }
     });
   });
+
+  it("keeps performance tests out of the functional test script", async () => {
+    const manifest = JSON.parse(await readFile(
+      new URL("../../package.json", import.meta.url),
+      "utf8"
+    ));
+
+    expect(manifest.scripts.test).toBe(
+      "vitest run --exclude '**/*.perf.test.ts' --exclude '**/*.perf.test.tsx'"
+    );
+    expect(manifest.scripts["test:perf"]).toBe("vitest run .perf.test.");
+  });
 });
