@@ -397,6 +397,49 @@ describe("RemoteMutationController", () => {
     expect(onAcknowledged).toHaveBeenCalledOnce();
   });
 
+  it("acknowledges metadata echoes with explicit undefined keys", async () => {
+    let queryResult = canonicalResult();
+    const onAcknowledged = vi.fn();
+    const attemptedMetadata = { comment: "reviewed" };
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost after commit"); },
+      undefined,
+      {
+        query: async () => queryResult,
+        onAcknowledged,
+        readAuthoritativeCell: () => ({
+          storedValue: 100,
+          evaluatedValue: 100,
+          metadata: { comment: "reviewed", readOnly: undefined },
+          rowVersion: "row-2"
+        })
+      }
+    );
+    const mutation: PreparedRemoteMutation = {
+      kind: "cell-metadata",
+      rowId: "1",
+      columnId: "salary",
+      metadata: attemptedMetadata,
+      optimisticCell: {
+        storedValue: 100,
+        evaluatedValue: 100,
+        displayValue: "100",
+        metadata: attemptedMetadata
+      }
+    };
+
+    await harness.controller.execute("operation-metadata-undefined", [mutation]);
+    queryResult = canonicalResult({
+      revision: "2",
+      row: { id: "1", salary: 100, label: "server", rowVersion: "row-2" }
+    });
+    await harness.queryController.refresh("authoritative-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(harness.controller.getConflicts()).toEqual([]);
+    expect(onAcknowledged).toHaveBeenCalledOnce();
+  });
+
   it("acknowledges equivalent formulas after trimming and leading-equals normalization", async () => {
     let queryResult = canonicalResult();
     const onAcknowledged = vi.fn();

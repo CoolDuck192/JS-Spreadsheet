@@ -899,8 +899,8 @@ function structurallyEqual(left: unknown, right: unknown): boolean {
       && left.every((value, index) => structurallyEqual(value, right[index]));
   }
   if (!isRecord(left) || !isRecord(right)) return false;
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
+  const leftKeys = Object.keys(left).filter((key) => left[key] !== undefined);
+  const rightKeys = Object.keys(right).filter((key) => right[key] !== undefined);
   return leftKeys.length === rightKeys.length
     && leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
       && structurallyEqual(left[key], right[key]));
