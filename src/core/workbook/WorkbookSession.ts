@@ -9,11 +9,12 @@ import {
   type FormulaEngine
 } from "../../lib/formulaEngine";
 import type { CommandEnvelope, CommandResult, TableIssue } from "../commands/types";
-import { createRandomId, type IdGenerator } from "../ids";
+import { createRandomId, type IdGenerator, type IdKind } from "../ids";
 import {
   applyWorkbookMutation,
   collectCommandDiagnostics,
   type WorkbookCommand,
+  type WorkbookIdReservation,
   type WorkbookMutationContext
 } from "./commands";
 import { migrateWorkbookModel } from "./migrateWorkbook";
@@ -23,6 +24,8 @@ import {
   redoWorkbookHistory,
   undoWorkbookHistory
 } from "./history";
+
+export type { WorkbookCommand, WorkbookIdReservation } from "./commands";
 
 export type WorkbookSnapshot = {
   workbook: WorkbookModel;
@@ -93,6 +96,26 @@ type RejectedDraft = {
   issues?: readonly TableIssue[];
 };
 type DraftResult = AppliedDraft | RejectedDraft;
+
+type IdAllocationTrace = Readonly<{
+  kind: IdKind;
+  occurrence: number;
+  id: string;
+  reserved: boolean;
+}>;
+
+type TransactionIdPreflight = Readonly<{
+  status: "ready";
+  createId: IdGenerator;
+  allocations: IdAllocationTrace[];
+  reservedIds: ReadonlySet<string>;
+  finish(): RejectedDraft | undefined;
+}>;
+
+type TransactionIdReplay = Readonly<{
+  createId: IdGenerator;
+  finish(): RejectedDraft | undefined;
+}>;
 
 const DEFAULT_SELECTION: CellRange = {
   start: { row: 0, column: 0 },
@@ -216,28 +239,44 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
           ensureScratchProjection(workbook);
         }
       };
-      if (transactionNeedsIdPreflight(command)) {
-        const preflight = reduce(
-          command,
-          initialState,
-          {
-            ...mutationContext,
-            createId: createPreflightIdGenerator(initialState.workbook)
-          },
-          enterTransaction,
-          leaveTransaction,
-          projectTransactionWorkbook
-        );
-        applied = preflight.status === "rejected"
-          ? preflight
-          : reduce(
-              command,
-              initialState,
-              mutationContext,
-              enterTransaction,
-              leaveTransaction,
-              projectTransactionWorkbook
-            );
+      if (command.type === "transaction" && transactionNeedsIdPreflight(command)) {
+        const prepared = createTransactionIdPreflight(initialState.workbook, command);
+        if (prepared.status === "rejected") {
+          applied = prepared;
+        } else {
+          const preflight = reduce(
+            command,
+            initialState,
+            { ...mutationContext, createId: prepared.createId },
+            enterTransaction,
+            leaveTransaction,
+            projectTransactionWorkbook
+          );
+          if (preflight.status === "rejected") {
+            applied = preflight;
+          } else {
+            const reservationFailure = prepared.finish();
+            if (reservationFailure) {
+              applied = reservationFailure;
+            } else {
+              const replay = createTransactionIdReplay(
+                initialState.workbook,
+                prepared.allocations,
+                prepared.reservedIds,
+                createId
+              );
+              const reduced = reduce(
+                command,
+                initialState,
+                { ...mutationContext, createId: replay.createId },
+                enterTransaction,
+                leaveTransaction,
+                projectTransactionWorkbook
+              );
+              applied = replay.finish() ?? reduced;
+            }
+          }
+        }
       } else {
         applied = reduce(
           command,
@@ -841,13 +880,17 @@ function cloneRange(range: CellRange): CellRange {
   };
 }
 
-function transactionNeedsIdPreflight(command: WorkbookCommand): boolean {
-  return command.type === "transaction" && command.commands.some(commandOrChildGeneratesIds);
+function transactionNeedsIdPreflight(
+  command: Extract<WorkbookCommand, { type: "transaction" }>
+): boolean {
+  return command.idReservations !== undefined
+    || command.commands.some(commandOrChildNeedsIdPreflight);
 }
 
-function commandOrChildGeneratesIds(command: WorkbookCommand): boolean {
+function commandOrChildNeedsIdPreflight(command: WorkbookCommand): boolean {
   return command.type === "transaction"
-    ? command.commands.some(commandOrChildGeneratesIds)
+    ? command.idReservations !== undefined
+      || command.commands.some(commandOrChildNeedsIdPreflight)
     : commandGeneratesIds(command);
 }
 
@@ -881,22 +924,168 @@ function hasUniqueStructuredTableIds(workbook: WorkbookModel): boolean {
   }
 }
 
-function createPreflightIdGenerator(workbook: WorkbookModel): IdGenerator {
-  const reserved = new Set<string>();
-  for (const table of workbook.tables) {
-    reserved.add(table.id);
-    for (const column of table.columns) reserved.add(column.id);
-    for (const rowId of table.rowIds) reserved.add(rowId);
+function createTransactionIdPreflight(
+  workbook: WorkbookModel,
+  command: Extract<WorkbookCommand, { type: "transaction" }>
+): TransactionIdPreflight | RejectedDraft {
+  if (hasNestedIdReservations(command.commands)) {
+    return invalidGeneratedIdsResult();
   }
+
+  const existingIds = collectStructuredTableIds(workbook);
+  const reservationSource: unknown = command.idReservations;
+  if (reservationSource !== undefined && !Array.isArray(reservationSource)) {
+    return invalidGeneratedIdsResult();
+  }
+  const reservations = (reservationSource ?? []) as readonly unknown[];
+  const bySlot = new Map<string, WorkbookIdReservation>();
+  const reservationIds = new Set<string>();
+  for (const candidate of reservations) {
+    if (!isWorkbookIdReservation(candidate)) {
+      return invalidGeneratedIdsResult();
+    }
+    const slot = idReservationSlot(candidate.kind, candidate.occurrence);
+    if (
+      bySlot.has(slot)
+      || reservationIds.has(candidate.id)
+      || existingIds.has(candidate.id)
+    ) {
+      return invalidGeneratedIdsResult();
+    }
+    bySlot.set(slot, candidate);
+    reservationIds.add(candidate.id);
+  }
+
+  const unavailable = new Set([...existingIds, ...reservationIds]);
+  const usedSlots = new Set<string>();
+  const allocations: IdAllocationTrace[] = [];
+  const occurrences: Record<IdKind, number> = {
+    table: 0,
+    "table-column": 0,
+    "table-row": 0
+  };
   let sequence = 0;
-  return (kind) => {
+  const createId: IdGenerator = (kind) => {
+    const occurrence = occurrences[kind]++;
+    const slot = idReservationSlot(kind, occurrence);
+    const reservation = bySlot.get(slot);
+    if (reservation) {
+      usedSlots.add(slot);
+      allocations.push({
+        kind,
+        occurrence,
+        id: reservation.id,
+        reserved: true
+      });
+      return reservation.id;
+    }
     let candidate: string;
     do {
       sequence += 1;
       candidate = `__preflight-${kind}-${sequence}`;
-    } while (reserved.has(candidate));
-    reserved.add(candidate);
+    } while (unavailable.has(candidate));
+    unavailable.add(candidate);
+    allocations.push({ kind, occurrence, id: candidate, reserved: false });
     return candidate;
+  };
+
+  return {
+    status: "ready",
+    createId,
+    allocations,
+    reservedIds: reservationIds,
+    finish() {
+      return usedSlots.size === bySlot.size ? undefined : invalidGeneratedIdsResult();
+    }
+  };
+}
+
+function createTransactionIdReplay(
+  workbook: WorkbookModel,
+  allocations: readonly IdAllocationTrace[],
+  reservedIds: ReadonlySet<string>,
+  hostCreateId: IdGenerator
+): TransactionIdReplay {
+  const seen = collectStructuredTableIds(workbook);
+  let allocationIndex = 0;
+  let invalid = false;
+  const createId: IdGenerator = (kind) => {
+    const expected = allocations[allocationIndex++];
+    const generated: unknown = hostCreateId(kind);
+    const actual = typeof generated === "string" ? generated : "";
+    if (!expected || expected.kind !== kind) {
+      invalid = true;
+    }
+    if (
+      actual.trim().length === 0
+      || seen.has(actual)
+      || (expected?.reserved ? actual !== expected.id : reservedIds.has(actual))
+    ) {
+      invalid = true;
+    }
+    if (actual.length > 0) {
+      seen.add(actual);
+    }
+    return actual;
+  };
+
+  return {
+    createId,
+    finish() {
+      return invalid || allocationIndex !== allocations.length
+        ? invalidGeneratedIdsResult()
+        : undefined;
+    }
+  };
+}
+
+function collectStructuredTableIds(workbook: WorkbookModel): Set<string> {
+  const ids = new Set<string>();
+  for (const table of workbook.tables) {
+    ids.add(table.id);
+    for (const column of table.columns) ids.add(column.id);
+    for (const rowId of table.rowIds) ids.add(rowId);
+  }
+  return ids;
+}
+
+function hasNestedIdReservations(commands: readonly WorkbookCommand[]): boolean {
+  return commands.some((command) =>
+    command.type === "transaction"
+    && (
+      command.idReservations !== undefined
+      || hasNestedIdReservations(command.commands)
+    )
+  );
+}
+
+function isWorkbookIdReservation(value: unknown): value is WorkbookIdReservation {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Record<keyof WorkbookIdReservation, unknown>>;
+  return isIdKind(candidate.kind)
+    && typeof candidate.occurrence === "number"
+    && Number.isInteger(candidate.occurrence)
+    && candidate.occurrence >= 0
+    && typeof candidate.id === "string"
+    && candidate.id.trim().length > 0;
+}
+
+function isIdKind(value: unknown): value is IdKind {
+  return value === "table" || value === "table-column" || value === "table-row";
+}
+
+function idReservationSlot(kind: IdKind, occurrence: number): string {
+  return `${kind}:${occurrence}`;
+}
+
+function invalidGeneratedIdsResult(): RejectedDraft {
+  return {
+    status: "rejected",
+    reason: "validation",
+    issues: [{
+      code: "TABLE_GENERATED_ID_INVALID",
+      message: "Generated structured-table IDs must be nonblank and unique"
+    }]
   };
 }
 

@@ -70,8 +70,10 @@ export type {
 export {
   createWorkbookSession,
   type CreateWorkbookSessionOptions,
+  type WorkbookCommand,
   type WorkbookCommandResult,
   type WorkbookDiagnosticEvent,
+  type WorkbookIdReservation,
   type WorkbookSession,
   type WorkbookSnapshot
 } from "./core/workbook/WorkbookSession";

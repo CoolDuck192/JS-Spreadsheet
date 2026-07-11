@@ -2,10 +2,16 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  WorkbookCommand,
+  WorkbookIdReservation,
   WorkbookTableRow as CoreWorkbookTableRow,
   WorkbookTableSession as CoreWorkbookTableSession,
   XlsxImportOptions
 } from "./core";
+import type {
+  WorkbookCommand as RootWorkbookCommand,
+  WorkbookIdReservation as RootWorkbookIdReservation
+} from "../index";
 import type {
   WorkbookTableRow as ReactWorkbookTableRow,
   WorkbookTableSession as ReactWorkbookTableSession
@@ -59,6 +65,23 @@ describe("public entrypoints", () => {
     expectTypeOf<XlsxImportOptions>().toMatchTypeOf<{
       tableKeys?: Readonly<Record<string, { columnName: string }>>;
     }>();
+  });
+
+  it("publishes serializable transaction id reservation types from core", () => {
+    const reservation = {
+      kind: "table",
+      occurrence: 0,
+      id: "table-1"
+    } satisfies WorkbookIdReservation;
+    const command = {
+      type: "transaction",
+      idReservations: [reservation],
+      commands: []
+    } satisfies WorkbookCommand;
+
+    expectTypeOf(command).toMatchTypeOf<WorkbookCommand>();
+    expectTypeOf<RootWorkbookCommand>().toEqualTypeOf<WorkbookCommand>();
+    expectTypeOf<RootWorkbookIdReservation>().toEqualTypeOf<WorkbookIdReservation>();
   });
 
   it("maps typed subpaths for legacy TypeScript resolution", async () => {

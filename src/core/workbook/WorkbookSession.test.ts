@@ -775,6 +775,120 @@ describe("WorkbookSession", () => {
     expect(session.getSnapshot()).toBe(before);
   });
 
+  it("rejects nested transaction id reservations before allocating ids", () => {
+    const createId = vi.fn((kind: IdKind) => `${kind}-host`);
+    const session = createWorkbookSession({ workbook: createBlankWorkbook(), createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      commands: [{
+        type: "transaction",
+        idReservations: [{ kind: "table", occurrence: 0, id: "table-1" }],
+        commands: []
+      }]
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(createId).not.toHaveBeenCalled();
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("maps per-kind reservation occurrences across multiple allocations", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    for (const [address, value] of [
+      ["A1", "First"], ["A2", "Ada"],
+      ["C1", "Second"], ["C2", "Grace"]
+    ] as const) {
+      workbook = setCellContent(workbook, sheetId, address, value);
+    }
+    const counts: Record<IdKind, number> = {
+      table: 0,
+      "table-column": 0,
+      "table-row": 0
+    };
+    const createId = vi.fn((kind: IdKind) => `${kind}-${++counts[kind]}`);
+    const session = createWorkbookSession({ workbook, createId });
+
+    expect(session.dispatch({
+      type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 0, id: "table-column-1" },
+        { kind: "table-column", occurrence: 1, id: "table-column-2" },
+        { kind: "table", occurrence: 0, id: "table-1" },
+        { kind: "table", occurrence: 1, id: "table-2" },
+        { kind: "table-row", occurrence: 0, id: "table-row-1" },
+        { kind: "table-row", occurrence: 1, id: "table-row-2" }
+      ],
+      commands: [
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+          name: "FirstTable",
+          headerRow: true,
+          totalsRow: false
+        },
+        {
+          type: "table.create",
+          sheetId,
+          range: { start: { row: 0, column: 2 }, end: { row: 1, column: 2 } },
+          name: "SecondTable",
+          headerRow: true,
+          totalsRow: false
+        },
+        {
+          type: "table.setStyle",
+          tableId: "table-2",
+          style: { theme: "TableStyleLight2" }
+        }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(createId).toHaveBeenCalledTimes(6);
+    expect(session.getSnapshot().workbook.tables).toMatchObject([
+      {
+        id: "table-1",
+        columns: [{ id: "table-column-1" }],
+        rowIds: ["table-row-1"]
+      },
+      {
+        id: "table-2",
+        columns: [{ id: "table-column-2" }],
+        rowIds: ["table-row-2"],
+        style: { theme: "TableStyleLight2" }
+      }
+    ]);
+  });
+
+  it("rejects an unreserved real id that collides with a future reservation", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "First");
+    workbook = setCellContent(workbook, sheetId, "B1", "Second");
+    workbook = setCellContent(workbook, sheetId, "A2", "Ada");
+    workbook = setCellContent(workbook, sheetId, "B2", "Grace");
+    const generatedIds = ["future-column", "future-column", "host-table", "host-row"];
+    const createId = vi.fn(() => generatedIds.shift() ?? "unexpected-id");
+    const session = createWorkbookSession({ workbook, createId });
+    const before = session.getSnapshot();
+
+    expect(session.dispatch({
+      type: "transaction",
+      idReservations: [
+        { kind: "table-column", occurrence: 1, id: "future-column" }
+      ],
+      commands: [{
+        type: "table.create",
+        sheetId,
+        range: { start: { row: 0, column: 0 }, end: { row: 1, column: 1 } },
+        name: "People",
+        headerRow: true,
+        totalsRow: false
+      }]
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(createId).toHaveBeenCalledTimes(4);
+    expect(session.getSnapshot()).toBe(before);
+  });
+
   it("semantic-preflights a whole transaction before consuming host ids", () => {
     const createId = vi.fn(() => "table-column-host");
     const session = createWorkbookSession({ workbook: structuredWorkbook(), createId });

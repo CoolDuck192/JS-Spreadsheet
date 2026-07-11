@@ -71,7 +71,7 @@ import {
 import { parseCellInput } from "../values/parseCellInput";
 import { validateCellCandidate } from "../../lib/validation";
 import type { TableIssue } from "../commands/types";
-import { createRandomId, type IdGenerator } from "../ids";
+import { createRandomId, type IdGenerator, type IdKind } from "../ids";
 import {
   getStructuredTableAtCell,
   getStructuredTableBodyRange,
@@ -89,8 +89,29 @@ export type SerializableRichClipboardRange = {
   readonly cells: readonly (readonly RichClipboardCell[])[];
 };
 
+/**
+ * Declares an exact ID expected from the session allocator during one outer
+ * transaction. `occurrence` is zero-based independently for each ID kind and
+ * includes allocations made by nested child commands. Reservations belong on
+ * the dispatched outer transaction only; the real allocator output must match.
+ *
+ * Explicit reservations are required for commands that refer to an ID created
+ * earlier in the same transaction because an opaque stateful allocator cannot
+ * be predicted or rewound safely during semantic preflight.
+ */
+export type WorkbookIdReservation = Readonly<{
+  kind: IdKind;
+  occurrence: number;
+  id: string;
+}>;
+
 export type WorkbookCommand =
-  | { type: "transaction"; commands: readonly WorkbookCommand[] }
+  | {
+      type: "transaction";
+      commands: readonly WorkbookCommand[];
+      /** Exact generated IDs needed by later children in this transaction. */
+      idReservations?: readonly WorkbookIdReservation[];
+    }
   | { type: "selection.set"; selection: CellRange }
   | { type: "cell.set"; sheetId: string; address: string; input: string }
   | { type: "cell.comment.set"; sheetId: string; address: string; comment: string | null }
