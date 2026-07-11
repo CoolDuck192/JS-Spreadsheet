@@ -59,7 +59,14 @@ import {
   Upload,
   WrapText
 } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject
+} from "react";
 import type { BorderPreset, CellFormat, SelectionFormatSummary } from "../types";
 import type { AutoFunctionName } from "../lib/autoSum";
 import type { WorkbookFeatureConfiguration } from "../App";
@@ -160,6 +167,7 @@ type ToolbarProps = {
   onExport: () => void;
   onImportXlsx: () => void;
   onImportGoogleSheet: () => void;
+  googleSheetsImportButtonRef: RefObject<HTMLButtonElement | null>;
   onExportXlsx: () => void;
   onPrint: () => void;
   onUndo: () => void;
@@ -194,7 +202,8 @@ type ToolbarProps = {
   onRemoveDuplicates: () => void;
   onInsertRows: () => void;
   onDeleteRows: () => void;
-  onInsertColumns: () => void;
+  onInsertColumnsLeft: () => void;
+  onInsertColumnsRight: () => void;
   onDeleteColumns: () => void;
   onAutoFitRows: () => void;
   onAutoFitColumns: () => void;
@@ -395,7 +404,13 @@ function WorkbookGroup(props: ToolbarProps) {
         </>
       ) : null}
       {props.features?.googleSheets !== false ? (
-        <ToolbarButton label="Link Google Sheet" onClick={props.onImportGoogleSheet} icon={<Cloud />} />
+        <ToolbarButton
+          label="Import Google Sheet"
+          onClick={props.onImportGoogleSheet}
+          icon={<Cloud />}
+          buttonRef={props.googleSheetsImportButtonRef}
+          additionalClassName="google-sheets-import-trigger"
+        />
       ) : null}
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
     </ToolbarGroup>
@@ -549,7 +564,16 @@ function CellsGroup(props: ToolbarProps) {
       <ToolbarButton label="Unmerge cells" onClick={props.onUnmergeCells} icon={<TableCellsSplit />} compact />
       <ToolbarButton label="Insert row above" onClick={props.onInsertRows} icon={<Rows3 />} compact />
       <ToolbarButton label="Delete row" onClick={props.onDeleteRows} icon={<Trash2 />} compact />
-      <ToolbarButton label="Insert column left" onClick={props.onInsertColumns} icon={<Columns3 />} compact />
+      <SplitButton
+        label="Insert columns"
+        primaryAriaLabel="Insert column left"
+        icon={<Columns3 />}
+        onPrimary={props.onInsertColumnsLeft}
+        items={[
+          { label: "Insert column left", onSelect: props.onInsertColumnsLeft },
+          { label: "Insert column right", onSelect: props.onInsertColumnsRight }
+        ]}
+      />
       <ToolbarButton label="Delete column" onClick={props.onDeleteColumns} icon={<Trash2 />} compact />
       <ToolbarButton label="Auto-fit rows" onClick={props.onAutoFitRows} icon={<Rows3 />} compact />
       <ToolbarButton label="Auto-fit columns" onClick={props.onAutoFitColumns} icon={<Columns3 />} compact />
@@ -869,7 +893,9 @@ function ToolbarButton({
   pressed,
   expanded,
   shortcut,
-  compact = false
+  compact = false,
+  buttonRef,
+  additionalClassName
 }: {
   label: string;
   onClick: () => void;
@@ -882,6 +908,8 @@ function ToolbarButton({
   /** Shown in the tooltip and exposed via aria-keyshortcuts. */
   shortcut?: string;
   compact?: boolean;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+  additionalClassName?: string;
 }) {
   const isActive = pressed === true || expanded === true;
   const isMixed = pressed === "mixed";
@@ -889,13 +917,15 @@ function ToolbarButton({
     "toolbar-button",
     isActive ? "active-toolbar-button" : "",
     isMixed ? "mixed-toolbar-button" : "",
-    compact ? "compact-toolbar-button" : ""
+    compact ? "compact-toolbar-button" : "",
+    additionalClassName
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={className}
       aria-label={label}
@@ -929,12 +959,14 @@ function ariaKeyshortcuts(shortcut: string): string {
 
 function SplitButton({
   label,
+  primaryAriaLabel,
   icon,
   onPrimary,
   items,
   disabled = false
 }: {
   label: string;
+  primaryAriaLabel?: string;
   icon: ReactNode;
   onPrimary: () => void;
   items: Array<{ label: string; onSelect: () => void }>;
@@ -1023,7 +1055,7 @@ function SplitButton({
       <button
         type="button"
         className="toolbar-button compact-toolbar-button split-button-primary"
-        aria-label={label}
+        aria-label={primaryAriaLabel ?? label}
         onClick={() => {
           setOpen(false);
           onPrimary();

@@ -12,6 +12,8 @@ import {
   setSheetProtection
 } from "../src/lib/workbook";
 
+const EXTERNAL_LAN_ORIGIN = "http://192.168.6.232:4173";
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
 });
@@ -31,6 +33,194 @@ test("edits cells, recalculates formulas, and manages sheets", async ({ page }) 
   await expect(page.getByRole("tab", { name: "Sheet2", exact: true })).toBeVisible();
   await openRibbonTab(page, "File");
   await expect(page.getByRole("button", { name: "Export CSV", exact: true })).toBeVisible();
+});
+
+test("keeps a newly added sheet visible and focused in the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Add sheet", exact: true }).click();
+
+  const tab = page.getByRole("tab", { name: "Sheet2", exact: true });
+  await expect(tab).toBeVisible();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).toBeFocused();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Added Sheet2");
+
+  const tabListBottom = await page
+    .getByRole("tablist", { name: "Sheet tabs", exact: true })
+    .evaluate((node) => node.getBoundingClientRect().bottom);
+  expect(tabListBottom).toBeLessThanOrEqual(800);
+});
+
+test("keeps a newly added sheet tab inside a narrow viewport", async ({ page }) => {
+  const viewport = { width: 390, height: 844 };
+  await page.setViewportSize(viewport);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Add sheet", exact: true }).click();
+
+  const tab = page.getByRole("tab", { name: "Sheet2", exact: true });
+  await expect(tab).toBeVisible();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).toBeFocused();
+  const tabBox = await tab.boundingBox();
+  const tabListBox = await page
+    .getByRole("tablist", { name: "Sheet tabs", exact: true })
+    .boundingBox();
+  expect(tabBox).not.toBeNull();
+  expect(tabListBox).not.toBeNull();
+  expect(tabBox!.x).toBeGreaterThanOrEqual(0);
+  expect(tabBox!.x + tabBox!.width).toBeLessThanOrEqual(viewport.width);
+  expect(tabListBox!.y + tabListBox!.height).toBeLessThanOrEqual(viewport.height);
+});
+
+test("keeps an embedded spreadsheet inside its fixed host", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/embed");
+
+  const host = page.getByTestId("embedding-host");
+  const spreadsheet = page.locator('[data-js-spreadsheet-root="workbook"]');
+  const hostBox = await host.boundingBox();
+  const spreadsheetBox = await spreadsheet.boundingBox();
+  expect(hostBox).not.toBeNull();
+  expect(spreadsheetBox).not.toBeNull();
+  expect(hostBox!.width).toBeGreaterThan(0);
+  expect(hostBox!.height).toBeGreaterThan(0);
+  expect(spreadsheetBox!.width).toBeGreaterThan(0);
+  expect(spreadsheetBox!.height).toBeGreaterThan(0);
+  expect(spreadsheetBox!.width).toBeLessThanOrEqual(hostBox!.width);
+  expect(spreadsheetBox!.height).toBeLessThanOrEqual(hostBox!.height);
+});
+
+test("expands a structured table at its right and left column boundaries", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("gridcell", { name: "A1", exact: true }).click();
+  await pasteGridData(page, "Region\tSales\nWest\t10\nEast\t8");
+  await selectRange(page, "A1 Region", "B3 8");
+  await openRibbonTab(page, "Insert");
+  await page.getByRole("button", { name: "Table", exact: true }).click();
+
+  await expect(page.getByRole("tab", { name: "Table", exact: true })).toBeVisible();
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:B3");
+
+  await page.getByRole("gridcell", { name: "B2 10", exact: true }).click();
+  await openRibbonTab(page, "Home");
+  await page.getByRole("button", { name: "Insert columns options", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Insert column right", exact: true }).click();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column right");
+  const rightHeader = page.getByRole("gridcell", { name: "C1 Column3", exact: true });
+  await expect(rightHeader).toHaveAttribute("data-structured-table-role", "header");
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:C3");
+
+  await page.getByRole("columnheader", { name: "Column A", exact: true }).click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Column A context menu", exact: true })
+    .getByRole("menuitem", { name: "Insert column left", exact: true })
+    .click();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column left");
+  const leftHeader = page.getByRole("gridcell", { name: "A1 Column1", exact: true });
+  await expect(leftHeader).toHaveAttribute("data-structured-table-role", "header");
+  await expect(page.getByRole("gridcell", { name: "B1 Region", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "C1 Sales", exact: true })).toBeVisible();
+  await expect(page.getByRole("gridcell", { name: "D1 Column3", exact: true })).toBeVisible();
+  await openRibbonTab(page, "Table");
+  await expect(page.getByLabel("Table range", { exact: true })).toHaveValue("A1:D3");
+});
+
+test("opens the column header menu from the keyboard on a narrow screen", async ({ page }) => {
+  const viewport = { width: 390, height: 844 };
+  await page.setViewportSize(viewport);
+  await page.goto("/");
+
+  const header = page.getByRole("columnheader", { name: "Column B", exact: true });
+  await header.focus();
+  await expect(header).toBeFocused();
+  await page.keyboard.press("Shift+F10");
+
+  const menu = page.getByRole("menu", { name: "Column B context menu", exact: true });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Insert column left", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Insert column right", exact: true })).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewport.width);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(viewport.height);
+
+  await menu.getByRole("menuitem", { name: "Insert column right", exact: true }).click();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column right");
+});
+
+test("explains Google setup on the LAN IP instead of appearing inert", async ({ page }) => {
+  test.skip(
+    process.env.E2E_BASE_URL?.trim() !== EXTERNAL_LAN_ORIGIN,
+    `requires E2E_BASE_URL=${EXTERNAL_LAN_ORIGIN}`
+  );
+  await page.goto("/");
+  await openRibbonTab(page, "File");
+  const importButton = page.getByRole("button", { name: "Import Google Sheet", exact: true });
+  await importButton.click();
+
+  const dialog = page.getByRole("dialog", { name: "Import Google Sheet", exact: true });
+  await expect(dialog).toContainText(EXTERNAL_LAN_ORIGIN);
+  await expect(dialog).toContainText(/HTTPS DNS origin/i);
+  await expect(dialog).toContainText(/host.*token provider/i);
+  await expect(dialog).toContainText(/replaces the current workbook/i);
+  await expect(dialog).not.toContainText(/localhost/i);
+  await expect(page.getByLabel("Google OAuth client ID", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(importButton).toBeFocused();
+  expect(
+    await page.evaluate(() => window.localStorage.getItem("javascript-spreadsheet.google-client-id.v1"))
+  ).toBeNull();
+});
+
+test("keeps the Google setup dialog internally scrollable at 200% zoom", async ({ page }) => {
+  test.skip(
+    process.env.E2E_BASE_URL?.trim() !== EXTERNAL_LAN_ORIGIN,
+    `requires E2E_BASE_URL=${EXTERNAL_LAN_ORIGIN}`
+  );
+  // Chromium exposes browser zoom as half the CSS-pixel viewport at 200%.
+  // Keep the physical 390x844 screen while emulating its 195x422 CSS viewport.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 195,
+    height: 422,
+    screenWidth: 390,
+    screenHeight: 844,
+    deviceScaleFactor: 2,
+    mobile: false
+  });
+  await page.goto("/");
+  await openRibbonTab(page, "File");
+  await page.getByRole("button", { name: "Import Google Sheet", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Import Google Sheet", exact: true });
+  const body = dialog.locator(".google-sheets-import-body");
+  await expect(dialog).toContainText(/HTTPS DNS origin/i);
+  await expect(body).toBeVisible();
+  const scrollState = await body.evaluate((node) => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight,
+    overflowY: getComputedStyle(node).overflowY
+  }));
+  expect(scrollState.overflowY).toBe("auto");
+  expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+  await body.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  expect(await body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeVisible();
+  await cdp.detach();
 });
 
 test("prints the workbook with worksheet chrome", async ({ page }) => {
@@ -266,7 +456,7 @@ test("toggles sheet tabs while preserving sheet creation", async ({ page }) => {
   await page.getByRole("button", { name: "Add sheet", exact: true }).click();
 
   await expect(tabs).toHaveCount(0);
-  await expect(page.getByLabel("Status", { exact: true })).toContainText("Added sheet");
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Added Sheet2");
 
   await openRibbonTab(page, "View");
   await page.getByRole("button", { name: "Sheet tabs", exact: true }).click();
@@ -1605,6 +1795,27 @@ test("inserts and deletes rows and columns from the context menu", async ({ page
   await page.getByRole("gridcell", { name: "B1", exact: true }).click({ button: "right" });
   await page.getByRole("menu", { name: "Cell context menu", exact: true }).getByRole("menuitem", { name: "Delete column", exact: true }).click();
   await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
+});
+
+test("inserts a blank column right from the cell context menu", async ({ page }) => {
+  await page.goto("/");
+
+  await editCell(page, "A1", "Name");
+  await editCell(page, "B1", "Amount");
+  await editCell(page, "C1", "Total");
+
+  await page.getByRole("gridcell", { name: "B1 Amount", exact: true }).click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "Cell context menu", exact: true })
+    .getByRole("menuitem", { name: "Insert column right", exact: true })
+    .click();
+
+  await expect(page.getByRole("gridcell", { name: "B1 Amount", exact: true })).toBeVisible();
+  const insertedCell = page.getByRole("gridcell", { name: "C1", exact: true });
+  await expect(insertedCell).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Name box", { exact: true })).toHaveValue("C1");
+  await expect(page.getByRole("gridcell", { name: "D1 Total", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Status", { exact: true })).toContainText("Inserted 1 column right");
 });
 
 test("applies and clears cell borders", async ({ page }) => {

@@ -1,12 +1,41 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { Grid } from "./Grid";
+import { Grid, type GridScrollApi } from "./Grid";
 import { formatCellAddress } from "../lib/addressing";
 import { createFormulaEngine } from "../lib/formulaEngine";
 import type { CellRange, SheetModel, WorkbookModel } from "../types";
 
 describe("Grid", () => {
+  it("focuses a spreadsheet cell through the numeric scroll API", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    let scrollApi: GridScrollApi | null = null;
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={() => undefined}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onRegisterScrollApi={(api) => {
+          scrollApi = api;
+        }}
+      />
+    );
+
+    act(() => scrollApi?.focusCell(0, 1));
+
+    expect(screen.getByRole("gridcell", { name: "B1" })).toBeVisible();
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveFocus();
+  });
+
   it("renders the spreadsheet through the shared viewport kernel", () => {
     const { sheet, workbook } = createFixtureSheet();
     render(
@@ -231,6 +260,78 @@ describe("Grid", () => {
       { start: { row: 2, column: 0 }, end: { row: 2, column: 2 } },
       { start: { row: 0, column: 0 }, end: { row: 3, column: 2 } }
     ]);
+  });
+
+  it("opens a column-header context menu without collapsing an enclosing whole-column selection", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    sheet.columnCount = 4;
+    const selections: CellRange[] = [];
+    const contexts: Array<{ column: number; x: number; y: number; opener: HTMLElement }> = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 3, column: 2 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+        onColumnHeaderContextMenu={(event) => contexts.push(event)}
+      />
+    );
+
+    const columnB = screen.getByRole("columnheader", { name: "Column B" });
+    fireEvent.contextMenu(columnB, { clientX: 240, clientY: 60 });
+    expect(contexts).toEqual([{ column: 1, x: 240, y: 60, opener: columnB }]);
+    expect(selections).toEqual([]);
+
+    fireEvent.keyDown(columnB, { key: "F10", shiftKey: true });
+    fireEvent.keyDown(columnB, { key: "ContextMenu" });
+    expect(contexts).toHaveLength(3);
+    expect(selections).toEqual([]);
+
+    const columnD = screen.getByRole("columnheader", { name: "Column D" });
+    fireEvent.contextMenu(columnD, { clientX: 432, clientY: 60 });
+    expect(selections).toEqual([
+      { start: { row: 0, column: 3 }, end: { row: 3, column: 3 } }
+    ]);
+    expect(contexts.at(-1)).toEqual({ column: 3, x: 432, y: 60, opener: columnD });
+  });
+
+  it("leaves native column-header context behavior untouched when no callback is supplied", () => {
+    const { sheet, workbook } = createFixtureSheet();
+    const selections: CellRange[] = [];
+
+    render(
+      <Grid
+        sheet={sheet}
+        formulaEngine={createFormulaEngine(workbook)}
+        selection={{ start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }}
+        editingCell={null}
+        getCellFormat={() => undefined}
+        onSelectionChange={(range) => selections.push(range)}
+        onStartEdit={() => undefined}
+        onEditValueChange={() => undefined}
+        onCommitEdit={() => undefined}
+        onCancelEdit={() => undefined}
+        onPasteText={() => undefined}
+        onKeyCommand={() => undefined}
+      />
+    );
+
+    const columnB = screen.getByRole("columnheader", { name: "Column B" });
+    const mouseNotCanceled = fireEvent.contextMenu(columnB, { clientX: 240, clientY: 60 });
+    const shiftF10NotCanceled = fireEvent.keyDown(columnB, { key: "F10", shiftKey: true });
+    const contextMenuKeyNotCanceled = fireEvent.keyDown(columnB, { key: "ContextMenu" });
+
+    expect([mouseNotCanceled, shiftF10NotCanceled, contextMenuKeyNotCanceled]).toEqual([true, true, true]);
+    expect(selections).toEqual([]);
   });
 
   it("does not render hidden rows or columns", () => {

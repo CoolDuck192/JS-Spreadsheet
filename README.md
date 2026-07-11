@@ -20,7 +20,7 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 - CSV and XLSX import/export, including common cell styling, data validation rules, conditional formats, protected sheets with unlocked cells, freeze panes, named ranges, AutoFilter ranges, active sheet tabs, hidden sheet tabs, blank sheets, and workbook structure such as dimensions, merges, comments, hyperlinks, and hidden rows/columns. Shared formulas are translated per cell on import, and date cells import as real dates.
 - Drag-and-drop import: drop an `.xlsx` or `.csv` file anywhere on the app to load it.
 - Pivot drill-down: double-click any pivot value or total cell to open a `Details` sheet with the source rows behind that number, like Excel's Show Details.
-- Google Sheets connector: link a Google Sheet from Data → Link Google Sheet (see setup below).
+- Google Sheets connector: one-time, read-only workbook import from File → Import Google Sheet (see setup below).
 - Browser local-storage persistence with startup recovery for stale saved sheet state, debounced autosave, and graceful handling of full browser storage.
 - Excel-sized grid limits (1,048,576 rows × 16,384 columns) with an incremental formula engine: edits apply as cell-level diffs instead of engine rebuilds, so large sheets stay responsive.
 
@@ -69,14 +69,14 @@ or use the machine IP and port directly:
 http://<machine-ip>:5173
 ```
 
-When handing off a manually started server, report the machine IP and port, not
-only a `127.0.0.1` URL.
+When handing off a manually started server, report the machine IP, port, and
+serving process so another reviewer can open the same instance.
 
 Build and preview a production bundle:
 
 ```bash
 corepack pnpm run build
-corepack pnpm run preview   # serves the build on all interfaces, port 4173
+corepack pnpm exec vite preview --host 0.0.0.0 --port 4173 --strictPort
 ```
 
 > **Testing with large datasets?** Use the production preview. The dev server
@@ -90,11 +90,13 @@ Run the test suite:
 corepack pnpm test
 ```
 
-Run browser end-to-end tests:
+Run browser end-to-end tests. With the production preview above still running,
+the external base URL makes Playwright reuse that one server instead of starting
+its development server:
 
 ```bash
 corepack pnpm exec playwright install
-corepack pnpm run test:e2e
+E2E_BASE_URL=http://192.168.6.232:4173 corepack pnpm run test:e2e
 ```
 
 ## Project Docs
@@ -117,18 +119,26 @@ The engine is configured for Excel parity: 1,048,576 × 16,384 grid limits, ISO 
 
 ## Google Sheets Connector
 
-Linking a Google Sheet needs a Google OAuth client id (the app is a static SPA, so no server or client secret is involved):
+Choose **File → Import Google Sheet**. This is a one-time, read-only import that
+replaces the current workbook through normal workbook history; it does not
+create a live link, refresh job, write-back path, or synchronization state.
 
-1. In [Google Cloud Console](https://console.cloud.google.com/), create a project, enable the **Google Sheets API**, and create an **OAuth client ID** of type *Web application* with your app's origin (e.g. `http://127.0.0.1:5173`) in *Authorized JavaScript origins*.
-2. Put the client id in `.env.local`:
+A fresh standalone clone opens an in-app setup dialog when no client ID is
+configured. Create a Web application OAuth client in Google Cloud, enable the
+Google Sheets API, and register the app's exact eligible HTTPS DNS origin under
+Authorized JavaScript origins. A raw LAN IP is intentionally reported as
+incompatible with built-in browser OAuth; expose the app through an HTTPS DNS
+name or have the host provide a token provider. Only the public client ID is
+saved, under `javascript-spreadsheet.google-client-id.v1`; client secrets and
+access tokens are never stored by this workflow.
 
-   ```bash
-   VITE_GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
-   ```
-
-3. Restart the dev server, then use **Data → Link Google Sheet** and paste a sheet URL. The user signs in with their own Google account; formulas are imported as formulas (`valueRenderOption=FORMULA`).
-
-Embedders can supply their own token source instead by implementing the `TokenProvider` interface in `src/lib/googleAuth.ts`.
+Embedded applications configure `services.googleSheets` with a host
+`tokenProvider`, or with `clientId` plus an optional `tokenProviderFactory`.
+They may explicitly provide `clientIdStorage`; otherwise embedded client-ID
+storage is disabled. Set `features={{ googleSheets: false }}` to remove the
+command. See [docs/google-sheets-connector.md](docs/google-sheets-connector.md)
+and [docs/embedding.md](docs/embedding.md) for CSP, iframe popup, and service
+configuration details.
 
 ## Embedding
 

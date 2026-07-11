@@ -17,6 +17,7 @@ describe("controlled Spreadsheet", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    localStorage.clear();
   });
 
   it("renders host rerenders and acknowledges a user workbook edit", async () => {
@@ -93,6 +94,7 @@ describe("controlled Spreadsheet", () => {
 
   it("applies root-scoped identity, feature visibility, and theme precedence", () => {
     const style = {
+      height: 480,
       minHeight: 200,
       "--js-spreadsheet-accent": "orange"
     } as CSSProperties;
@@ -107,6 +109,7 @@ describe("controlled Spreadsheet", () => {
     );
     const root = container.querySelector<HTMLElement>("[data-js-spreadsheet-root='workbook']")!;
     expect(root).toHaveClass("js-spreadsheet-root", "js-spreadsheet-workbook", "host-sheet");
+    expect(root).toHaveStyle({ height: "480px", minHeight: "200px" });
     expect(root.style.getPropertyValue("--js-spreadsheet-accent")).toBe("orange");
     expect(root.style.getPropertyValue("--js-spreadsheet-surface")).toBe("ivory");
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
@@ -159,28 +162,101 @@ describe("controlled Spreadsheet", () => {
     expect(onDiagnostic).toHaveBeenCalled();
   });
 
-  it("caches an injected Google token provider per component instance", async () => {
-    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "test-client-id");
-    vi.spyOn(window, "prompt").mockReturnValue("12345678901234567890");
-    const googleTokenProviderFactory = vi.fn(() => ({
-      getAccessToken: vi.fn().mockRejectedValue(new Error("expected test rejection"))
+  it("resolves direct, nested, and deprecated Google providers in order", async () => {
+    const direct = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("direct")
+    };
+    const nestedFactory = vi.fn(() => ({
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("nested")
     }));
-    const user = userEvent.setup();
+    const deprecatedFactory = vi.fn(() => ({
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("deprecated")
+    }));
+    const clientId = "123-abc.apps.googleusercontent.com";
 
-    const first = render(
-      <Spreadsheet storage={false} services={{ googleTokenProviderFactory }} />
+    const directView = render(
+      <Spreadsheet
+        storage={false}
+        services={{
+          googleSheets: { clientId, tokenProvider: direct, tokenProviderFactory: nestedFactory },
+          googleTokenProviderFactory: deprecatedFactory
+        }}
+      />
     );
-    await user.click(screen.getByRole("tab", { name: "File" }));
-    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
-    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent("Google Sheets import failed"));
-    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
-    await waitFor(() => expect(googleTokenProviderFactory).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(direct.prepare).toHaveBeenCalledTimes(1));
+    expect(nestedFactory).not.toHaveBeenCalled();
+    expect(deprecatedFactory).not.toHaveBeenCalled();
+    directView.unmount();
+
+    const nestedView = render(
+      <Spreadsheet
+        storage={false}
+        services={{
+          googleSheets: { clientId, tokenProviderFactory: nestedFactory },
+          googleTokenProviderFactory: deprecatedFactory
+        }}
+      />
+    );
+    await waitFor(() => expect(nestedFactory).toHaveBeenCalledTimes(1));
+    expect(deprecatedFactory).not.toHaveBeenCalled();
+    nestedView.unmount();
+
+    render(
+      <Spreadsheet
+        storage={false}
+        services={{ googleSheets: { clientId }, googleTokenProviderFactory: deprecatedFactory }}
+      />
+    );
+    await waitFor(() => expect(deprecatedFactory).toHaveBeenCalledTimes(1));
+  });
+
+  it("caches a Google provider once per Spreadsheet instance", async () => {
+    const clientId = "123-abc.apps.googleusercontent.com";
+    const factory = vi.fn(() => ({
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("token")
+    }));
+    const first = render(
+      <Spreadsheet
+        storage={false}
+        services={{ googleSheets: { clientId, tokenProviderFactory: factory } }}
+      />
+    );
+    await waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+    first.rerender(
+      <Spreadsheet
+        storage={false}
+        services={{ googleSheets: { clientId, tokenProviderFactory: factory } }}
+      />
+    );
+    await waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
 
     first.unmount();
-    render(<Spreadsheet storage={false} services={{ googleTokenProviderFactory }} />);
+    render(
+      <Spreadsheet
+        storage={false}
+        services={{ googleSheets: { clientId, tokenProviderFactory: factory } }}
+      />
+    );
+    await waitFor(() => expect(factory).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps embedded Google setup storage-neutral unless the host opts in", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
     await user.click(screen.getByRole("tab", { name: "File" }));
-    await user.click(screen.getByRole("button", { name: "Link Google Sheet" }));
-    await waitFor(() => expect(googleTokenProviderFactory).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+    await user.type(
+      screen.getByLabelText("Google OAuth client ID"),
+      "123-abc.apps.googleusercontent.com"
+    );
+    await user.click(screen.getByRole("button", { name: "Save and continue" }));
+
+    expect(localStorage.getItem("javascript-spreadsheet.google-client-id.v1")).toBeNull();
   });
 
   it("sanitizes invalid service registries and validates them once", async () => {
@@ -234,7 +310,7 @@ describe("controlled Spreadsheet", () => {
     expect(screen.queryByRole("button", { name: "Import XLSX" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Export CSV" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Export XLSX" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Link Google Sheet" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import Google Sheet" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("CSV file")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("XLSX file")).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Insert" }));

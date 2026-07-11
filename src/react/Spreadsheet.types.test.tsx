@@ -2,6 +2,12 @@ import type { CSSProperties } from "react";
 import { describe, expectTypeOf, it } from "vitest";
 import { createWorkbookSession } from "../core/workbook/WorkbookSession";
 import { createBlankWorkbook } from "../lib/workbook";
+import type {
+  GoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration,
+  SpreadsheetServices,
+  TokenProvider
+} from "../core/workbook/services";
 import { Spreadsheet, type SpreadsheetProps } from "./Spreadsheet";
 
 describe("Spreadsheet public ownership types", () => {
@@ -59,5 +65,26 @@ describe("Spreadsheet public ownership types", () => {
     void <Spreadsheet theme={{ neon: "lime" }} />;
 
     session.destroy();
+  });
+
+  it("accepts nested Google service contracts without browser storage by default", () => {
+    const provider: TokenProvider = {
+      getAccessToken: async () => "host-token"
+    };
+    const clientIdStorage: GoogleClientIdStorage = {
+      load: () => null,
+      save: () => {},
+      clear: () => {}
+    };
+    const googleSheets = {
+      clientId: "123-abc.apps.googleusercontent.com",
+      tokenProvider: provider,
+      tokenProviderFactory: () => provider,
+      clientIdStorage
+    } satisfies GoogleSheetsServiceConfiguration;
+    const services = { googleSheets } satisfies SpreadsheetServices;
+
+    expectTypeOf(services).toMatchTypeOf<SpreadsheetServices>();
+    void <Spreadsheet storage={false} services={services} />;
   });
 });

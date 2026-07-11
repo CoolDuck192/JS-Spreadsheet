@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
 } from "react";
 import { ChartPanel } from "./components/ChartPanel";
 import { CellContextMenu } from "./components/CellContextMenu";
+import { ColumnHeaderContextMenu } from "./components/ColumnHeaderContextMenu";
 import { ConditionalFormattingPanel } from "./components/ConditionalFormattingPanel";
 import { DataValidationPanel } from "./components/DataValidationPanel";
 import { FilterPanel } from "./components/FilterPanel";
@@ -17,6 +19,7 @@ import { FormulaAuditPanel, type FormulaAuditReference } from "./components/Form
 import { FormulaBar } from "./components/FormulaBar";
 import { FunctionLibraryPanel } from "./components/FunctionLibraryPanel";
 import { GoToPanel } from "./components/GoToPanel";
+import { GoogleSheetsImportDialog } from "./components/GoogleSheetsImportDialog";
 import { Grid, type CommitEditMove, type GridScrollApi } from "./components/Grid";
 import { NamedRangesPanel } from "./components/NamedRangesPanel";
 import { PivotPanel } from "./components/PivotPanel";
@@ -55,9 +58,8 @@ import { createChartData } from "./lib/charts";
 import { parseCsv, serializeCsv } from "./lib/csv";
 import { formatDisplayValue } from "./lib/displayFormat";
 import { summarizeDataValidationRules, type DataValidationSummary } from "./lib/dataValidationSummary";
-import { createBrowserTokenProvider, type TokenProvider } from "./lib/googleAuth";
-import { importWorkbookFromGoogleSheets } from "./lib/googleSheets";
 import { extractFormulaReferences } from "./lib/formulaReferences";
+import { GoogleSheetsError } from "./lib/googleErrors";
 import { getFormulaSuggestions, insertFormulaSuggestion } from "./lib/formulaSuggestions";
 import { createPivotTableWithDetails, type PivotConfig, type PivotDrillDownGrid } from "./lib/pivot";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
@@ -93,12 +95,15 @@ import {
 } from "./core/workbook/structuredTables";
 import { isStructuredTableRowVisible as isWorkbookStructuredTableRowVisible } from "./core/workbook/structuredTableFilter";
 import type {
+  GoogleSheetsServiceConfiguration,
   SpreadsheetServices,
   WorkbookExportArtifact,
   WorkbookExporter,
   WorkbookImporter
 } from "./core/workbook/services";
 import { useWorkbookSession } from "./react/useWorkbookSession";
+import { getDefaultBrowserGoogleClientIdStorage } from "./react/browserGoogleClientIdStorage";
+import { useGoogleSheetsImport } from "./react/useGoogleSheetsImport";
 import { WorkbookTableView } from "./react/workbook/WorkbookTableView";
 
 const INITIAL_SELECTION: CellRange = {
@@ -319,6 +324,12 @@ function SpreadsheetWorkbook({
   const [richClipboard, setRichClipboard] = useState<RichClipboardState | null>(null);
   const [formatPainter, setFormatPainter] = useState<FormatPainterState | null>(null);
   const [cellContextMenu, setCellContextMenu] = useState<{ address: string; x: number; y: number } | null>(null);
+  const [columnHeaderContextMenu, setColumnHeaderContextMenu] = useState<{
+    column: number;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(100);
   const [isDropTargetActive, setDropTargetActive] = useState(false);
   // Drill-down metadata for pivot sheets created this session, keyed by sheet id.
@@ -338,27 +349,48 @@ function SpreadsheetWorkbook({
   const xlsxInputRef = useRef<HTMLInputElement>(null);
   const gridScrollRef = useRef<HTMLDivElement>(null);
   const gridApiRef = useRef<GridScrollApi | null>(null);
-  const gridEditCommitInProgressRef = useRef(false);
-  const googleTokenProviderRef = useRef<{
-    factory: (clientId: string) => TokenProvider;
-    clientId: string;
-    provider: TokenProvider;
+  const pendingGridFocusRef = useRef<{
+    sheetId: string;
+    row: number;
+    column: number;
   } | null>(null);
+  const gridEditCommitInProgressRef = useRef(false);
+  const googleSheetsImportButtonRef = useRef<HTMLButtonElement>(null);
   const registerGridScrollApi = useCallback((api: GridScrollApi) => {
     gridApiRef.current = api;
   }, []);
 
-  function getComponentGoogleTokenProvider(clientId: string): TokenProvider {
-    const factory = services?.googleTokenProviderFactory ?? createBrowserTokenProvider;
-    const cached = googleTokenProviderRef.current;
-    if (cached?.factory === factory && cached.clientId === clientId) {
-      return cached.provider;
+  const handleGoogleSheetsImported = useCallback((imported: {
+    workbook: WorkbookModel;
+    spreadsheetTitle: string;
+  }) => {
+    const result = session.replaceWorkbook(imported.workbook, {
+      history: "preserve",
+      origin: "import"
+    });
+    if (result.status !== "committed") {
+      throw new GoogleSheetsError(
+        "unknown",
+        "The imported workbook could not replace the current workbook.",
+        true
+      );
     }
+    resetAfterWorkbookReplacement(`Imported ${imported.spreadsheetTitle}`);
+  }, [session]);
 
-    const provider = factory(clientId);
-    googleTokenProviderRef.current = { factory, clientId, provider };
-    return provider;
-  }
+  const googleSheetsImport = useGoogleSheetsImport({
+    configuration: services?.googleSheets,
+    deprecatedTokenProviderFactory: services?.googleTokenProviderFactory,
+    origin: typeof window === "undefined" ? "null" : window.location.origin,
+    onImported: handleGoogleSheetsImported,
+    onError(error) {
+      invokeHostCallback(onError, {
+        code: `service.google.${error.code}`,
+        message: error.message,
+        recoverable: error.recoverable
+      });
+    }
+  });
 
   const lastSuppliedEventSnapshot = useRef(sessionSnapshot);
   useEffect(() => {
@@ -401,6 +433,14 @@ function SpreadsheetWorkbook({
   const workbook = sessionSnapshot.workbook;
   const selection = sessionSnapshot.selection;
   const activeSheet = getActiveSheet(workbook);
+  useLayoutEffect(() => {
+    const pending = pendingGridFocusRef.current;
+    if (!pending || pending.sheetId !== activeSheet.id) {
+      return;
+    }
+    gridApiRef.current?.focusCell(pending.row, pending.column);
+    pendingGridFocusRef.current = null;
+  }, [activeSheet.id, sessionSnapshot.revision]);
   const activeTable = features?.structuredTables === false
     ? null
     : getStructuredTableForSelection(workbook, activeSheet.id, selection);
@@ -534,6 +574,19 @@ function SpreadsheetWorkbook({
 
   function setSelection(nextSelection: CellRange): WorkbookCommandResult {
     return dispatchCommand({ type: "selection.set", selection: nextSelection });
+  }
+
+  function dispatchHistory(command: "history.undo" | "history.redo", nextStatus: string) {
+    const result = dispatchCommand({ type: command }, nextStatus);
+    if (result.status === "committed" && result.changed) {
+      const next = session.getSnapshot();
+      pendingGridFocusRef.current = {
+        sheetId: next.workbook.activeSheetId,
+        row: next.selection.start.row,
+        column: next.selection.start.column
+      };
+    }
+    return result;
   }
 
   function closeFloatingPanels() {
@@ -1375,22 +1428,42 @@ function SpreadsheetWorkbook({
     }, `Deleted ${pluralize(count, "row")}`);
   }
 
-  function handleInsertColumns() {
+  function handleInsertColumns(direction: "left" | "right") {
     if (!ensureSheetStructureEditable()) {
       return;
     }
     const normalized = normalizeRange(selection);
     const count = normalized.end.column - normalized.start.column + 1;
-    dispatchCommand({
+    const index = direction === "left" ? normalized.start.column : normalized.end.column + 1;
+    const expandTableIds = boundaryTablesForColumnInsertion(
+      workbook,
+      activeSheet.id,
+      normalized,
+      index
+    );
+    const result = dispatchCommand({
       type: "transaction",
       commands: [
-        { type: "columns.insert", sheetId: activeSheet.id, index: normalized.start.column, count },
+        {
+          type: "columns.insert",
+          sheetId: activeSheet.id,
+          index,
+          count,
+          ...(expandTableIds.length === 0 ? {} : { expandTableIds })
+        },
         { type: "selection.set", selection: {
-          start: normalized.start,
-          end: { row: normalized.end.row, column: normalized.start.column + count - 1 }
+          start: { row: normalized.start.row, column: index },
+          end: { row: normalized.end.row, column: index + count - 1 }
         } }
       ]
-    }, `Inserted ${pluralize(count, "column")}`);
+    }, `Inserted ${pluralize(count, "column")} ${direction}`);
+    if (result.status === "committed" && result.changed) {
+      pendingGridFocusRef.current = {
+        sheetId: activeSheet.id,
+        row: normalized.start.row,
+        column: index
+      };
+    }
   }
 
   function handleDeleteColumns() {
@@ -1564,7 +1637,19 @@ function SpreadsheetWorkbook({
       setSelection({ start: { row: event.row, column: event.column }, end: { row: event.row, column: event.column } });
     }
     setEditingCell(null);
+    setColumnHeaderContextMenu(null);
     setCellContextMenu({ address: event.address, x: event.x, y: event.y });
+  }
+
+  function openColumnHeaderContextMenu(event: {
+    column: number;
+    x: number;
+    y: number;
+    opener: HTMLElement;
+  }) {
+    setEditingCell(null);
+    setCellContextMenu(null);
+    setColumnHeaderContextMenu(event);
   }
 
   function handleFillDown() {
@@ -2010,8 +2095,8 @@ function SpreadsheetWorkbook({
 
     if (isCommand && event.key.toLowerCase() === "z") {
       event.preventDefault();
-      dispatchCommand(
-        { type: event.shiftKey ? "history.redo" : "history.undo" },
+      dispatchHistory(
+        event.shiftKey ? "history.redo" : "history.undo",
         event.shiftKey ? "Redone" : "Undone"
       );
       return;
@@ -2019,7 +2104,7 @@ function SpreadsheetWorkbook({
 
     if (isCommand && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      dispatchCommand({ type: "history.redo" }, "Redone");
+      dispatchHistory("history.redo", "Redone");
       return;
     }
 
@@ -2237,8 +2322,11 @@ function SpreadsheetWorkbook({
         { type: "sheet.add" },
         { type: "selection.set", selection: INITIAL_SELECTION }
       ]
-    }, "Added sheet");
+    });
     if (result.status === "committed") {
+      const addedSheet = getActiveSheet(session.getSnapshot().workbook);
+      pendingGridFocusRef.current = { sheetId: addedSheet.id, row: 0, column: 0 };
+      setStatus(`Added ${addedSheet.name}`);
       setRichClipboard(null);
       setFormatPainter(null);
       setPivotPanelOpen(false);
@@ -2451,36 +2539,6 @@ function SpreadsheetWorkbook({
         }
       })
       .catch(() => reportServiceFailure("service.import.xlsx.failed", "XLSX import failed"));
-  }
-
-  function handleImportGoogleSheet() {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
-    if (!clientId) {
-      setStatus("Set VITE_GOOGLE_CLIENT_ID (a Google OAuth client id) to link Google Sheets");
-      return;
-    }
-
-    const input = window.prompt("Paste a Google Sheets URL (or spreadsheet id):");
-    if (!input) {
-      return;
-    }
-
-    let tokenProvider: TokenProvider;
-    try {
-      tokenProvider = getComponentGoogleTokenProvider(clientId);
-    } catch {
-      reportServiceFailure("service.google.auth.failed", "Google Sheets connection failed");
-      return;
-    }
-    setStatus("Connecting to Google Sheets…");
-    importWorkbookFromGoogleSheets(input, tokenProvider)
-      .then(({ workbook: nextWorkbook, spreadsheetTitle }) => {
-        const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
-        if (result.status === "committed") {
-          resetAfterWorkbookReplacement(`Linked ${spreadsheetTitle}`);
-        }
-      })
-      .catch(() => reportServiceFailure("service.google.import.failed", "Google Sheets import failed"));
   }
 
   function handleExportXlsx() {
@@ -2732,14 +2790,15 @@ function SpreadsheetWorkbook({
           onImport={() => fileInputRef.current?.click()}
           onExport={handleExportCsv}
           onImportXlsx={() => xlsxInputRef.current?.click()}
-          onImportGoogleSheet={handleImportGoogleSheet}
+          onImportGoogleSheet={googleSheetsImport.openDialog}
+          googleSheetsImportButtonRef={googleSheetsImportButtonRef}
           onExportXlsx={handleExportXlsx}
           onPrint={handlePrintWorkbook}
           onUndo={() => {
-            dispatchCommand({ type: "history.undo" }, "Undone");
+            dispatchHistory("history.undo", "Undone");
           }}
           onRedo={() => {
-            dispatchCommand({ type: "history.redo" }, "Redone");
+            dispatchHistory("history.redo", "Redone");
           }}
           onClear={handleClearSelection}
           canPasteSpecial={Boolean(richClipboard)}
@@ -2779,7 +2838,8 @@ function SpreadsheetWorkbook({
           onRemoveDuplicates={handleRemoveDuplicates}
           onInsertRows={handleInsertRows}
           onDeleteRows={handleDeleteRows}
-          onInsertColumns={handleInsertColumns}
+          onInsertColumnsLeft={() => handleInsertColumns("left")}
+          onInsertColumnsRight={() => handleInsertColumns("right")}
           onDeleteColumns={handleDeleteColumns}
           onAutoFitRows={handleAutoFitRows}
           onAutoFitColumns={handleAutoFitColumns}
@@ -3181,6 +3241,7 @@ function SpreadsheetWorkbook({
           onAutoFill={handleAutoFill}
           onAutoFillDoubleClick={handleAutoFillDoubleClick}
           onCellContextMenu={openCellContextMenu}
+          onColumnHeaderContextMenu={openColumnHeaderContextMenu}
           onAutoFilterColumn={applyAutoFilterColumn}
           onClearAutoFilterColumn={clearAutoFilterColumn}
           onSortAutoFilterColumn={sortAutoFilterColumn}
@@ -3215,10 +3276,23 @@ function SpreadsheetWorkbook({
             }
             onInsertRow={handleInsertRows}
             onDeleteRow={handleDeleteRows}
-            onInsertColumn={handleInsertColumns}
+            onInsertColumnLeft={() => handleInsertColumns("left")}
+            onInsertColumnRight={() => handleInsertColumns("right")}
             onDeleteColumn={handleDeleteColumns}
             onComment={handleComment}
             onLink={handleLink}
+          />
+        ) : null}
+        {columnHeaderContextMenu ? (
+          <ColumnHeaderContextMenu
+            label={columnIndexToName(columnHeaderContextMenu.column)}
+            x={columnHeaderContextMenu.x}
+            y={columnHeaderContextMenu.y}
+            opener={columnHeaderContextMenu.opener}
+            onClose={() => setColumnHeaderContextMenu(null)}
+            onInsertLeft={() => handleInsertColumns("left")}
+            onInsertRight={() => handleInsertColumns("right")}
+            onDelete={handleDeleteColumns}
           />
         ) : null}
         {openTableId ? (
@@ -3250,6 +3324,10 @@ function SpreadsheetWorkbook({
             onAdd={handleAddSheet}
           />
         ) : null}
+        <GoogleSheetsImportDialog
+          controller={googleSheetsImport}
+          opener={googleSheetsImportButtonRef}
+        />
         <StatusBar
           status={status}
           activeAddress={activeAddress}
@@ -3268,7 +3346,18 @@ function SpreadsheetWorkbook({
 }
 
 export default function App() {
-  return <Spreadsheet />;
+  const standaloneGoogleSheets = {
+    clientId: import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined,
+    clientIdStorage: getDefaultBrowserGoogleClientIdStorage()
+  } satisfies GoogleSheetsServiceConfiguration;
+
+  return (
+    <Spreadsheet
+      className="js-spreadsheet-standalone"
+      style={{ height: "100dvh", minHeight: 0 }}
+      services={{ googleSheets: standaloneGoogleSheets }}
+    />
+  );
 }
 
 function projectStructuredTableCell(workbook: WorkbookModel, sheetId: string, address: string) {
@@ -3737,6 +3826,22 @@ function rangesIntersect(left: CellRange, right: CellRange): boolean {
     normalizedLeft.start.column <= normalizedRight.end.column &&
     normalizedLeft.end.column >= normalizedRight.start.column
   );
+}
+
+function boundaryTablesForColumnInsertion(
+  workbook: WorkbookModel,
+  sheetId: string,
+  selection: CellRange,
+  index: number
+): string[] {
+  const normalizedSelection = normalizeRange(selection);
+  return workbook.tables
+    .filter((table) =>
+      table.sheetId === sheetId &&
+      rangesIntersect(table.range, normalizedSelection) &&
+      (table.range.start.column === index || table.range.end.column + 1 === index)
+    )
+    .map((table) => table.id);
 }
 
 function parseNameBoxRange(value: string, sheet: SheetModel): CellRange | null {

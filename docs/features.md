@@ -34,7 +34,13 @@ Select a data range → Insert → Pivot Table. Configure row fields (primary + 
 
 - **Drag-and-drop**: drop an `.xlsx` or `.csv` anywhere on the app.
 - **XLSX fidelity**: values, formulas (including shared and structured formulas), native structured tables with explicit key-derived row identity plus filter/totals/calculated-column metadata, date cells as real dates, number/currency/percent/date formats, merges, comments, hyperlinks, validation rules, conditional formats, protection with unlocked cells, freeze panes, named ranges, AutoFilter ranges, hidden rows/columns/sheets.
-- **CSV** import/export, plus **Google Sheets** import (see [google-sheets-connector.md](google-sheets-connector.md)).
+- **CSV** import/export, plus **File → Import Google Sheet** as a one-time,
+  read-only workbook replacement. It imports formulas and hidden sheets but
+  does not create a continuous link, refresh job, write-back path, or sync
+  state. Fresh standalone clones open the setup dialog when Google
+  configuration is absent; embedded hosts can disable the command with
+  `features={{ googleSheets: false }}`. See
+  [google-sheets-connector.md](google-sheets-connector.md).
 
 ## Data tools
 

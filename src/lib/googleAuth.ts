@@ -1,20 +1,23 @@
 /**
  * Pluggable auth for Google APIs.
  *
- * The spreadsheet is designed to be embedded in a host app, so auth is an
- * interface: the host can supply its own token source (its existing Google
- * OAuth session, a backend-minted token, etc.). For standalone use,
- * `createBrowserTokenProvider` implements the interface with Google Identity
- * Services' token client — the correct flow for a static SPA with no backend
- * (no client secret, ~1h access tokens requested on demand).
+ * Hosts can inject their own token source. Standalone browser clients can use
+ * Google Identity Services without a client secret; access tokens remain in
+ * memory and are requested on demand.
  */
 
-export type TokenProvider = {
-  /** Resolve an OAuth2 access token bearing the given scopes. */
-  getAccessToken: (scopes: readonly string[]) => Promise<string>;
+import type { TokenProvider } from "../core/workbook/services";
+import { validateGoogleClientId } from "./googleConfiguration";
+import { GoogleSheetsError } from "./googleErrors";
+
+export type { TokenProvider };
+
+export type BrowserTokenProvider = Omit<TokenProvider, "prepare"> & {
+  prepare(): Promise<void>;
 };
 
-export const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+export const SHEETS_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/spreadsheets.readonly";
 export const SHEETS_READWRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 
 type GoogleTokenClient = {
@@ -45,52 +48,175 @@ declare global {
 }
 
 /**
- * Standalone-browser TokenProvider backed by Google Identity Services.
- * Requires a Google Cloud OAuth client ID (Web application type) whose
- * authorized JavaScript origins include the page's origin.
+ * Standalone-browser token provider backed by Google Identity Services.
+ * Call prepare before a user gesture so the first token request can open its
+ * popup synchronously from that gesture.
  */
-export function createBrowserTokenProvider(clientId: string): TokenProvider {
+export function createBrowserTokenProvider(clientId: string): BrowserTokenProvider {
   let cached: { token: string; scopeKey: string; expiresAt: number } | null = null;
+  const pending = new Map<string, Promise<string>>();
+  let preparedGoogle: GoogleIdentityServices | null = null;
+  let normalizedClientId: string | null = null;
+  let preparation: Promise<void> | null = null;
 
-  return {
-    async getAccessToken(scopes) {
+  const provider: BrowserTokenProvider = {
+    prepare() {
+      if (preparedGoogle) {
+        return Promise.resolve();
+      }
+      const validation = validateGoogleClientId(clientId);
+      if (!validation.valid) {
+        return Promise.reject(
+          new GoogleSheetsError("invalid_client", validation.message, true)
+        );
+      }
+      normalizedClientId = validation.value;
+      preparation ??= loadGoogleIdentityServices()
+        .then((google) => {
+          preparedGoogle = google;
+        })
+        .catch((error: unknown) => {
+          preparation = null;
+          if (error instanceof GoogleSheetsError) {
+            throw error;
+          }
+          throw googleIdentityLoadError();
+        });
+      return preparation;
+    },
+
+    getAccessToken(scopes) {
       const scopeKey = [...scopes].sort().join(" ");
-      if (cached && cached.scopeKey === scopeKey && cached.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS) {
-        return cached.token;
+      if (
+        cached &&
+        cached.scopeKey === scopeKey &&
+        cached.expiresAt > Date.now() + TOKEN_EXPIRY_SAFETY_MS
+      ) {
+        return Promise.resolve(cached.token);
       }
 
-      const google = await loadGoogleIdentityServices();
-      const token = await new Promise<string>((resolve, reject) => {
-        const client = google.accounts.oauth2.initTokenClient({
-          client_id: clientId,
-          scope: scopeKey,
-          callback: (response) => {
-            if (response.access_token) {
-              resolve(response.access_token);
-            } else {
-              reject(new Error(response.error ?? "Google sign-in was cancelled"));
-            }
-          },
-          // GIS reports non-OAuth failures (popup closed, popup blocked) here, not
-          // in callback — without it a dismissed popup leaves the promise pending.
-          error_callback: (error) => {
-            reject(new Error(error.message ?? error.type ?? "Google sign-in was cancelled"));
-          }
-        });
-        client.requestAccessToken();
-      });
+      if (preparedGoogle && normalizedClientId) {
+        const inFlight = pending.get(scopeKey);
+        if (inFlight) return inFlight;
 
-      cached = { token, scopeKey, expiresAt: Date.now() + ASSUMED_TOKEN_LIFETIME_MS };
-      return token;
+        const request = requestToken(preparedGoogle, normalizedClientId, scopeKey).then(
+          (token) => {
+            cached = {
+              token,
+              scopeKey,
+              expiresAt: Date.now() + ASSUMED_TOKEN_LIFETIME_MS
+            };
+            pending.delete(scopeKey);
+            return token;
+          },
+          (error: unknown) => {
+            pending.delete(scopeKey);
+            throw error;
+          }
+        );
+        pending.set(scopeKey, request);
+        return request;
+      }
+
+      return provider.prepare().then(() => provider.getAccessToken(scopes));
     }
   };
+
+  return provider;
+}
+
+function requestToken(
+  google: GoogleIdentityServices,
+  clientId: string,
+  scopeKey: string
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    try {
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: scopeKey,
+        callback: (response) => {
+          if (typeof response.access_token === "string" && response.access_token) {
+            resolve(response.access_token);
+            return;
+          }
+          reject(oauthResponseError(response.error));
+        },
+        error_callback: (error) => {
+          reject(oauthPopupError(error.type));
+        }
+      });
+      if (!client || typeof client.requestAccessToken !== "function") {
+        reject(googleIdentityLoadError());
+        return;
+      }
+      client.requestAccessToken();
+    } catch {
+      reject(googleIdentityLoadError());
+    }
+  });
+}
+
+function oauthResponseError(error: string | undefined): GoogleSheetsError {
+  if (error === "access_denied") {
+    return new GoogleSheetsError(
+      "access_denied",
+      "Google Sheets access was not granted. Try again and approve access.",
+      true
+    );
+  }
+  if (error === "invalid_client") {
+    return new GoogleSheetsError(
+      "invalid_client",
+      "The Google OAuth client ID is invalid. Use a Web application client ID.",
+      true
+    );
+  }
+  if (error === "origin_mismatch") {
+    return new GoogleSheetsError(
+      "origin_mismatch",
+      "This site origin is not authorized for the Google OAuth client.",
+      true
+    );
+  }
+  return new GoogleSheetsError(
+    "unknown",
+    "Google sign-in failed. Check the configuration and try again.",
+    true
+  );
+}
+
+function oauthPopupError(type: string | undefined): GoogleSheetsError {
+  if (type === "popup_failed_to_open") {
+    return new GoogleSheetsError(
+      "popup_blocked",
+      "Google sign-in could not open. Allow pop-ups and try again.",
+      true
+    );
+  }
+  if (type === "popup_closed") {
+    return new GoogleSheetsError(
+      "popup_closed",
+      "Google sign-in was closed before access was granted.",
+      true
+    );
+  }
+  return new GoogleSheetsError(
+    "unknown",
+    "Google sign-in failed. Check the configuration and try again.",
+    true
+  );
 }
 
 let gisLoadPromise: Promise<GoogleIdentityServices> | null = null;
 
 function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
-  if (window.google?.accounts?.oauth2) {
-    return Promise.resolve(window.google);
+  const available = getAvailableGoogleIdentityServices();
+  if (available) {
+    return Promise.resolve(available);
+  }
+  if (typeof document === "undefined") {
+    return Promise.reject(googleIdentityLoadError());
   }
 
   gisLoadPromise ??= new Promise((resolve, reject) => {
@@ -98,20 +224,40 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
     script.src = GIS_SCRIPT_URL;
     script.async = true;
     script.onload = () => {
-      if (window.google?.accounts?.oauth2) {
-        resolve(window.google);
-      } else {
-        // Clear the cached promise so a later call can retry, matching onerror.
-        gisLoadPromise = null;
-        reject(new Error("Google Identity Services failed to initialize"));
+      const loaded = getAvailableGoogleIdentityServices();
+      if (loaded) {
+        resolve(loaded);
+        return;
       }
+      script.remove();
+      gisLoadPromise = null;
+      reject(googleIdentityLoadError());
     };
     script.onerror = () => {
+      script.remove();
       gisLoadPromise = null;
-      reject(new Error("Could not load Google Identity Services"));
+      reject(googleIdentityLoadError());
     };
     document.head.appendChild(script);
   });
 
   return gisLoadPromise;
+}
+
+function getAvailableGoogleIdentityServices(): GoogleIdentityServices | null {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.google?.accounts?.oauth2?.initTokenClient === "function"
+  ) {
+    return window.google;
+  }
+  return null;
+}
+
+function googleIdentityLoadError(): GoogleSheetsError {
+  return new GoogleSheetsError(
+    "gis_load_failed",
+    "Google sign-in could not be prepared. Check your connection and try again.",
+    true
+  );
 }

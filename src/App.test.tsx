@@ -3,8 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { Spreadsheet } from "./App";
+import { createWorkbookSession } from "./core/workbook/WorkbookSession";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
+import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
 
 describe("App", () => {
   beforeEach(() => {
@@ -14,6 +16,114 @@ describe("App", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("owns the viewport only for the standalone workbook", () => {
+    const { container } = render(<App />);
+    const root = container.querySelector<HTMLElement>("[data-js-spreadsheet-root='workbook']")!;
+
+    expect(root).toHaveClass("js-spreadsheet-standalone");
+    expect(root).toHaveStyle({ height: "100dvh", minHeight: 0 });
+  });
+
+  it("always opens standalone Google setup and stores only the normalized public client ID", async () => {
+    vi.stubEnv("VITE_GOOGLE_CLIENT_ID", "");
+    const prompt = vi.spyOn(window, "prompt");
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+
+    expect(screen.getByRole("dialog", { name: "Import Google Sheet" })).toBeInTheDocument();
+    const clientId = screen.getByLabelText("Google OAuth client ID");
+    await user.type(clientId, " 123-abc.apps.googleusercontent.com ");
+    await user.click(screen.getByRole("button", { name: "Save and continue" }));
+
+    await waitFor(() => {
+      expect(localStorage.getItem(GOOGLE_CLIENT_ID_STORAGE_KEY)).toBe(
+        "123-abc.apps.googleusercontent.com"
+      );
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(localStorage.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("imports a Google Sheet through session history and reports Imported", async () => {
+    const user = userEvent.setup();
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("test-access-token")
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        properties: { title: "Budget" },
+        sheets: [{ properties: { title: "Imported" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valueRanges: [{ values: [["from Google"]] }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <Spreadsheet
+        defaultWorkbook={setCellContent(createBlankWorkbook(), "sheet-1", "A1", "before")}
+        storage={false}
+        services={{ googleSheets: { tokenProvider } }}
+      />
+    );
+
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+    const sheetInput = await screen.findByLabelText("Google Sheet URL or spreadsheet ID");
+    await user.type(sheetInput, "12345678901234567890");
+    await user.click(screen.getByRole("button", { name: "Import and replace workbook" }));
+
+    expect(await screen.findByRole("gridcell", { name: "A1 from Google" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Imported Budget");
+    expect(document.body).not.toHaveTextContent("test-access-token");
+
+    await openRibbonTab(user, "Home");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(await screen.findByRole("gridcell", { name: "A1 before" })).toBeInTheDocument();
+  });
+
+  it("keeps Google import state open when a destroyed session rejects workbook replacement", async () => {
+    const user = userEvent.setup();
+    const workbook = setCellContent(createBlankWorkbook(), "sheet-1", "A1", "before");
+    const session = createWorkbookSession({ workbook });
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("test-access-token")
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        properties: { title: "Rejected import" },
+        sheets: [{ properties: { title: "Imported" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valueRanges: [{ values: [["replacement"]] }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    render(
+      <Spreadsheet
+        session={session}
+        services={{ googleSheets: { tokenProvider } }}
+      />
+    );
+    await openRibbonTab(user, "File");
+    await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+    const sheetInput = await screen.findByLabelText("Google Sheet URL or spreadsheet ID");
+    await user.type(sheetInput, "12345678901234567890");
+    session.destroy();
+
+    await user.click(screen.getByRole("button", { name: "Import and replace workbook" }));
+
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "Import Google Sheet" })).toBeInTheDocument());
+    expect(sheetInput).toHaveValue("12345678901234567890");
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent("Imported Rejected import");
+    expect(session.getSnapshot().workbook).toBe(workbook);
+    expect(getCellContent(session.getSnapshot().workbook, "sheet-1", "A1")).toBe("before");
+    expect(session.getSnapshot()).toMatchObject({ canUndo: false, canRedo: false });
   });
 
   it("edits cells and recalculates formulas", async () => {
@@ -115,7 +225,9 @@ describe("App", () => {
     render(<App />);
 
     await user.click(screen.getByRole("button", { name: "Add sheet" }));
-    expect(screen.getByRole("tab", { name: "Sheet2" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sheet2" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveFocus();
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(/^Added Sheet2$/);
 
     await user.click(screen.getByRole("button", { name: "Rename active sheet" }));
     expect(screen.getByRole("tab", { name: "Budget" })).toBeInTheDocument();
@@ -344,7 +456,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Add sheet" }));
 
     expect(screen.queryByRole("tablist", { name: "Sheet tabs" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Status")).toHaveTextContent("Added sheet");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Added Sheet2");
 
     // Switching ribbon tabs remounts the View controls, so re-query the toggle.
     await openRibbonTab(user, "View");
@@ -1939,6 +2051,147 @@ describe("App", () => {
     expect(screen.getByRole("gridcell", { name: "B1 Amount" })).toHaveTextContent("Amount");
   });
 
+  it("inserts the selected width to the right from the ribbon split menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    selectRange("A1", "B1");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 2 columns right");
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1:D1");
+  });
+
+  it("expands the selected structured table at its right boundary", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+  });
+
+  it("does not expand same-sheet tables outside the selected row or column boundary context", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={columnBoundaryContextWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "D1 Department" })).toHaveTextContent("Department");
+    expect(screen.getByRole("gridcell", { name: "E1 Cost" })).toHaveTextContent("Cost");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+  });
+
+  it("does not include a matching table boundary from another sheet", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={columnBoundaryContextWorkbook()} storage={false} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "B2 10" }));
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByRole("gridcell", { name: "C1 Column3" })).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Other" }));
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("gridcell", { name: "A1 OtherRegion" })).toHaveTextContent("OtherRegion");
+    expect(screen.getByRole("gridcell", { name: "B1 OtherSales" })).toHaveTextContent("OtherSales");
+    expect(screen.getByRole("gridcell", { name: "C1" })).toHaveTextContent("");
+  });
+
+  it("appends a column after the final worksheet column", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    const nameBox = screen.getByLabelText("Name box");
+    await user.clear(nameBox);
+    await user.type(nameBox, "Z1{Enter}");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+    expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "28");
+    expect(nameBox).toHaveValue("AA1");
+    expect(screen.getByRole("gridcell", { name: "AA1" })).toHaveFocus();
+
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "27"));
+    expect(nameBox).toHaveValue("Z1");
+    expect(screen.getByRole("gridcell", { name: "Z1" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() => expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveAttribute("aria-colcount", "28"));
+    expect(nameBox).toHaveValue("AA1");
+    expect(screen.getByRole("gridcell", { name: "AA1" })).toHaveFocus();
+  });
+
+  it("rejects right column insertion on a protected sheet", async () => {
+    const user = userEvent.setup();
+    const workbook = createBlankWorkbook();
+    render(
+      <Spreadsheet
+        defaultWorkbook={{
+          ...workbook,
+          sheets: workbook.sheets.map((sheet) => ({
+            ...sheet,
+            protection: { ...sheet.protection, isProtected: true }
+          }))
+        }}
+        storage={false}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Sheet is protected");
+    expect(screen.getByLabelText("Name box")).toHaveValue("A1");
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("undoes a multi-column right insertion as one action", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    const grid = screen.getByRole("grid", { name: "Spreadsheet grid" });
+    selectRange("A1", "B1");
+    await user.click(screen.getByRole("button", { name: "Insert columns options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(grid).toHaveAttribute("aria-colcount", "29");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(grid).toHaveAttribute("aria-colcount", "27");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("inserts to the right from a column-header context menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    fireEvent.contextMenu(screen.getByRole("columnheader", { name: "Column B" }), {
+      clientX: 240,
+      clientY: 60
+    });
+    const menu = screen.getByRole("menu", { name: "Column B context menu" });
+    await user.click(within(menu).getByRole("menuitem", { name: "Insert column right" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
+    expect(screen.getByLabelText("Name box")).toHaveValue("C1:C100");
+  });
+
   it("finds and replaces values from a compact panel", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -2556,7 +2809,28 @@ describe("App", () => {
 
     expect(screen.getByRole("gridcell", { name: "B1" })).toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "C1 Amount" })).toHaveTextContent("Amount");
-    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column left");
+  });
+
+  it("inserts a column to the right from the cell context menu", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet storage={false} />);
+
+    await editCell(user, "B1", "Amount");
+    await editCell(user, "C1", "Tail");
+    fireEvent.contextMenu(screen.getByRole("gridcell", { name: "B1 Amount" }), {
+      clientX: 220,
+      clientY: 160
+    });
+    await user.click(
+      within(screen.getByRole("menu", { name: "Cell context menu" })).getByRole("menuitem", {
+        name: "Insert column right"
+      })
+    );
+
+    expect(screen.getByRole("gridcell", { name: "C1" })).toHaveTextContent("");
+    expect(screen.getByRole("gridcell", { name: "D1 Tail" })).toHaveTextContent("Tail");
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Inserted 1 column right");
   });
 
   it("applies and clears cell borders from the toolbar", async () => {
@@ -3278,6 +3552,108 @@ function structuredTableWorkbook(): ReturnType<typeof createBlankWorkbook> {
         ],
         rowIds: ["cost-operations", "cost-technology"],
         style: { theme: "TableStyleMedium2", showRowStripes: true }
+      }
+    ]
+  };
+}
+
+function columnBoundaryContextWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  const otherSheetId = "sheet-other";
+  return {
+    ...workbook,
+    sheets: [
+      {
+        ...sheet,
+        name: "Active",
+        cells: {
+          A1: "Region",
+          B1: "Sales",
+          A2: "West",
+          B2: 10,
+          A3: "East",
+          B3: 8,
+          C1: "Department",
+          D1: "Cost",
+          C2: "Operations",
+          D2: 5,
+          C3: "Technology",
+          D3: 7,
+          A5: "Team",
+          B5: "Value",
+          A6: "North",
+          B6: 3,
+          A7: "South",
+          B7: 4
+        }
+      },
+      {
+        ...sheet,
+        id: otherSheetId,
+        name: "Other",
+        cells: {
+          A1: "OtherRegion",
+          B1: "OtherSales",
+          A2: "West",
+          B2: 12,
+          A3: "East",
+          B3: 9
+        }
+      }
+    ],
+    tables: [
+      {
+        id: "table-selected",
+        name: "SelectedTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "selected-region", name: "Region", sheetColumn: 0 },
+          { id: "selected-sales", name: "Sales", sheetColumn: 1 }
+        ],
+        rowIds: ["selected-west", "selected-east"]
+      },
+      {
+        id: "table-adjacent",
+        name: "AdjacentTable",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 2 }, end: { row: 2, column: 3 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "adjacent-department", name: "Department", sheetColumn: 2 },
+          { id: "adjacent-cost", name: "Cost", sheetColumn: 3 }
+        ],
+        rowIds: ["adjacent-operations", "adjacent-technology"]
+      },
+      {
+        id: "table-lower",
+        name: "LowerTable",
+        sheetId: sheet.id,
+        range: { start: { row: 4, column: 0 }, end: { row: 6, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "lower-team", name: "Team", sheetColumn: 0 },
+          { id: "lower-value", name: "Value", sheetColumn: 1 }
+        ],
+        rowIds: ["lower-north", "lower-south"]
+      },
+      {
+        id: "table-other",
+        name: "OtherTable",
+        sheetId: otherSheetId,
+        range: { start: { row: 0, column: 0 }, end: { row: 2, column: 1 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "other-region", name: "OtherRegion", sheetColumn: 0 },
+          { id: "other-sales", name: "OtherSales", sheetColumn: 1 }
+        ],
+        rowIds: ["other-west", "other-east"]
       }
     ]
   };

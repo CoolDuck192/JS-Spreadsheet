@@ -6,6 +6,12 @@ export type { XlsxImportOptions } from "../lib/xlsxTables";
 export * from "../core/commands/types";
 export * from "../core/values/parseCellInput";
 export * from "../core/workbook/WorkbookSession";
+export type {
+  GoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration,
+  SpreadsheetServices,
+  TokenProvider
+} from "../core/workbook/services";
 export * from "../table/core";
 export * from "../table/local";
 export * from "../table/remote";

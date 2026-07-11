@@ -26,8 +26,6 @@ import {
   clearSheetFilters,
   copyRichRange,
   defineNamedRange,
-  deleteColumns,
-  deleteRows,
   deleteSheet,
   deleteSheetChart,
   duplicateSheet,
@@ -38,8 +36,6 @@ import {
   getCellReadOnly,
   getCellValidation,
   getSheetFilters,
-  insertColumns,
-  insertRows,
   mergeCells,
   moveRichRange,
   moveSheet,
@@ -75,21 +71,47 @@ import {
 import { parseCellInput } from "../values/parseCellInput";
 import { validateCellCandidate } from "../../lib/validation";
 import type { TableIssue } from "../commands/types";
-import { createRandomId, type IdGenerator } from "../ids";
+import { createRandomId, type IdGenerator, type IdKind } from "../ids";
 import {
   getStructuredTableAtCell,
   getStructuredTableBodyRange,
   reduceStructuredTableCommand,
   type StructuredTableCommand
 } from "./structuredTables";
+import {
+  isWorksheetStructureCommand,
+  reduceWorksheetStructureCommand,
+  type WorksheetStructureCommand
+} from "./worksheetStructure";
 
 export type SerializableRichClipboardRange = {
   readonly range: CellRange;
   readonly cells: readonly (readonly RichClipboardCell[])[];
 };
 
+/**
+ * Declares an exact ID expected from the session allocator during one outer
+ * transaction. `occurrence` is zero-based independently for each ID kind and
+ * includes allocations made by nested child commands. Reservations belong on
+ * the dispatched outer transaction only; the real allocator output must match.
+ *
+ * Explicit reservations are required for commands that refer to an ID created
+ * earlier in the same transaction because an opaque stateful allocator cannot
+ * be predicted or rewound safely during semantic preflight.
+ */
+export type WorkbookIdReservation = Readonly<{
+  kind: IdKind;
+  occurrence: number;
+  id: string;
+}>;
+
 export type WorkbookCommand =
-  | { type: "transaction"; commands: readonly WorkbookCommand[] }
+  | {
+      type: "transaction";
+      commands: readonly WorkbookCommand[];
+      /** Exact generated IDs needed by later children in this transaction. */
+      idReservations?: readonly WorkbookIdReservation[];
+    }
   | { type: "selection.set"; selection: CellRange }
   | { type: "cell.set"; sheetId: string; address: string; input: string }
   | { type: "cell.comment.set"; sheetId: string; address: string; comment: string | null }
@@ -146,8 +168,7 @@ export type WorkbookCommand =
       target: CellCoord;
       matrix: readonly (readonly string[])[];
     }
-  | { type: "rows.insert" | "rows.delete"; sheetId: string; index: number; count: number }
-  | { type: "columns.insert" | "columns.delete"; sheetId: string; index: number; count: number }
+  | WorksheetStructureCommand
   | { type: "rows.resize"; sheetId: string; rows: readonly number[]; height: number }
   | { type: "columns.resize"; sheetId: string; columns: readonly number[]; width: number }
   | { type: "rows.hidden.set"; sheetId: string; rows: readonly number[]; hidden: boolean }
@@ -224,6 +245,18 @@ export function applyWorkbookMutation(
       }
     }
     return applied(reduction.workbook);
+  }
+  if (isWorksheetStructureCommand(command)) {
+    const reduction = reduceWorksheetStructureCommand(workbook, command, {
+      createId: context.createId ?? createRandomId
+    });
+    return reduction.status === "committed"
+      ? applied(reduction.workbook)
+      : {
+          status: "rejected",
+          reason: reduction.reason,
+          issues: reduction.issues
+        };
   }
   switch (command.type) {
     case "cell.set": {
@@ -422,9 +455,10 @@ export function applyWorkbookMutation(
       return validatedMutation(candidate, command.sheetId, addresses, context);
     }
     case "range.autoFill": {
-      checkedRange(command.source);
+      const source = checkedRange(command.source);
       const target = checkedRange(command.target);
-      const addresses = getRangeAddresses(target);
+      const sourceAddresses = new Set(getRangeAddresses(source));
+      const addresses = getRangeAddresses(target).filter((address) => !sourceAddresses.has(address));
       const permission = writableAddresses(workbook, command.sheetId, addresses);
       if (permission) {
         return permission;
@@ -513,18 +547,6 @@ export function applyWorkbookMutation(
       );
       return validatedMutation(candidate, command.sheetId, addresses, context);
     }
-    case "rows.insert":
-      checkedStructure(command.index, command.count);
-      return applied(insertRows(workbook, command.sheetId, command.index, command.count));
-    case "rows.delete":
-      checkedStructure(command.index, command.count);
-      return applied(deleteRows(workbook, command.sheetId, command.index, command.count));
-    case "columns.insert":
-      checkedStructure(command.index, command.count);
-      return applied(insertColumns(workbook, command.sheetId, command.index, command.count));
-    case "columns.delete":
-      checkedStructure(command.index, command.count);
-      return applied(deleteColumns(workbook, command.sheetId, command.index, command.count));
     case "rows.resize": {
       checkedDimension(command.height);
       let candidate = workbook;
@@ -589,7 +611,7 @@ export function applyWorkbookMutation(
     case "sheet.rename":
       return applied(renameSheet(workbook, command.sheetId, command.name));
     case "sheet.duplicate":
-      return applied(duplicateSheet(workbook, command.sheetId));
+      return applied(duplicateSheet(workbook, command.sheetId, context.createId ?? createRandomId));
     case "sheet.delete":
       return applied(deleteSheet(workbook, command.sheetId));
     case "sheet.activate":
@@ -799,13 +821,6 @@ function checkedIndexes(indexes: readonly number[]): readonly number[] {
 function checkedIndex(index: number): void {
   if (!Number.isInteger(index) || index < 0) {
     throw new Error("Index must be a non-negative integer");
-  }
-}
-
-function checkedStructure(index: number, count: number): void {
-  checkedIndex(index);
-  if (!Number.isInteger(count) || count <= 0) {
-    throw new Error("Count must be a positive integer");
   }
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { StructuredTable } from "../../types";
 import {
   addConditionalFormatRule,
@@ -11,7 +11,9 @@ import {
   setActiveSheet,
   setCellContent,
   setCellFormat,
-  setCellValidation
+  setCellValidation,
+  setRangeReadOnly,
+  setSheetProtection
 } from "../../lib/workbook";
 import type { CommandEnvelope, CommandResult } from "../commands/types";
 import { applyWorkbookMutation, type WorkbookCommand } from "./commands";
@@ -169,6 +171,116 @@ describe("WorkbookCommand", () => {
     expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
   });
 
+  it("routes invalid worksheet structure commands to an actionable reducer rejection", () => {
+    const workbook = createBlankWorkbook();
+    const createId = vi.fn(() => "unused-id");
+
+    const result = applyWorkbookMutation(workbook, {
+      type: "columns.insert",
+      sheetId: workbook.activeSheetId,
+      index: 27,
+      count: 1
+    }, {
+      createId,
+      evaluateCell(candidate, sheetId, address) {
+        return getCellContent(candidate, sheetId, address);
+      }
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "validation",
+      issues: [{
+        code: "SHEET_STRUCTURE_OUT_OF_BOUNDS",
+        message: "Structure edit is outside the worksheet"
+      }]
+    });
+    expect(createId).not.toHaveBeenCalled();
+  });
+
+  it("routes valid table-free worksheet structure commands through the reducer", () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "Name");
+
+    const result = apply(workbook, {
+      type: "columns.insert",
+      sheetId,
+      index: 0,
+      count: 1
+    });
+
+    expect(result.status).toBe("applied");
+    if (result.status !== "applied") return;
+    expect(getCellContent(result.workbook, sheetId, "B1")).toBe("Name");
+  });
+
+  it("keeps canonical calculated formulas through dispatched row insertion and sorting", () => {
+    const workbook = calculatedDispatchWorkbook();
+    const insertedColumn = apply(workbook, {
+      type: "columns.insert",
+      sheetId: workbook.activeSheetId,
+      index: 1,
+      count: 1
+    });
+
+    expect(insertedColumn.status).toBe("applied");
+    if (insertedColumn.status !== "applied") return;
+    expect(insertedColumn.workbook.tables[0].columns.find((column) => column.id === "column-total")?.calculatedFormula)
+      .toBe("=C2*$D$2");
+
+    const insertedRow = apply(insertedColumn.workbook, {
+      type: "table.insertRows",
+      tableId: "table-calculated-dispatch",
+      count: 1,
+      beforeRowId: "row-2"
+    });
+    expect(insertedRow.status).toBe("applied");
+    if (insertedRow.status !== "applied") return;
+    expect(["F2", "F3", "F4"].map((address) =>
+      getCellContent(insertedRow.workbook, "sheet-1", address)
+    )).toEqual([
+      "=C2*$D$2",
+      "=C3*$D$2",
+      "=C4*$D$2"
+    ]);
+
+    const sorted = apply(insertedRow.workbook, {
+      type: "table.sort",
+      tableId: "table-calculated-dispatch",
+      sorting: [{ columnId: "column-key", direction: "asc", nulls: "last" }]
+    });
+    expect(sorted.status).toBe("applied");
+    if (sorted.status !== "applied") return;
+    expect(["F2", "F3", "F4"].map((address) =>
+      getCellContent(sorted.workbook, "sheet-1", address)
+    )).toEqual([
+      "=C2*$D$2",
+      "=C3*$D$2",
+      "=C4*$D$2"
+    ]);
+  });
+
+  it("rewrites calculated formula metadata through dispatched row deletion", () => {
+    const workbook = calculatedRowDeleteDispatchWorkbook();
+
+    const deletedRows = apply(workbook, {
+      type: "rows.delete",
+      sheetId: workbook.activeSheetId,
+      index: 1,
+      count: 2
+    });
+
+    expect(deletedRows.status).toBe("applied");
+    if (deletedRows.status !== "applied") return;
+    expect(deletedRows.workbook.tables[0].range).toEqual({
+      start: { row: 2, column: 0 },
+      end: { row: 4, column: 1 }
+    });
+    expect(deletedRows.workbook.tables[0].columns.find((column) => column.id === "row-total")?.calculatedFormula)
+      .toBe("=A4*2");
+  });
+
   it("clears and replaces direct formats without removing conditional formats", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
@@ -193,6 +305,47 @@ describe("WorkbookCommand", () => {
     if (replaced.status !== "applied") return;
     expect(getCellFormat(replaced.workbook, "sheet-1", "A1")).toEqual({ italic: true });
     expect(getCellConditionalFormatRules(replaced.workbook, "sheet-1", "A1")).toHaveLength(1);
+  });
+
+  it("validates AutoFill permissions only for destination cells", () => {
+    const source = { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } } as const;
+    const target = { start: source.start, end: { row: 4, column: 0 } } as const;
+    const destinations = { start: { row: 2, column: 0 }, end: target.end } as const;
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", "1");
+    workbook = setCellContent(workbook, sheetId, "A2", "3");
+    workbook = setSheetProtection(workbook, sheetId, true);
+    workbook = setRangeReadOnly(workbook, sheetId, destinations, false);
+
+    const filled = apply(workbook, {
+      type: "range.autoFill",
+      sheetId,
+      source,
+      target
+    });
+
+    expect(filled.status).toBe("applied");
+    if (filled.status !== "applied") return;
+    expect(["A3", "A4", "A5"].map((address) => getCellContent(filled.workbook, sheetId, address)))
+      .toEqual([5, 7, 9]);
+
+    const blockedWorkbook = setRangeReadOnly(workbook, sheetId, {
+      start: { row: 3, column: 0 },
+      end: { row: 3, column: 0 }
+    }, true);
+    const blocked = apply(blockedWorkbook, {
+      type: "range.autoFill",
+      sheetId,
+      source,
+      target
+    });
+
+    expect(blocked).toMatchObject({
+      status: "rejected",
+      reason: "permission",
+      issues: [{ code: "permission.readOnly", address: "A4" }]
+    });
   });
 
   it("clears only conditional-format rules intersecting the requested range", () => {
@@ -332,6 +485,72 @@ describe("WorkbookCommand", () => {
     expect(result.workbook.sheets[1].freezeTopRow).toBe(true);
   });
 });
+
+function calculatedDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-calculated-dispatch",
+    name: "CalculatedDispatchTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 0, column: 0 }, end: { row: 2, column: 4 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "column-key", name: "Key", sheetColumn: 0 },
+      { id: "column-b", name: "B", sheetColumn: 1 },
+      { id: "column-c", name: "C", sheetColumn: 2 },
+      { id: "column-d", name: "D", sheetColumn: 3 },
+      {
+        id: "column-total",
+        name: "Total",
+        sheetColumn: 4,
+        calculatedFormula: "=B2*$C$2"
+      }
+    ],
+    rowIds: ["row-1", "row-2"]
+  };
+  return {
+    ...workbook,
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A1: "Key", B1: "B", C1: "C", D1: "D", E1: "Total",
+        A2: "B", B2: 2, C2: 3, D2: 4, E2: "=B2*$C$2",
+        A3: "A", B3: 5, C3: 3, D3: 6, E3: "=B3*$C$2"
+      }
+    }]
+  };
+}
+
+function calculatedRowDeleteDispatchWorkbook(): ReturnType<typeof createBlankWorkbook> {
+  const workbook = createBlankWorkbook();
+  const table: StructuredTable = {
+    id: "table-row-delete-dispatch",
+    name: "RowDeleteDispatchTable",
+    sheetId: workbook.activeSheetId,
+    range: { start: { row: 4, column: 0 }, end: { row: 6, column: 1 } },
+    headerRow: true,
+    totalsRow: false,
+    columns: [
+      { id: "row-label", name: "Label", sheetColumn: 0 },
+      { id: "row-total", name: "Total", sheetColumn: 1, calculatedFormula: "=A6*2" }
+    ],
+    rowIds: ["row-delete-1", "row-delete-2"]
+  };
+  return {
+    ...workbook,
+    tables: [table],
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A5: "Label", B5: "Total",
+        A6: 2, B6: "=A6*2",
+        A7: 3, B7: "=A7*2"
+      }
+    }]
+  };
+}
 
 function apply(workbook: ReturnType<typeof createBlankWorkbook>, command: WorkbookCommand) {
   return applyWorkbookMutation(workbook, command, {

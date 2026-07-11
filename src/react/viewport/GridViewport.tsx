@@ -1,6 +1,6 @@
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type CSSProperties,
@@ -61,6 +61,7 @@ export function GridViewport({
   onUnhandledKeyDown,
   onCellMouseEnter,
   onCellContextMenu,
+  onColumnHeaderContextMenu,
   onReadOnlyCellEditAttempt,
   getColumnHeaderState,
   getRowHeaderState,
@@ -79,6 +80,7 @@ export function GridViewport({
 }: GridViewportProps) {
   const internalRootRef = useRef<HTMLDivElement>(null);
   const rootRef = scrollRef ?? internalRootRef;
+  const pendingFocusFrameRef = useRef<number | null>(null);
   const rowHeaderWidth = renderRowHeader ? requestedRowHeaderWidth : 0;
   const headerHeight = showColumnHeaders ? requestedColumnHeaderHeight : 0;
   const getRowKey = useCallback((index: number) => rows[index].id, [rows]);
@@ -175,9 +177,41 @@ export function GridViewport({
     [columnMeasurementsById, rowMeasurementsById, virtualizer.ensureCellVisible]
   );
 
-  useEffect(() => {
-    onRegisterApi?.({ ensureCellVisible });
-  }, [ensureCellVisible, onRegisterApi]);
+  const cancelPendingFocus = useCallback(() => {
+    if (pendingFocusFrameRef.current !== null) {
+      cancelAnimationFrame(pendingFocusFrameRef.current);
+      pendingFocusFrameRef.current = null;
+    }
+  }, []);
+
+  const focusCell = useCallback(
+    (rowId: string, columnId: string) => {
+      cancelPendingFocus();
+      ensureCellVisible(rowId, columnId);
+      const cellId = gridCellDomId(idPrefix, { rowId, columnId });
+      const focusRenderedCell = () => {
+        const cell = rootRef.current?.querySelector<HTMLElement>(`[id="${cellId}"]`);
+        if (cell instanceof HTMLElement) {
+          cell.focus({ preventScroll: true });
+          return true;
+        }
+        return false;
+      };
+      if (!focusRenderedCell()) {
+        pendingFocusFrameRef.current = requestAnimationFrame(() => {
+          pendingFocusFrameRef.current = null;
+          focusRenderedCell();
+        });
+      }
+    },
+    [cancelPendingFocus, ensureCellVisible, idPrefix, rootRef]
+  );
+
+  useLayoutEffect(() => cancelPendingFocus, [cancelPendingFocus, focusCell]);
+
+  useLayoutEffect(() => {
+    onRegisterApi?.({ ensureCellVisible, focusCell });
+  }, [ensureCellVisible, focusCell, onRegisterApi]);
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (isEditorEventTarget(event.target)) {
@@ -305,6 +339,9 @@ export function GridViewport({
                   onMouseDown={(event) => onColumnHeaderMouseDown?.(column, event)}
                   onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
                   onClick={(event) => onColumnHeaderClick?.(column, event)}
+                  onContextMenu={onColumnHeaderContextMenu
+                    ? (event) => onColumnHeaderContextMenu(column, event)
+                    : undefined}
                   onKeyDown={(event) => onColumnHeaderKeyDown?.(column, event)}
                   onDragOver={(event) => onColumnHeaderDragOver?.(column, event)}
                   onDrop={(event) => onColumnHeaderDrop?.(column, event)}

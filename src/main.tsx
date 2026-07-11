@@ -13,9 +13,19 @@ async function mount() {
     return;
   }
 
+  if (window.location.pathname === "/embed" || window.location.pathname === "/embed/") {
+    const [{ SpreadsheetEmbeddingDemo }] = await Promise.all([
+      import("./demo/SpreadsheetEmbeddingDemo"),
+      import("./App.css")
+    ]);
+    root.render(<React.StrictMode><SpreadsheetEmbeddingDemo /></React.StrictMode>);
+    return;
+  }
+
   const [{ default: App }] = await Promise.all([
     import("./App"),
-    import("./App.css")
+    import("./App.css"),
+    import("./standalone.css")
   ]);
   root.render(<React.StrictMode><App /></React.StrictMode>);
 }

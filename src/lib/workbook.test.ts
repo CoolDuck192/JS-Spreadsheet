@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CellRange } from "../types";
+import type { CellRange, StructuredTable } from "../types";
 import { createFormulaEngine } from "./formulaEngine";
 import {
   addSheetChart,
@@ -467,6 +467,186 @@ describe("workbook", () => {
     expect(getCellContent(deleted, sheetId, "B1")).toBe("10");
     expect(getCellContent(deleted, sheetId, "C1")).toBe("=B1*2");
     expect(getCellFormat(deleted, sheetId, "B1")).toEqual({ backgroundColor: "#eaf7f2" });
+  });
+
+  it("projects partially surviving metadata across a column deletion boundary", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const partial = range("A1", "C3");
+    const dropped = range("A10", "A12");
+    const workbook = {
+      ...initial,
+      namedRanges: [
+        { name: "Partial", sheetId, range: range("A1", "C1") },
+        { name: "Dropped", sheetId, range: range("A10") }
+      ],
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        autoFilterRange: partial,
+        conditionalFormats: [
+          { id: "cf-partial", range: partial, condition: { type: "blank" as const }, format: { bold: true } },
+          { id: "cf-dropped", range: dropped, condition: { type: "blank" as const }, format: { bold: true } }
+        ],
+        filters: [
+          { id: "filter-partial", range: partial, column: 1, operator: "equals" as const, value: "x" },
+          { id: "filter-dropped", range: dropped, column: 0, operator: "equals" as const, value: "x" }
+        ],
+        charts: [
+          { id: "chart-partial", title: "Partial", type: "bar" as const, range: partial, anchor: { row: 6, column: 0 } },
+          { id: "chart-dropped", title: "Dropped", type: "bar" as const, range: dropped, anchor: { row: 14, column: 0 } }
+        ],
+        merges: [
+          { id: "merge-partial", range: range("A5", "C5") },
+          { id: "merge-dropped", range: range("A20", "A21") }
+        ]
+      }))
+    };
+
+    const deleted = deleteColumns(workbook, sheetId, 0, 1);
+    const sheet = deleted.sheets[0];
+
+    expect(deleted.namedRanges).toEqual([
+      { name: "Partial", sheetId, range: range("A1", "B1") }
+    ]);
+    expect(sheet.conditionalFormats).toMatchObject([
+      { id: "cf-partial", range: range("A1", "B3") }
+    ]);
+    expect(sheet.filters).toMatchObject([
+      { id: "filter-partial", range: range("A1", "B3"), column: 0 }
+    ]);
+    expect(sheet.autoFilterRange).toEqual(range("A1", "B3"));
+    expect(sheet.charts).toMatchObject([
+      { id: "chart-partial", range: range("A1", "B3"), anchor: { row: 6, column: 0 } }
+    ]);
+    expect(sheet.merges).toEqual([
+      { id: "merge-partial", range: range("A5", "B5") }
+    ]);
+  });
+
+  it("projects partially surviving metadata across a row deletion boundary", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const partial = range("A1", "C3");
+    const dropped = range("A1", "C1");
+    const workbook = {
+      ...initial,
+      namedRanges: [
+        { name: "Partial", sheetId, range: range("A1", "A3") },
+        { name: "Dropped", sheetId, range: range("D1") }
+      ],
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        autoFilterRange: partial,
+        conditionalFormats: [
+          { id: "cf-partial", range: partial, condition: { type: "blank" as const }, format: { bold: true } },
+          { id: "cf-dropped", range: dropped, condition: { type: "blank" as const }, format: { bold: true } }
+        ],
+        filters: [
+          { id: "filter-partial", range: partial, column: 1, operator: "equals" as const, value: "x" },
+          { id: "filter-dropped", range: dropped, column: 0, operator: "equals" as const, value: "x" }
+        ],
+        charts: [
+          { id: "chart-partial", title: "Partial", type: "bar" as const, range: partial, anchor: { row: 0, column: 6 } },
+          { id: "chart-dropped", title: "Dropped", type: "bar" as const, range: dropped, anchor: { row: 0, column: 10 } }
+        ],
+        merges: [
+          { id: "merge-partial", range: range("E1", "E3") },
+          { id: "merge-dropped", range: range("F1", "G1") }
+        ]
+      }))
+    };
+
+    const deleted = deleteRows(workbook, sheetId, 0, 1);
+    const sheet = deleted.sheets[0];
+
+    expect(deleted.namedRanges).toEqual([
+      { name: "Partial", sheetId, range: range("A1", "A2") }
+    ]);
+    expect(sheet.conditionalFormats).toMatchObject([
+      { id: "cf-partial", range: range("A1", "C2") }
+    ]);
+    expect(sheet.filters).toMatchObject([
+      { id: "filter-partial", range: range("A1", "C2"), column: 1 }
+    ]);
+    expect(sheet.autoFilterRange).toEqual(range("A1", "C2"));
+    expect(sheet.charts).toMatchObject([
+      { id: "chart-partial", range: range("A1", "C2"), anchor: { row: 0, column: 6 } }
+    ]);
+    expect(sheet.merges).toEqual([
+      { id: "merge-partial", range: range("E1", "E2") }
+    ]);
+  });
+
+  it("keeps surviving chart anchors in bounds when deleting the sheet tail", () => {
+    const initial = createBlankWorkbook();
+    const sheetId = initial.activeSheetId;
+    const workbook = {
+      ...initial,
+      sheets: initial.sheets.map((sheet) => ({
+        ...sheet,
+        rowCount: 104,
+        columnCount: 30,
+        charts: [
+          {
+            id: "chart-column-tail",
+            title: "Column tail",
+            type: "bar" as const,
+            range: range("A1", "B2"),
+            anchor: { row: 0, column: 29 }
+          },
+          {
+            id: "chart-row-tail",
+            title: "Row tail",
+            type: "bar" as const,
+            range: range("A1", "B2"),
+            anchor: { row: 103, column: 0 }
+          }
+        ]
+      }))
+    };
+
+    const withoutColumnTail = deleteColumns(workbook, sheetId, 28, 2);
+    expect(withoutColumnTail.sheets[0]).toMatchObject({
+      columnCount: 28,
+      charts: [
+        { id: "chart-column-tail", anchor: { row: 0, column: 27 } },
+        { id: "chart-row-tail", anchor: { row: 103, column: 0 } }
+      ]
+    });
+
+    const withoutRowTail = deleteRows(withoutColumnTail, sheetId, 102, 2);
+    expect(withoutRowTail.sheets[0]).toMatchObject({
+      rowCount: 102,
+      charts: [
+        { id: "chart-column-tail", anchor: { row: 0, column: 27 } },
+        { id: "chart-row-tail", anchor: { row: 101, column: 0 } }
+      ]
+    });
+  });
+
+  it.each([
+    ["insertRows", insertRows],
+    ["deleteRows", deleteRows],
+    ["insertColumns", insertColumns],
+    ["deleteColumns", deleteColumns]
+  ] as const)("%s refuses structured-table worksheet edits", (_name, edit) => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    const table: StructuredTable = {
+      id: "table-1",
+      name: "TableOne",
+      sheetId,
+      range: { start: { row: 0, column: 0 }, end: { row: 1, column: 0 } },
+      headerRow: true,
+      totalsRow: false,
+      columns: [{ id: "table-column-1", name: "Name", sheetColumn: 0 }],
+      rowIds: ["table-row-1"]
+    };
+    workbook = { ...workbook, tables: [table] };
+
+    expect(() => edit(workbook, sheetId, 0, 1)).toThrow(
+      "Use WorkbookSession.dispatch for structured-table worksheet edits"
+    );
   });
 
   it("does not rewrite LOG10, scientific notation, or quoted A1-like text during row insertion", () => {

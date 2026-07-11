@@ -45,6 +45,7 @@ export type GridViewportCell = {
 
 export type GridViewportApi = {
   ensureCellVisible(rowId: string, columnId: string): void;
+  focusCell(rowId: string, columnId: string): void;
 };
 
 export type GridViewportHeaderState = {
@@ -117,6 +118,7 @@ export type GridViewportProps = {
   onUnhandledKeyDown?(event: ReactKeyboardEvent<HTMLElement>): void;
   onCellMouseEnter?(cell: TableCellRef): boolean | void;
   onCellContextMenu?(cell: TableCellRef, event: ReactMouseEvent<HTMLDivElement>): void;
+  onColumnHeaderContextMenu?(column: GridViewportColumn, event: ReactMouseEvent<HTMLDivElement>): void;
   onReadOnlyCellEditAttempt?(cell: TableCellRef): void;
   getColumnHeaderState?(column: GridViewportColumn): GridViewportHeaderState;
   getRowHeaderState?(row: GridViewportRow): GridViewportHeaderState;

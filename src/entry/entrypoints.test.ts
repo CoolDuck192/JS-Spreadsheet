@@ -2,13 +2,27 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
+  WorkbookCommand,
+  WorkbookIdReservation,
   WorkbookTableRow as CoreWorkbookTableRow,
   WorkbookTableSession as CoreWorkbookTableSession,
   XlsxImportOptions
 } from "./core";
 import type {
+  WorkbookCommand as ReactWorkbookCommand,
+  WorkbookIdReservation as ReactWorkbookIdReservation,
   WorkbookTableRow as ReactWorkbookTableRow,
   WorkbookTableSession as ReactWorkbookTableSession
+} from "./react";
+import type {
+  GoogleClientIdStorage as CoreGoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration as CoreGoogleSheetsServiceConfiguration,
+  TokenProvider as CoreTokenProvider
+} from "./core";
+import type {
+  GoogleClientIdStorage as ReactGoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration as ReactGoogleSheetsServiceConfiguration,
+  TokenProvider as ReactTokenProvider
 } from "./react";
 
 describe("public entrypoints", () => {
@@ -23,6 +37,21 @@ describe("public entrypoints", () => {
     expect("Spreadsheet" in core).toBe(false);
     expect("DataTable" in core).toBe(false);
     expect("WorkbookTableView" in core).toBe(false);
+    expect("assessGoogleOAuthOrigin" in core).toBe(false);
+  });
+
+  it("publishes Google service types from core and React while keeping helpers optional", async () => {
+    const [react, google] = await Promise.all([import("./react"), import("./google")]);
+
+    expect(google.assessGoogleOAuthOrigin).toBeTypeOf("function");
+    expect(google.validateGoogleClientId).toBeTypeOf("function");
+    expect(google.GoogleSheetsError).toBeTypeOf("function");
+    expect("assessGoogleOAuthOrigin" in react).toBe(false);
+    expect("GoogleSheetsImportDialog" in react).toBe(false);
+    expect("useGoogleSheetsImport" in react).toBe(false);
+    expectTypeOf<ReactGoogleClientIdStorage>().toEqualTypeOf<CoreGoogleClientIdStorage>();
+    expectTypeOf<ReactGoogleSheetsServiceConfiguration>().toEqualTypeOf<CoreGoogleSheetsServiceConfiguration>();
+    expectTypeOf<ReactTokenProvider>().toEqualTypeOf<CoreTokenProvider>();
   });
 
   it("publishes the workbook adapter from core and React surfaces", async () => {
@@ -34,6 +63,23 @@ describe("public entrypoints", () => {
     expectTypeOf<XlsxImportOptions>().toMatchTypeOf<{
       tableKeys?: Readonly<Record<string, { columnName: string }>>;
     }>();
+  });
+
+  it("publishes serializable transaction id reservation types from core and React", () => {
+    const reservation = {
+      kind: "table",
+      occurrence: 0,
+      id: "table-1"
+    } satisfies WorkbookIdReservation;
+    const command = {
+      type: "transaction",
+      idReservations: [reservation],
+      commands: []
+    } satisfies WorkbookCommand;
+
+    expectTypeOf(command).toMatchTypeOf<WorkbookCommand>();
+    expectTypeOf<ReactWorkbookCommand>().toEqualTypeOf<WorkbookCommand>();
+    expectTypeOf<ReactWorkbookIdReservation>().toEqualTypeOf<WorkbookIdReservation>();
   });
 
   it("maps typed subpaths for legacy TypeScript resolution", async () => {

@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TableSelection } from "../../table/core/types";
 import { GridViewport } from "./GridViewport";
 import type {
@@ -8,6 +8,7 @@ import type {
   GridViewportCell,
   GridViewportColumn,
   GridViewportInteraction,
+  GridViewportProps,
   GridViewportRow
 } from "./types";
 
@@ -30,6 +31,8 @@ function StatefulViewport({
   ariaRowCount = viewportRows.length + 1,
   ariaColumnCount = viewportColumns.length + 1,
   withRowHeaders = true,
+  onColumnHeaderContextMenu,
+  onRegisterApi,
   initialSelection = {
     anchor: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" },
     focus: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" }
@@ -42,6 +45,8 @@ function StatefulViewport({
   ariaRowCount?: number;
   ariaColumnCount?: number;
   withRowHeaders?: boolean;
+  onColumnHeaderContextMenu?: GridViewportProps["onColumnHeaderContextMenu"];
+  onRegisterApi?: GridViewportProps["onRegisterApi"];
   initialSelection?: TableSelection | null;
 }) {
   const [selection, setSelection] = useState<TableSelection | null>(initialSelection);
@@ -75,6 +80,8 @@ function StatefulViewport({
         editing={editing}
         onInteraction={onInteraction}
         renderRowHeader={withRowHeaders ? (row) => row.label : undefined}
+        onColumnHeaderContextMenu={onColumnHeaderContextMenu}
+        onRegisterApi={onRegisterApi}
         announce={`${viewportRows.length} rows loaded`}
       />
       <output data-testid={`${idPrefix}-last-interaction`}>{JSON.stringify(lastInteraction)}</output>
@@ -83,6 +90,136 @@ function StatefulViewport({
 }
 
 describe("GridViewport", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("focuses a cell through the registered viewport API", () => {
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        onRegisterApi={(next) => {
+          api = next;
+        }}
+      />
+    );
+
+    act(() => api?.focusCell("row/ada", "salary"));
+
+    expect(screen.getByRole("gridcell", { name: "Ada Salary" })).toHaveFocus();
+  });
+
+  it("keeps imperative focus inside the invoking root when cell ids are duplicated", () => {
+    let secondApi: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <>
+        <StatefulViewport idPrefix="duplicate" ariaLabel="First duplicate grid" />
+        <StatefulViewport
+          idPrefix="duplicate"
+          ariaLabel="Second duplicate grid"
+          onRegisterApi={(next) => {
+            secondApi = next;
+          }}
+        />
+      </>
+    );
+    const firstGrid = screen.getByRole("grid", { name: "First duplicate grid" });
+    const secondGrid = screen.getByRole("grid", { name: "Second duplicate grid" });
+
+    act(() => secondApi?.focusCell("row/ada", "salary"));
+
+    expect(within(secondGrid).getByRole("gridcell", { name: "Ada Salary" })).toHaveFocus();
+    expect(within(firstGrid).getByRole("gridcell", { name: "Ada Salary" })).not.toHaveFocus();
+  });
+
+  it("cancels a queued focus retry when the viewport unmounts", () => {
+    const animationFrames = installAnimationFrameQueue();
+    const virtualRows = createVirtualRows(1_000);
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    const { unmount } = render(
+      <StatefulViewport
+        idPrefix="unmount-focus"
+        viewportRows={virtualRows}
+        withRowHeaders={false}
+        initialSelection={null}
+        onRegisterApi={(next) => {
+          api = next;
+        }}
+      />
+    );
+
+    act(() => api?.focusCell("virtual-row-999", "salary"));
+    expect(animationFrames.pendingCount()).toBe(1);
+
+    unmount();
+
+    expect(animationFrames.pendingCount()).toBe(0);
+  });
+
+  it("cancels a stale focus retry when a rendered target supersedes it", () => {
+    const animationFrames = installAnimationFrameQueue();
+    const virtualRows = createVirtualRows(1_000);
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        idPrefix="superseded-focus"
+        viewportRows={virtualRows}
+        withRowHeaders={false}
+        initialSelection={null}
+        onRegisterApi={(next) => {
+          api = next;
+        }}
+      />
+    );
+
+    act(() => api?.focusCell("virtual-row-999", "salary"));
+    expect(animationFrames.pendingCount()).toBe(1);
+
+    act(() => api?.focusCell("virtual-row-0", "salary"));
+
+    expect(screen.getByRole("gridcell", { name: "Virtual row 0 Salary" })).toHaveFocus();
+    expect(animationFrames.pendingCount()).toBe(0);
+  });
+
+  it("focuses a virtualized target on the queued retry after ensure-visible renders it", () => {
+    const animationFrames = installAnimationFrameQueue();
+    const virtualRows = createVirtualRows(1_000);
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        idPrefix="virtual-focus"
+        ariaLabel="Virtual focus grid"
+        viewportRows={virtualRows}
+        withRowHeaders={false}
+        initialSelection={null}
+        onRegisterApi={(next) => {
+          api = next;
+        }}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Virtual focus grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+      scrollLeft: { configurable: true, writable: true, value: 0 }
+    });
+
+    expect(screen.queryByRole("gridcell", { name: "Virtual row 900 Salary" })).not.toBeInTheDocument();
+    act(() => api?.focusCell("virtual-row-900", "salary"));
+    expect(grid.scrollTop).toBeGreaterThan(20_000);
+    expect(screen.queryByRole("gridcell", { name: "Virtual row 900 Salary" })).not.toBeInTheDocument();
+
+    fireEvent.scroll(grid);
+    const target = screen.getByRole("gridcell", { name: "Virtual row 900 Salary" });
+    expect(target).not.toHaveFocus();
+
+    act(() => animationFrames.flush());
+
+    expect(target).toHaveFocus();
+  });
+
   it("renders correct grid, row, header, and cell roles with one-based indexes", () => {
     render(<StatefulViewport />);
     const grid = screen.getByRole("grid", { name: "People grid" });
@@ -98,6 +235,24 @@ describe("GridViewport", () => {
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-readonly", "false");
     expect(screen.getByRole("gridcell", { name: "Grace Active" })).toHaveAttribute("aria-readonly", "true");
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("forwards native context-menu events from column headers", () => {
+    const contexts: Array<{ column: string; x: number; y: number }> = [];
+    render(
+      <StatefulViewport
+        onColumnHeaderContextMenu={(column, event) => {
+          contexts.push({ column: column.id, x: event.clientX, y: event.clientY });
+        }}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByRole("columnheader", { name: "Salary" }), {
+      clientX: 240,
+      clientY: 60
+    });
+
+    expect(contexts).toEqual([{ column: "salary", x: 240, y: 60 }]);
   });
 
   it("uses explicit offset row indexes and minus one for an unknown total", () => {
@@ -363,4 +518,38 @@ function createCell(
 
 function readLastInteraction(idPrefix: string): any {
   return JSON.parse(screen.getByTestId(`${idPrefix}-last-interaction`).textContent ?? "null");
+}
+
+function createVirtualRows(count: number): readonly GridViewportRow[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `virtual-row-${index}`,
+    label: `Virtual row ${index}`,
+    height: 28,
+    kind: "data" as const,
+    ariaRowIndex: index + 2
+  }));
+}
+
+function installAnimationFrameQueue() {
+  let nextId = 1;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextId;
+    nextId += 1;
+    callbacks.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    callbacks.delete(id);
+  });
+  return {
+    pendingCount: () => callbacks.size,
+    flush() {
+      const pending = [...callbacks.values()];
+      callbacks.clear();
+      for (const callback of pending) {
+        callback(performance.now());
+      }
+    }
+  };
 }

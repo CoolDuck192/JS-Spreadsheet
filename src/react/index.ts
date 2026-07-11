@@ -17,6 +17,12 @@ export {
   WorkbookSessionProvider,
   useWorkbookSessionContext
 } from "./WorkbookSessionContext";
+export type {
+  GoogleClientIdStorage,
+  GoogleSheetsServiceConfiguration,
+  SpreadsheetServices,
+  TokenProvider
+} from "../core/workbook/services";
 
 export type {
   CellEditorProps,

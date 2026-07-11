@@ -1403,19 +1403,23 @@ export function pasteMatrix(
 }
 
 export function insertRows(workbook: WorkbookModel, sheetId: string, rowIndex: number, count = 1): WorkbookModel {
-  return shiftSheetStructure(workbook, sheetId, { axis: "row", mode: "insert", index: rowIndex, count });
+  assertTableFreeWorksheetStructure(workbook, sheetId);
+  return shiftSheetStructurePlanes(workbook, sheetId, { axis: "row", mode: "insert", index: rowIndex, count });
 }
 
 export function deleteRows(workbook: WorkbookModel, sheetId: string, rowIndex: number, count = 1): WorkbookModel {
-  return shiftSheetStructure(workbook, sheetId, { axis: "row", mode: "delete", index: rowIndex, count });
+  assertTableFreeWorksheetStructure(workbook, sheetId);
+  return shiftSheetStructurePlanes(workbook, sheetId, { axis: "row", mode: "delete", index: rowIndex, count });
 }
 
 export function insertColumns(workbook: WorkbookModel, sheetId: string, columnIndex: number, count = 1): WorkbookModel {
-  return shiftSheetStructure(workbook, sheetId, { axis: "column", mode: "insert", index: columnIndex, count });
+  assertTableFreeWorksheetStructure(workbook, sheetId);
+  return shiftSheetStructurePlanes(workbook, sheetId, { axis: "column", mode: "insert", index: columnIndex, count });
 }
 
 export function deleteColumns(workbook: WorkbookModel, sheetId: string, columnIndex: number, count = 1): WorkbookModel {
-  return shiftSheetStructure(workbook, sheetId, { axis: "column", mode: "delete", index: columnIndex, count });
+  assertTableFreeWorksheetStructure(workbook, sheetId);
+  return shiftSheetStructurePlanes(workbook, sheetId, { axis: "column", mode: "delete", index: columnIndex, count });
 }
 
 export function fillDown(workbook: WorkbookModel, sheetId: string, range: CellRange): WorkbookModel {
@@ -1942,20 +1946,17 @@ function updateSheet(
   };
 }
 
-function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation: StructureOperation): WorkbookModel {
-  const count = Math.max(1, Math.floor(operation.count));
+export function shiftSheetStructurePlanes(
+  workbook: WorkbookModel,
+  sheetId: string,
+  operation: StructureOperation
+): WorkbookModel {
   const sourceSheet = getSheet(workbook, sheetId);
-  const limit = operation.axis === "row" ? sourceSheet.rowCount : sourceSheet.columnCount;
-  const index =
-    operation.mode === "insert"
-      ? clampStructureIndex(operation.index, 0, limit)
-      : clampStructureIndex(operation.index, 0, Math.max(limit - 1, 0));
-  const normalizedOperation = { ...operation, index, count };
 
   const nextWorkbook = updateSheet(workbook, sheetId, (sheet) => {
     const nextCells: Record<string, CellContent> = {};
     for (const [address, content] of Object.entries(sheet.cells)) {
-      const nextCoord = shiftCoord(parseCellAddress(address), normalizedOperation);
+      const nextCoord = shiftCoord(parseCellAddress(address), operation);
       if (!nextCoord) {
         continue;
       }
@@ -1967,20 +1968,20 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
 
     const nextFormats: Record<string, CellFormat> = {};
     for (const [address, format] of Object.entries(sheet.formats ?? {})) {
-      const nextCoord = shiftCoord(parseCellAddress(address), normalizedOperation);
+      const nextCoord = shiftCoord(parseCellAddress(address), operation);
       if (nextCoord) {
         nextFormats[formatCellAddress(nextCoord)] = cloneCellFormat(format);
       }
     }
 
-    const nextColumnWidths = shiftIndexedNumberMap(sheet.columnWidths ?? {}, normalizedOperation, "column", clampColumnWidth);
-    const nextRowHeights = shiftIndexedNumberMap(sheet.rowHeights ?? {}, normalizedOperation, "row", clampRowHeight);
-    const nextHiddenColumns = shiftIndexFlags(sheet.hiddenColumns ?? {}, normalizedOperation, "column");
-    const nextHiddenRows = shiftIndexFlags(sheet.hiddenRows ?? {}, normalizedOperation, "row");
+    const nextColumnWidths = shiftIndexedNumberMap(sheet.columnWidths ?? {}, operation, "column", clampColumnWidth);
+    const nextRowHeights = shiftIndexedNumberMap(sheet.rowHeights ?? {}, operation, "row", clampRowHeight);
+    const nextHiddenColumns = shiftIndexFlags(sheet.hiddenColumns ?? {}, operation, "column");
+    const nextHiddenRows = shiftIndexFlags(sheet.hiddenRows ?? {}, operation, "row");
 
     const nextValidations: Record<string, DataValidationRule> = {};
     for (const [address, rule] of Object.entries(sheet.validations ?? {})) {
-      const nextCoord = shiftCoord(parseCellAddress(address), normalizedOperation);
+      const nextCoord = shiftCoord(parseCellAddress(address), operation);
       if (nextCoord) {
         nextValidations[formatCellAddress(nextCoord)] = cloneValidationRule(rule);
       }
@@ -1988,7 +1989,7 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
 
     const nextComments: Record<string, string> = {};
     for (const [address, comment] of Object.entries(sheet.comments ?? {})) {
-      const nextCoord = shiftCoord(parseCellAddress(address), normalizedOperation);
+      const nextCoord = shiftCoord(parseCellAddress(address), operation);
       if (nextCoord) {
         nextComments[formatCellAddress(nextCoord)] = comment;
       }
@@ -1996,7 +1997,7 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
 
     const nextHyperlinks: Record<string, string> = {};
     for (const [address, hyperlink] of Object.entries(sheet.hyperlinks ?? {})) {
-      const nextCoord = shiftCoord(parseCellAddress(address), normalizedOperation);
+      const nextCoord = shiftCoord(parseCellAddress(address), operation);
       if (nextCoord) {
         nextHyperlinks[formatCellAddress(nextCoord)] = hyperlink;
       }
@@ -2005,58 +2006,58 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     const protection = getSheetProtection(sheet);
     const nextProtection: SheetProtection = {
       ...protection,
-      lockedCells: shiftAddressFlags(protection.lockedCells, normalizedOperation),
-      unlockedCells: shiftAddressFlags(protection.unlockedCells, normalizedOperation)
+      lockedCells: shiftAddressFlags(protection.lockedCells, operation),
+      unlockedCells: shiftAddressFlags(protection.unlockedCells, operation)
     };
 
     const nextConditionalFormats = (sheet.conditionalFormats ?? []).flatMap((rule) => {
-      const shiftedRange = shiftRange(rule.range, normalizedOperation);
+      const shiftedRange = shiftRange(rule.range, operation);
       return shiftedRange ? [{ ...cloneConditionalFormatRule(rule), range: shiftedRange }] : [];
     });
 
     const nextFilters = (sheet.filters ?? []).flatMap((filter) => {
-      const shiftedRange = shiftRange(filter.range, normalizedOperation);
+      const shiftedRange = shiftRange(filter.range, operation);
       if (!shiftedRange) {
         return [];
       }
 
       const shiftedColumn =
-        normalizedOperation.axis === "column" ? shiftCoord({ row: 0, column: filter.column }, normalizedOperation)?.column : filter.column;
+        operation.axis === "column" ? shiftCoord({ row: 0, column: filter.column }, operation)?.column : filter.column;
       if (shiftedColumn === undefined || shiftedColumn < shiftedRange.start.column || shiftedColumn > shiftedRange.end.column) {
         return [];
       }
 
       return [{ ...cloneSheetFilter(filter), range: shiftedRange, column: shiftedColumn }];
     });
-    const shiftedAutoFilterRange = sheet.autoFilterRange ? shiftRange(sheet.autoFilterRange, normalizedOperation) : undefined;
+    const shiftedAutoFilterRange = sheet.autoFilterRange ? shiftRange(sheet.autoFilterRange, operation) : undefined;
     const nextAutoFilterRange = shiftedAutoFilterRange ?? undefined;
 
     const nextCharts = (sheet.charts ?? []).flatMap((chart) => {
-      const shiftedRange = shiftRange(chart.range, normalizedOperation);
-      const shiftedAnchor = shiftCoord(chart.anchor, normalizedOperation);
-      if (!shiftedRange || !shiftedAnchor) {
+      const shiftedRange = shiftRange(chart.range, operation);
+      if (!shiftedRange) {
         return [];
       }
+      const shiftedAnchor = shiftMetadataAnchor(chart.anchor, operation, sheet);
 
       return [{ ...cloneSheetChart(chart), range: shiftedRange, anchor: shiftedAnchor }];
     });
 
     const nextMerges = (sheet.merges ?? []).flatMap((merge) => {
-      const shiftedRange = shiftRange(merge.range, normalizedOperation);
+      const shiftedRange = shiftRange(merge.range, operation);
       return shiftedRange ? [{ ...cloneSheetMerge(merge), range: shiftedRange }] : [];
     });
 
     const rowCount =
       operation.axis === "row"
         ? operation.mode === "insert"
-          ? sheet.rowCount + count
-          : Math.max(DEFAULT_ROWS, sheet.rowCount - count)
+          ? sheet.rowCount + operation.count
+          : Math.max(DEFAULT_ROWS, sheet.rowCount - operation.count)
         : sheet.rowCount;
     const columnCount =
       operation.axis === "column"
         ? operation.mode === "insert"
-          ? sheet.columnCount + count
-          : Math.max(DEFAULT_COLUMNS, sheet.columnCount - count)
+          ? sheet.columnCount + operation.count
+          : Math.max(DEFAULT_COLUMNS, sheet.columnCount - operation.count)
         : sheet.columnCount;
 
     return {
@@ -2081,18 +2082,24 @@ function shiftSheetStructure(workbook: WorkbookModel, sheetId: string, operation
     };
   });
 
-  const rewrittenWorkbook = rewriteWorkbookFormulasForStructure(nextWorkbook, sourceSheet.name, normalizedOperation);
+  const rewrittenWorkbook = rewriteWorkbookFormulasForStructure(nextWorkbook, sourceSheet.name, operation);
 
   const nextNamedRanges = (rewrittenWorkbook.namedRanges ?? []).flatMap((namedRange) => {
     if (namedRange.sheetId !== sheetId) {
       return [cloneNamedRange(namedRange)];
     }
 
-    const shiftedRange = shiftRange(namedRange.range, normalizedOperation);
+    const shiftedRange = shiftRange(namedRange.range, operation);
     return shiftedRange ? [{ ...cloneNamedRange(namedRange), range: shiftedRange }] : [];
   });
 
   return { ...rewrittenWorkbook, namedRanges: nextNamedRanges };
+}
+
+function assertTableFreeWorksheetStructure(workbook: WorkbookModel, sheetId: string): void {
+  if (workbook.tables.some((table) => table.sheetId === sheetId)) {
+    throw new Error("Use WorkbookSession.dispatch for structured-table worksheet edits");
+  }
 }
 
 function rewriteWorkbookFormulasForStructure(
@@ -2133,12 +2140,61 @@ function rewriteWorkbookFormulasForStructure(
 
 function shiftRange(range: CellRange, operation: StructureOperation): CellRange | null {
   const normalized = normalizeRange(range);
+  if (operation.mode === "delete") {
+    const start = operation.axis === "row" ? normalized.start.row : normalized.start.column;
+    const end = operation.axis === "row" ? normalized.end.row : normalized.end.column;
+    const deleteStart = operation.index;
+    const deleteEnd = operation.index + operation.count;
+    const survivingIntervals: Array<readonly [number, number]> = [];
+    if (start < deleteStart) {
+      survivingIntervals.push([start, Math.min(end, deleteStart - 1)]);
+    }
+    if (end >= deleteEnd) {
+      survivingIntervals.push([
+        Math.max(start, deleteEnd) - operation.count,
+        end - operation.count
+      ]);
+    }
+    const nonEmptyIntervals = survivingIntervals.filter(([intervalStart, intervalEnd]) =>
+      intervalStart <= intervalEnd
+    );
+    if (nonEmptyIntervals.length === 0) {
+      return null;
+    }
+    const projectedStart = Math.min(...nonEmptyIntervals.map(([intervalStart]) => intervalStart));
+    const projectedEnd = Math.max(...nonEmptyIntervals.map(([, intervalEnd]) => intervalEnd));
+    return operation.axis === "row"
+      ? {
+          start: { ...normalized.start, row: projectedStart },
+          end: { ...normalized.end, row: projectedEnd }
+        }
+      : {
+          start: { ...normalized.start, column: projectedStart },
+          end: { ...normalized.end, column: projectedEnd }
+        };
+  }
   const nextStart = shiftCoord(normalized.start, operation);
   const nextEnd = shiftCoord(normalized.end, operation);
   if (!nextStart || !nextEnd) {
     return null;
   }
   return normalizeRange({ start: nextStart, end: nextEnd });
+}
+
+function shiftMetadataAnchor(
+  anchor: { row: number; column: number },
+  operation: StructureOperation,
+  sheet: Pick<SheetModel, "rowCount" | "columnCount">
+): { row: number; column: number } {
+  const shifted = shiftCoord(anchor, operation);
+  if (shifted) return shifted;
+  const projectedLastIndex = operation.axis === "row"
+    ? Math.max(DEFAULT_ROWS, sheet.rowCount - operation.count) - 1
+    : Math.max(DEFAULT_COLUMNS, sheet.columnCount - operation.count) - 1;
+  const boundary = Math.min(operation.index, projectedLastIndex);
+  return operation.axis === "row"
+    ? { ...anchor, row: boundary }
+    : { ...anchor, column: boundary };
 }
 
 function translateFillContent(

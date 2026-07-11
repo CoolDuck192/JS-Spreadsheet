@@ -1,0 +1,19 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.js-spreadsheet-standalone {
+  min-height: 0 !important;
+}
+
+.js-spreadsheet-standalone .app-shell {
+  min-height: 0;
+}

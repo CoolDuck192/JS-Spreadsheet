@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DataTable } from "../react/DataTable";
@@ -15,6 +15,53 @@ const columns: readonly ColumnDef<Person>[] = [{
 }];
 
 describe("embedded style isolation", () => {
+  it("keeps standalone document sizing out of embedded and published styles", () => {
+    const standalonePath = "src/standalone.css";
+    expect(existsSync(standalonePath)).toBe(true);
+    if (!existsSync(standalonePath)) {
+      return;
+    }
+
+    expect(readFileSync(standalonePath, "utf8").trim()).toBe(`html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.js-spreadsheet-standalone {
+  min-height: 0 !important;
+}
+
+.js-spreadsheet-standalone .app-shell {
+  min-height: 0;
+}`);
+
+    const publicCss = readFileSync("src/entry/styles.css", "utf8");
+    expect(publicCss).not.toContain("standalone.css");
+    expect(publicCss).not.toMatch(/^(?:\s*)(?:#root|body|html)\s*[{,]/m);
+  });
+
+  it("lets only the standalone app shell shrink below the embedded minimum", () => {
+    const standaloneCss = readFileSync("src/standalone.css", "utf8");
+    const workbookCss = readFileSync("src/App.css", "utf8");
+
+    expect(standaloneCss).toMatch(
+      /\.js-spreadsheet-standalone\s+\.app-shell\s*\{[^}]*min-height:\s*0;[^}]*\}/
+    );
+    expect(workbookCss).toMatch(
+      /\.js-spreadsheet-root\.js-spreadsheet-workbook\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
+    );
+    expect(workbookCss).toMatch(
+      /@scope \(\.js-spreadsheet-root\.js-spreadsheet-workbook\)[\s\S]*?\.app-shell\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
+    );
+  });
+
   it("does not decorate host controls and keeps table instances separate", () => {
     render(
       <>
@@ -41,6 +88,9 @@ describe("embedded style isolation", () => {
     const workbookCss = readFileSync("src/App.css", "utf8");
     expect(workbookCss).toContain("@scope (.js-spreadsheet-root.js-spreadsheet-workbook)");
     expect(workbookCss).not.toMatch(/^(?:\s*)(?::root|body|html|button|input|select|\*)\s*[{,]/m);
+    expect(workbookCss).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*?\.spreadsheet-surface\s*\{[^}]*height:\s*100%;[^}]*\}/
+    );
   });
 
   it("keeps visually hidden descriptions compatible with modern and fallback clipping", () => {
@@ -66,5 +116,28 @@ describe("embedded style isolation", () => {
     expect(baseCss).toMatch(
       /__quick-tools\s*\{(?=[^}]*position:\s*absolute;)(?=[^}]*max-height:\s*min\(420px, calc\(100dvh - 16px\), calc\(100% - 16px\)\);)(?=[^}]*overflow-x:\s*hidden;)(?=[^}]*overflow-y:\s*auto;)(?=[^}]*pointer-events:\s*auto;)[^}]*\}/s
     );
+  });
+
+  it("keeps the clipped table root while sizing top-layer column menus to the viewport", () => {
+    const css = readFileSync("src/styles/data-table.css", "utf8");
+    const rootRule = css.match(/\.js-spreadsheet-root\.js-spreadsheet-data-table\s*\{[^}]*\}/s)?.[0] ?? "";
+    const menuRule = css.match(/\.js-spreadsheet-data-table__column-menu\s*\{[^}]*\}/s)?.[0] ?? "";
+    const openMenuRule = css.match(/\.js-spreadsheet-data-table__column-menu:popover-open\s*\{[^}]*\}/s)?.[0] ?? "";
+    const treeContentRule = css.match(/\.js-spreadsheet-data-table__cell-content--tree\s*\{[^}]*\}/s)?.[0] ?? "";
+    const treeToggleRule = css.match(/\.js-spreadsheet-data-table__tree-toggle\s*\{[^}]*\}/s)?.[0] ?? "";
+
+    expect(rootRule).toMatch(/overflow:\s*hidden;/);
+    expect(menuRule).toMatch(/position:\s*fixed;/);
+    expect(menuRule).toMatch(/margin:\s*0;/);
+    expect(menuRule).toMatch(/width:\s*min\(248px, calc\(100vw - 16px\)\);/);
+    expect(menuRule).toMatch(/max-height:\s*min\(520px, calc\(100dvh - 16px\)\);/);
+    expect(menuRule).not.toMatch(/\binset(?:-|:)/);
+    expect(menuRule).not.toMatch(/\b(?:cqi|cqb)\b/);
+    expect(menuRule).not.toMatch(/\bdisplay\s*:/);
+    expect(openMenuRule).toMatch(/display:\s*grid;/);
+    expect(css).not.toMatch(/__cell-content > button\s*\{/);
+    expect(treeContentRule).toMatch(/padding-block:\s*1px;/);
+    expect(treeToggleRule).toMatch(/(?:width|min-width):\s*30px;/);
+    expect(treeToggleRule).toMatch(/min-height:\s*30px;/);
   });
 });
