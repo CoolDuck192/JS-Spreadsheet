@@ -493,6 +493,13 @@ export function applyWorkbookMutation(
       if (headerPermission) {
         return headerPermission;
       }
+      const bodyPermission = tableBodyMutationPermission(
+        workbook,
+        command.sheetId,
+        range,
+        "Use table.sort to preserve structured-table row IDs"
+      );
+      if (bodyPermission) return bodyPermission;
       const addresses = getRangeAddresses(range);
       const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
@@ -516,6 +523,13 @@ export function applyWorkbookMutation(
       if (headerPermission) {
         return headerPermission;
       }
+      const bodyPermission = tableBodyMutationPermission(
+        workbook,
+        command.sheetId,
+        range,
+        "Duplicate removal is unsupported inside a structured table"
+      );
+      if (bodyPermission) return bodyPermission;
       const addresses = getRangeAddresses(range);
       const permission = contentMutationPermission(workbook, command.sheetId, addresses);
       if (permission) {
@@ -900,6 +914,26 @@ function tableHeaderMutationPermission(
         status: "rejected",
         reason: "validation",
         issues: [{ code: "TABLE_HEADER_MUTATION_UNSUPPORTED", message, sheetId }]
+      }
+    : null;
+}
+
+function tableBodyMutationPermission(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  message: string
+): WorkbookMutationResult | null {
+  const intersectsBody = workbook.tables.some((table) => {
+    if (table.sheetId !== sheetId) return false;
+    const body = getStructuredTableBodyRange(table);
+    return body !== null && rangesIntersect(range, body);
+  });
+  return intersectsBody
+    ? {
+        status: "rejected",
+        reason: "validation",
+        issues: [{ code: "TABLE_ROW_ID_MUTATION_UNSUPPORTED", message, sheetId }]
       }
     : null;
 }

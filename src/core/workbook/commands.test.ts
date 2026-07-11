@@ -501,6 +501,53 @@ describe("WorkbookCommand", () => {
     expect(getCellContent(workbook, workbook.activeSheetId, "E2")).toBe("=B2*$C$2");
   });
 
+  it.each([
+    ["range.sort", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.sort",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 1, column: 0 }, end: { row: 2, column: 1 } },
+      direction: "desc",
+      sortColumn: 0
+    })],
+    ["range.removeDuplicates", (workbook: ReturnType<typeof structuredContentWorkbook>) => ({
+      type: "range.removeDuplicates",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 1, column: 0 }, end: { row: 2, column: 1 } }
+    })]
+  ] as const)("rejects %s over a table body before row ids can be rebound", (_name, commandFor) => {
+    const workbook = structuredContentWorkbook();
+
+    const result = apply(workbook, commandFor(workbook) as WorkbookCommand);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "TABLE_ROW_ID_MUTATION_UNSUPPORTED" }]
+    });
+    expect(workbook.tables[0].rowIds).toEqual(["content-row-1", "content-row-2"]);
+    expect(["A2", "A3"].map((address) =>
+      getCellContent(workbook, workbook.activeSheetId, address)
+    )).toEqual(["Ada", "Grace"]);
+  });
+
+  it("does not pull below-table data into remove-duplicates results", () => {
+    const base = structuredContentWorkbook();
+    const workbook = setCellContent(base, base.activeSheetId, "A5", "Outside");
+
+    const result = apply(workbook, {
+      type: "range.removeDuplicates",
+      sheetId: workbook.activeSheetId,
+      range: { start: { row: 1, column: 0 }, end: { row: 4, column: 1 } }
+    });
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: "validation",
+      issues: [{ code: "TABLE_ROW_ID_MUTATION_UNSUPPORTED" }]
+    });
+    expect(getCellContent(workbook, workbook.activeSheetId, "A5")).toBe("Outside");
+  });
+
   it("clears and replaces direct formats without removing conditional formats", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellFormat(workbook, "sheet-1", range, { bold: true, backgroundColor: "#ffffff" });
