@@ -32,15 +32,6 @@ async function openGoogleImport(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
 }
 
-function invokeProgrammaticReactButtonAction(button: HTMLElement) {
-  const propsKey = Object.keys(button).find((key) => key.startsWith("__reactProps$"));
-  if (!propsKey) {
-    throw new Error("React button props were not available to the test.");
-  }
-  const props = (button as unknown as Record<string, { onClick?: () => void }>)[propsKey];
-  props.onClick?.();
-}
-
 describe("Task 8 Google Sheets App integration", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -159,11 +150,10 @@ describe("Task 8 Google Sheets App integration", () => {
     session.destroy();
   });
 
-  it("Task 8 stored-ID Forget is disabled during import and defensively ignores a late result", async () => {
+  it("Task 8 stored-ID controls stay disabled during import and cancel ignores a late result", async () => {
     const initial = workbookWith("before");
     const session = createWorkbookSession({ workbook: initial });
     const token = deferred<string>();
-    const pendingClear = deferred<void>();
     const tokenProvider = {
       prepare: vi.fn().mockResolvedValue(undefined),
       getAccessToken: vi.fn(() => token.promise)
@@ -171,7 +161,7 @@ describe("Task 8 Google Sheets App integration", () => {
     const clientIdStorage = {
       load: vi.fn().mockResolvedValue(STORED_CLIENT_ID),
       save: vi.fn().mockResolvedValue(undefined),
-      clear: vi.fn(() => pendingClear.promise)
+      clear: vi.fn().mockResolvedValue(undefined)
     };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -204,10 +194,11 @@ describe("Task 8 Google Sheets App integration", () => {
     expect(changeButton).toBeDisabled();
     expect(forgetButton).toBeDisabled();
 
-    // Invoke the bound controller action directly to exercise its defensive path
-    // without weakening the disabled UI contract above.
-    act(() => invokeProgrammaticReactButtonAction(forgetButton));
-    expect(clientIdStorage.clear).toHaveBeenCalledTimes(1);
+    await user.click(forgetButton);
+    expect(clientIdStorage.clear).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(document.querySelector("dialog")).not.toHaveAttribute("open");
 
     await act(async () => token.resolve("ephemeral-token"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -220,7 +211,6 @@ describe("Task 8 Google Sheets App integration", () => {
       canRedo: false
     });
 
-    await act(async () => pendingClear.resolve(undefined));
     session.destroy();
   });
 });

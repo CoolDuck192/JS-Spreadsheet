@@ -73,6 +73,19 @@ describe("createBrowserTokenProvider", () => {
     expect(requestAccessToken).toHaveBeenCalledTimes(1);
   });
 
+  it("prepares lazily when a caller requests a token directly", async () => {
+    const { callbacks, initTokenClient, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID);
+
+    const tokenPromise = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    await vi.waitFor(() => expect(requestAccessToken).toHaveBeenCalledTimes(1));
+    expect(initTokenClient).toHaveBeenCalledTimes(1);
+
+    callbacks.token?.({ access_token: "token" });
+    await expect(tokenPromise).resolves.toBe("token");
+    expect(requestAccessToken).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["popup_failed_to_open", "popup_blocked"],
     ["popup_closed", "popup_closed"]
@@ -122,12 +135,11 @@ describe("createBrowserTokenProvider", () => {
     await expectCode(preparation, "gis_load_failed");
   });
 
-  it("maps token client initialization exceptions without surfacing their text", async () => {
+  it("maps lazy token client initialization exceptions without surfacing their text", async () => {
     installGoogleIdentityServices(() => {
       throw new Error("sensitive initialization detail");
     });
     const provider = createBrowserTokenProvider(CLIENT_ID);
-    await provider.prepare();
 
     const error = await provider.getAccessToken([SHEETS_READONLY_SCOPE]).catch((caught: unknown) => caught);
 
