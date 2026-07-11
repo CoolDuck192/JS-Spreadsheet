@@ -201,7 +201,7 @@ describe("useWorkbookSession", () => {
       save
     };
     const initial = createBlankWorkbook();
-    const { result } = renderHook(() => useWorkbookSession({
+    const { result, unmount } = renderHook(() => useWorkbookSession({
       defaultWorkbook: initial,
       storage,
       onError
@@ -226,6 +226,9 @@ describe("useWorkbookSession", () => {
         input: "must stay in memory"
       });
     });
+    await act(async () => Promise.resolve());
+    act(() => window.dispatchEvent(new Event("beforeunload")));
+    unmount();
     await act(async () => Promise.resolve());
     expect(save).not.toHaveBeenCalled();
   });
@@ -281,6 +284,95 @@ describe("useWorkbookSession", () => {
     });
     await waitFor(() => expect(result.current.getSnapshot().persistence.status).toBe("idle"));
     expect(Number(result.current.getSnapshot().revision) - Number(failedRevision)).toBe(1);
+  });
+  it("flushes the latest edit when unmounted before the autosave effect runs", async () => {
+    const save = vi.fn();
+    const storage: WorkbookStorage = { load: () => null, save };
+    const initial = createBlankWorkbook();
+    const { result, unmount } = renderHook(() =>
+      useWorkbookSession({ defaultWorkbook: initial, storage })
+    );
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "latest"
+      });
+      unmount();
+    });
+    await act(async () => Promise.resolve());
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(getCellContent(save.mock.calls[0][0], initial.activeSheetId, "A1")).toBe("latest");
+  });
+
+  it("drains the latest unmounted snapshot after an in-flight save", async () => {
+    const firstSave = deferred<void>();
+    const save = vi.fn()
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockResolvedValueOnce(undefined);
+    const storage: WorkbookStorage = { load: () => null, save };
+    const initial = createBlankWorkbook();
+    const { result, unmount } = renderHook(() =>
+      useWorkbookSession({ defaultWorkbook: initial, storage })
+    );
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "first"
+      });
+    });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "latest"
+      });
+      unmount();
+    });
+    await act(async () => Promise.resolve());
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await act(async () => firstSave.resolve());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(getCellContent(save.mock.calls[1][0], initial.activeSheetId, "A1")).toBe("latest");
+  });
+
+  it("flushes synchronously through beforeunload before passive effects", async () => {
+    const save = vi.fn();
+    const storage: WorkbookStorage = { load: () => null, save };
+    const initial = createBlankWorkbook();
+    const { result, unmount } = renderHook(() =>
+      useWorkbookSession({ defaultWorkbook: initial, storage })
+    );
+    await act(async () => Promise.resolve());
+    let savedDuringEvent = false;
+
+    act(() => {
+      result.current.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "leaving"
+      });
+      window.dispatchEvent(new Event("beforeunload"));
+      savedDuringEvent = save.mock.calls.length === 1;
+    });
+
+    expect(savedDuringEvent).toBe(true);
+    expect(getCellContent(save.mock.calls[0][0], initial.activeSheetId, "A1")).toBe("leaving");
+    unmount();
+    await act(async () => Promise.resolve());
   });
 
   it("survives StrictMode replay and destroys an owned session after final unmount", async () => {

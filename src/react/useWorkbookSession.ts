@@ -85,6 +85,7 @@ type OwnedSessionState = {
   controlledWorkbook?: WorkbookModel;
   beginHydration(callbacks: CallbackState): void;
   queueSave(snapshot: WorkbookSnapshot): void;
+  flushLatest(): void;
   destroy(): void;
 };
 
@@ -146,7 +147,10 @@ export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): Wor
     state.destroyed = false;
     state.cleanupToken = undefined;
     state.beginHydration(callbacks.current);
+    const handleBeforeUnload = () => state.flushLatest();
+    window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       const token = {};
       state.cleanupToken = token;
       queueMicrotask(() => {
@@ -301,28 +305,21 @@ function createOwnedSessionState(
       );
     },
     queueSave(current) {
-      if (
-        state.destroyed
-        || !state.storage
-        || !state.hydrated
-        || state.autosaveBlocked
-        || current.revision === state.lastQueuedRevision
-        || current.workbook === state.lastQueuedWorkbook
-      ) {
-        return;
+      if (stageSave(state, current)) {
+        pumpSaveQueue(state, callbacks);
       }
-      state.lastQueuedRevision = current.revision;
-      state.lastQueuedWorkbook = current.workbook;
-      state.pendingSave = { revision: current.revision, workbook: current.workbook };
+    },
+    flushLatest() {
+      if (state.destroyed) return;
+      stageSave(state, raw.getSnapshot());
       pumpSaveQueue(state, callbacks);
     },
     destroy() {
-      if (state.destroyed) {
-        return;
-      }
+      if (state.destroyed) return;
+      stageSave(state, raw.getSnapshot());
       state.destroyed = true;
-      state.pendingSave = undefined;
       raw.destroy();
+      pumpSaveQueue(state, callbacks);
     }
   };
 
@@ -379,13 +376,32 @@ function createOwnedSessionState(
   return state;
 }
 
+function stageSave(
+  state: OwnedSessionState,
+  current: WorkbookSnapshot
+): boolean {
+  if (
+    state.destroyed
+    || !state.storage
+    || !state.hydrated
+    || state.autosaveBlocked
+    || current.revision === state.lastQueuedRevision
+    || current.workbook === state.lastQueuedWorkbook
+  ) {
+    return false;
+  }
+  state.lastQueuedRevision = current.revision;
+  state.lastQueuedWorkbook = current.workbook;
+  state.pendingSave = { revision: current.revision, workbook: current.workbook };
+  return true;
+}
+
 function pumpSaveQueue(
   state: OwnedSessionState,
   callbacks: { current: CallbackState }
 ): void {
   if (
-    state.destroyed
-    || state.autosaveBlocked
+    state.autosaveBlocked
     || state.saveInFlight
     || !state.storage
     || !state.pendingSave
@@ -395,7 +411,9 @@ function pumpSaveQueue(
   const request = state.pendingSave;
   state.pendingSave = undefined;
   state.saveInFlight = true;
-  state.raw.dispatch({ type: "persistence.status", status: "saving", operation: "save" });
+  if (!state.destroyed) {
+    state.raw.dispatch({ type: "persistence.status", status: "saving", operation: "save" });
+  }
 
   let saved: ReturnType<WorkbookStorage["save"]>;
   try {
@@ -404,10 +422,14 @@ function pumpSaveQueue(
     finishSave(state, callbacks, false);
     return;
   }
-  Promise.resolve(saved).then(
-    () => finishSave(state, callbacks, true),
-    () => finishSave(state, callbacks, false)
-  );
+  if (isPromiseLike(saved)) {
+    saved.then(
+      () => finishSave(state, callbacks, true),
+      () => finishSave(state, callbacks, false)
+    );
+  } else {
+    finishSave(state, callbacks, true);
+  }
 }
 
 function finishSave(
@@ -415,19 +437,20 @@ function finishSave(
   callbacks: { current: CallbackState },
   succeeded: boolean
 ): void {
-  if (state.destroyed) {
-    return;
-  }
   state.saveInFlight = false;
-  if (succeeded) {
-    state.raw.dispatch({ type: "persistence.status", status: "idle" });
-  } else {
-    state.raw.dispatch({
-      type: "persistence.status",
-      status: "failed",
-      operation: "save",
-      message: "Workbook could not be saved"
-    });
+  if (!state.destroyed) {
+    if (succeeded) {
+      state.raw.dispatch({ type: "persistence.status", status: "idle" });
+    } else {
+      state.raw.dispatch({
+        type: "persistence.status",
+        status: "failed",
+        operation: "save",
+        message: "Workbook could not be saved"
+      });
+    }
+  }
+  if (!succeeded) {
     invokeSafely(callbacks.current.onError, {
       code: "storage.save.failed",
       message: "Workbook could not be saved",
