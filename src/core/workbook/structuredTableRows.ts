@@ -270,6 +270,7 @@ function rewriteWorkbookForRowEdits(
   edits: readonly RectangularEdit[]
 ): RewriteOutcome {
   let candidate = workbook;
+  let tableRowEnd = table.range.end.row;
   const editedSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId)!;
   for (const edit of edits) {
     const sheets: SheetModel[] = [];
@@ -294,7 +295,7 @@ function rewriteWorkbookForRowEdits(
           editedSheetId: editedSheet.name,
           tableColumnStart: table.range.start.column,
           tableColumnEnd: table.range.end.column,
-          tableRowEnd: table.range.end.row,
+          tableRowEnd,
           row: edit.row,
           count: edit.count,
           operation: edit.operation,
@@ -313,7 +314,7 @@ function rewriteWorkbookForRowEdits(
     }
     const namedRanges = [] as WorkbookModel["namedRanges"];
     for (const namedRange of candidate.namedRanges) {
-      const rewritten = rewriteNamedRange(namedRange, table, edit);
+      const rewritten = rewriteNamedRange(namedRange, table, edit, tableRowEnd);
       if (rewritten === "unsupported") {
         return {
           status: "rejected",
@@ -327,6 +328,7 @@ function rewriteWorkbookForRowEdits(
       namedRanges.push(rewritten);
     }
     candidate = { ...candidate, sheets, namedRanges };
+    tableRowEnd += edit.operation === "insert" ? edit.count : -edit.count;
   }
   return { status: "committed", workbook: candidate };
 }
@@ -334,7 +336,8 @@ function rewriteWorkbookForRowEdits(
 function rewriteNamedRange(
   namedRange: WorkbookModel["namedRanges"][number],
   table: StructuredTable,
-  edit: RectangularEdit
+  edit: RectangularEdit,
+  tableRowEnd: number
 ): WorkbookModel["namedRanges"][number] | "unsupported" {
   if (namedRange.sheetId !== table.sheetId) return namedRange;
   const range = namedRange.range;
@@ -345,7 +348,7 @@ function rewriteNamedRange(
     range.start.row,
     range.end.row,
     edit,
-    table.range.end.row
+    tableRowEnd
   );
   if (interval === "unchanged") return namedRange;
   const whollyInside = range.start.column >= table.range.start.column

@@ -41,6 +41,35 @@ describe("structured table rows", () => {
     expect(getCellContent(result.workbook, "sheet-1", "D3")).toBe("unrelated-right");
   });
 
+  it("rewrites formulas across non-contiguous deletes like sequential bottom-up deletes", () => {
+    const workbook = rowFixture({ D1: "=SUM(A4:A6)" });
+
+    const { composite, sequential } = deleteCompositeAndSequential(workbook);
+
+    expect(getCellContent(composite, "sheet-1", "D1")).toBe("=SUM(A4:A6)");
+    expect(getCellContent(composite, "sheet-1", "D1"))
+      .toBe(getCellContent(sequential, "sheet-1", "D1"));
+  });
+
+  it("rewrites named ranges across non-contiguous deletes like sequential bottom-up deletes", () => {
+    const workbook: WorkbookModel = {
+      ...rowFixture(),
+      namedRanges: [{
+        name: "CrossesDeletedTableBottom",
+        sheetId: "sheet-1",
+        range: { start: { row: 3, column: 0 }, end: { row: 5, column: 0 } }
+      }]
+    };
+
+    const { composite, sequential } = deleteCompositeAndSequential(workbook);
+
+    expect(composite.namedRanges[0].range).toEqual({
+      start: { row: 3, column: 0 },
+      end: { row: 5, column: 0 }
+    });
+    expect(composite.namedRanges).toEqual(sequential.namedRanges);
+  });
+
   it("keeps out-of-table references pinned when body formulas move", () => {
     const workbook = rowFixture({ B3: "=A3+D3+1" });
 
@@ -374,6 +403,34 @@ function servicesFor(workbook: WorkbookModel): StructuredTableCommandServices {
       return workbook.sheets.find((sheet) => sheet.id === sheetId)?.cells[address] ?? null;
     }
   };
+}
+
+function deleteCompositeAndSequential(workbook: WorkbookModel): {
+  composite: WorkbookModel;
+  sequential: WorkbookModel;
+} {
+  const composite = deleteStructuredTableRows(
+    workbook,
+    "table-1",
+    ["row-1", "row-3"],
+    servicesFor(workbook)
+  );
+  const lower = deleteStructuredTableRows(
+    workbook,
+    "table-1",
+    ["row-3"],
+    servicesFor(workbook)
+  );
+  const sequential = deleteStructuredTableRows(
+    lower.workbook,
+    "table-1",
+    ["row-1"],
+    servicesFor(lower.workbook)
+  );
+  expect(composite.status).toBe("committed");
+  expect(lower.status).toBe("committed");
+  expect(sequential.status).toBe("committed");
+  return { composite: composite.workbook, sequential: sequential.workbook };
 }
 
 function table(workbook: WorkbookModel): StructuredTable {
