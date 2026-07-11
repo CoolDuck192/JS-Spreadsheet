@@ -21,6 +21,7 @@ import {
   type StructuredTableCommandServices,
   type StructuredTableReduction
 } from "./structuredTables";
+import { migrateTableSort } from "./migrateWorkbook";
 
 export type TableCellPlanes = Pick<
   SheetModel,
@@ -184,12 +185,16 @@ export function sortStructuredTableRows(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return rejected(workbook, "TABLE_NOT_FOUND", "Structured table does not exist");
-  if (sorting.some((sort) => !table.columns.some((column) => column.id === sort.columnId))) {
-    return rejected(workbook, "TABLE_COLUMN_NOT_FOUND", "Sort column does not belong to the table");
+  const migratedSorting = migrateTableSort(
+    sorting,
+    new Set(table.columns.map((column) => column.id))
+  );
+  if (!migratedSorting) {
+    return rejected(workbook, "TABLE_SORT_INVALID", "Structured table sort is invalid");
   }
   const body = getStructuredTableBodyRange(table);
   if (!body || table.rowIds.length < 2) {
-    const nextTable = { ...table, sort: sorting.map((sort) => ({ ...sort })) };
+    const nextTable = { ...table, sort: migratedSorting };
     return { status: "committed", workbook: replaceTable(workbook, nextTable) };
   }
   const records = table.rowIds.map((rowId, index) => ({
@@ -198,7 +203,7 @@ export function sortStructuredTableRows(
     originalIndex: index
   }));
   records.sort((left, right) => {
-    for (const sort of sorting) {
+    for (const sort of migratedSorting) {
       const column = table.columns.find((candidate) => candidate.id === sort.columnId)!;
       const leftValue = services.getCellEvaluation(
         table.sheetId,
@@ -224,7 +229,7 @@ export function sortStructuredTableRows(
   const nextTable = {
     ...table,
     rowIds: records.map(({ rowId }) => rowId),
-    sort: sorting.map((sort) => ({ ...sort }))
+    sort: migratedSorting
   };
   next = replaceTable(next, nextTable);
   next = regenerateCalculatedColumns(next, nextTable);

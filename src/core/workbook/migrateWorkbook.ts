@@ -1,6 +1,7 @@
 import type {
   CellBorderSide,
   CellBorders,
+  CellContent,
   CellFormat,
   CellRange,
   ConditionalFormatCondition,
@@ -167,7 +168,7 @@ function migrateValidations(
   return result;
 }
 
-function migrateValidationRule(value: unknown): DataValidationRule | null {
+export function migrateValidationRule(value: unknown): DataValidationRule | null {
   if (!isRecord(value) || !optionalBoolean(value.allowBlank)) return null;
   if (value.type === "list") {
     if (!Array.isArray(value.values) || !value.values.every((item) => typeof item === "string")) return null;
@@ -301,26 +302,33 @@ function migrateSheetFilters(value: unknown, bounds: SheetBounds): SheetFilter[]
   const result: SheetFilter[] = [];
   const ids = new Set<string>();
   for (const item of value) {
-    if (!isRecord(item) || !nonBlankString(item.id) || ids.has(item.id)) return null;
-    if (!isCellRange(item.range) || !rangeInBounds(item.range, bounds)) return null;
-    if (!Number.isInteger(item.column)
-      || (item.column as number) < item.range.start.column
-      || (item.column as number) > item.range.end.column) return null;
-    if (!["contains", "equals", "greaterThan", "lessThan"].includes(item.operator as string)) return null;
-    if (typeof item.value !== "string" || !optionalBoolean(item.hasHeader)) return null;
-    if (item.values !== undefined && (!Array.isArray(item.values) || !item.values.every((entry) => typeof entry === "string"))) return null;
-    ids.add(item.id);
-    result.push({
-      id: item.id,
-      range: cloneRange(item.range),
-      column: item.column as number,
-      operator: item.operator as SheetFilter["operator"],
-      value: item.value,
-      ...(item.values === undefined ? {} : { values: [...item.values] }),
-      ...(item.hasHeader === undefined ? {} : { hasHeader: item.hasHeader as boolean })
-    });
+    const filter = migrateSheetFilter(item, bounds);
+    if (!filter || ids.has(filter.id)) return null;
+    ids.add(filter.id);
+    result.push(filter);
   }
   return result;
+}
+
+export function migrateSheetFilter(value: unknown, bounds: SheetBounds): SheetFilter | null {
+  if (!isRecord(value) || !nonBlankString(value.id)) return null;
+  if (!isCellRange(value.range) || !rangeInBounds(value.range, bounds)) return null;
+  if (!Number.isInteger(value.column)
+    || (value.column as number) < value.range.start.column
+    || (value.column as number) > value.range.end.column) return null;
+  if (!["contains", "equals", "greaterThan", "lessThan"].includes(value.operator as string)) return null;
+  if (typeof value.value !== "string" || !optionalBoolean(value.hasHeader)) return null;
+  if (value.values !== undefined
+    && (!Array.isArray(value.values) || !value.values.every((entry) => typeof entry === "string"))) return null;
+  return {
+    id: value.id,
+    range: cloneRange(value.range),
+    column: value.column as number,
+    operator: value.operator as SheetFilter["operator"],
+    value: value.value,
+    ...(value.values === undefined ? {} : { values: [...value.values] }),
+    ...(value.hasHeader === undefined ? {} : { hasHeader: value.hasHeader as boolean })
+  };
 }
 
 function migrateSheetCharts(value: unknown, bounds: SheetBounds): SheetChart[] | null {
@@ -451,9 +459,9 @@ function migrateTable(
   if (new Set(value.rowIds).size !== value.rowIds.length) return null;
   if (value.keyColumnId !== undefined && (!nonBlankString(value.keyColumnId) || !columnIds.has(value.keyColumnId))) return null;
 
-  const sort = migrateSort(value.sort, columnIds);
+  const sort = migrateTableSort(value.sort, columnIds);
   if (sort === null) return null;
-  const filter = migrateFilter(value.filter, columnIds);
+  const filter = migrateTableFilter(value.filter, columnIds);
   if (filter === null) return null;
   const style = migrateStyle(value.style);
   if (style === null) return null;
@@ -479,9 +487,7 @@ function migrateColumn(value: unknown, expectedSheetColumn: number, totalsRow: b
   if (value.sheetColumn !== expectedSheetColumn) return null;
   if (value.dataType !== undefined && (typeof value.dataType !== "string" || !DATA_TYPES.has(value.dataType as TableDataType))) return null;
   if (value.calculatedFormula !== undefined && typeof value.calculatedFormula !== "string") return null;
-  if (value.totalsFunction !== undefined && (
-    typeof value.totalsFunction !== "string" || !TOTALS_FUNCTIONS.has(value.totalsFunction as TableAggregate)
-  )) return null;
+  if (value.totalsFunction !== undefined && !isSupportedTableAggregate(value.totalsFunction)) return null;
   if (value.totalsLabel !== undefined && typeof value.totalsLabel !== "string") return null;
   if (value.totalsFunction !== undefined && value.totalsLabel !== undefined) return null;
   if (!totalsRow && (value.totalsFunction !== undefined || value.totalsLabel !== undefined)) return null;
@@ -496,7 +502,14 @@ function migrateColumn(value: unknown, expectedSheetColumn: number, totalsRow: b
   };
 }
 
-function migrateSort(value: unknown, columnIds: ReadonlySet<string>): readonly TableSort[] | undefined | null {
+export function isSupportedTableAggregate(value: unknown): value is TableAggregate {
+  return typeof value === "string" && TOTALS_FUNCTIONS.has(value as TableAggregate);
+}
+
+export function migrateTableSort(
+  value: unknown,
+  columnIds: ReadonlySet<string>
+): readonly TableSort[] | undefined | null {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return null;
   const result: TableSort[] = [];
@@ -513,7 +526,10 @@ function migrateSort(value: unknown, columnIds: ReadonlySet<string>): readonly T
   return result;
 }
 
-function migrateFilter(value: unknown, columnIds: ReadonlySet<string>): FilterExpression | undefined | null {
+export function migrateTableFilter(
+  value: unknown,
+  columnIds: ReadonlySet<string>
+): FilterExpression | undefined | null {
   if (value === undefined) return undefined;
   let filter: FilterExpression;
   try {
@@ -524,7 +540,8 @@ function migrateFilter(value: unknown, columnIds: ReadonlySet<string>): FilterEx
       aggregates: [],
       pagination: { kind: "none" }
     } satisfies QueryRequest));
-    filter = request.filter!;
+    if (request.filter === null) return null;
+    filter = request.filter;
   } catch {
     return null;
   }
@@ -610,11 +627,15 @@ function cloneRange(range: CellRange): CellRange {
   return { start: { ...range.start }, end: { ...range.end } };
 }
 
+export function isMigratableCellContent(value: unknown): value is CellContent {
+  return value === null
+    || typeof value === "string"
+    || typeof value === "boolean"
+    || (typeof value === "number" && Number.isFinite(value));
+}
+
 function cellRecord(value: Record<string, unknown>): boolean {
-  return Object.values(value).every((cell) => cell === null
-    || typeof cell === "string"
-    || typeof cell === "boolean"
-    || (typeof cell === "number" && Number.isFinite(cell)));
+  return Object.values(value).every(isMigratableCellContent);
 }
 
 function booleanFlagRecord(value: Record<string, unknown>): Record<string, boolean> {

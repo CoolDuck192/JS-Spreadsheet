@@ -17,6 +17,7 @@ import { getCellContent, getCellReadOnly, setCellContent, setCellFormat } from "
 import { parseCellInput } from "../values/parseCellInput";
 import type { FilterExpression, TableSort } from "../../table/core/query";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
+import { isSupportedTableAggregate, migrateTableFilter } from "./migrateWorkbook";
 import {
   deleteStructuredTableRows,
   insertStructuredTableRows,
@@ -453,6 +454,9 @@ function setTotalsFunction(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  if (!isSupportedTableAggregate(aggregate)) {
+    return reject(workbook, "TABLE_TOTALS_FUNCTION_INVALID", "Totals function is invalid");
+  }
   const columnIndex = table.columns.findIndex((column) => column.id === columnId);
   if (columnIndex < 0) return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Structured table column does not exist");
   if (!table.totalsRow && aggregate !== "none") {
@@ -507,12 +511,15 @@ function setFilter(
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
   const columnIds = new Set(table.columns.map((column) => column.id));
-  if (filter && !everyFilterColumn(filter, columnIds)) {
-    return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Filter column does not belong to the table");
+  const migratedFilter = migrateTableFilter(filter, columnIds);
+  if (migratedFilter === null) {
+    return reject(workbook, "TABLE_FILTER_INVALID", "Structured table filter is invalid");
   }
-  if (JSON.stringify(table.filter) === JSON.stringify(filter)) return { status: "unchanged", workbook };
+  if (JSON.stringify(table.filter) === JSON.stringify(migratedFilter)) {
+    return { status: "unchanged", workbook };
+  }
   const { filter: _current, ...base } = table;
-  return commitTable(workbook, filter === undefined ? base : { ...base, filter });
+  return commitTable(workbook, migratedFilter === undefined ? base : { ...base, filter: migratedFilter });
 }
 
 function editCells(

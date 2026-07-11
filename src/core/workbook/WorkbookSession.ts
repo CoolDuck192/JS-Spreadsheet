@@ -654,6 +654,19 @@ export function createWorkbookSession(options: CreateWorkbookSessionOptions): Wo
     }
 
     if (command.type === "workbook.replace") {
+      if (
+        migrateWorkbookModel(command.workbook) === null
+        || !hasUniqueStructuredTableIds(command.workbook)
+      ) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{
+            code: "WORKBOOK_REPLACEMENT_INVALID",
+            message: "Replacement workbook must satisfy the persisted workbook contract"
+          }]
+        };
+      }
       if (state.workbook === command.workbook) {
         return {
           status: "applied",

@@ -84,7 +84,12 @@ import {
   reduceWorksheetStructureCommand,
   type WorksheetStructureCommand
 } from "./worksheetStructure";
-import { migrateConditionalFormatRule } from "./migrateWorkbook";
+import {
+  isMigratableCellContent,
+  migrateConditionalFormatRule,
+  migrateSheetFilter,
+  migrateValidationRule
+} from "./migrateWorkbook";
 
 export type SerializableRichClipboardRange = {
   readonly range: CellRange;
@@ -564,8 +569,16 @@ export function applyWorkbookMutation(
       );
     }
     case "clipboard.paste": {
+      const modeIssue = clipboardPasteModeValidation(command.mode, command.sheetId);
+      if (modeIssue) return modeIssue;
       const startAddress = formatCellAddress(checkedCoordinate(command.target));
       const clipboard = mutableClipboard(command.payload);
+      const contentIssue = clipboardContentValidation(clipboard, command.mode, command.sheetId);
+      if (contentIssue) return contentIssue;
+      if (command.mode === "all" || command.mode === "transpose") {
+        const ruleIssue = clipboardValidationRulesValidation(clipboard, command.sheetId);
+        if (ruleIssue) return ruleIssue;
+      }
       const addresses = previewRichPaste(clipboard, startAddress, { mode: command.mode })
         .map((cell) => cell.address);
       const mutatesContent = command.mode !== "formats";
@@ -710,8 +723,30 @@ export function applyWorkbookMutation(
       }));
     case "sheet.protection.set":
       return applied(setSheetProtection(workbook, command.sheetId, command.protected));
-    case "sheet.filter.set":
-      return applied(setSheetFilter(workbook, command.sheetId, command.filter));
+    case "sheet.filter.set": {
+      const range = checkedRange(command.filter.range);
+      const rangeIssue = rangeBoundsValidation(
+        workbook,
+        command.sheetId,
+        range,
+        "Filter range must be inside the sheet"
+      );
+      if (rangeIssue) return rangeIssue;
+      const sheet = workbook.sheets.find((candidate) => candidate.id === command.sheetId)!;
+      const filter = migrateSheetFilter({ ...command.filter, range }, sheet);
+      if (!filter) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{
+            code: "filter.invalid",
+            message: "Filter id, column, operator, values, and header flag must be valid",
+            sheetId: command.sheetId
+          }]
+        };
+      }
+      return applied(setSheetFilter(workbook, command.sheetId, filter));
+    }
     case "sheet.filter.clear": {
       if (command.column === undefined) {
         return applied(clearSheetFilters(workbook, command.sheetId));
@@ -1097,28 +1132,7 @@ function validationRuleValidation(
   rule: unknown,
   sheetId: string
 ): WorkbookMutationResult | null {
-  const candidate = typeof rule === "object" && rule !== null && !Array.isArray(rule)
-    ? rule as Record<string, unknown>
-    : null;
-  const allowBlankIsValid = candidate
-    && (candidate.allowBlank === undefined || typeof candidate.allowBlank === "boolean");
-  let valid = false;
-  if (allowBlankIsValid && candidate.type === "list") {
-    valid = Array.isArray(candidate.values)
-      && candidate.values.every((value) => typeof value === "string");
-  } else if (allowBlankIsValid
-    && (candidate.type === "number" || candidate.type === "textLength")) {
-    const minIsValid = candidate.min === undefined
-      || (typeof candidate.min === "number" && Number.isFinite(candidate.min));
-    const maxIsValid = candidate.max === undefined
-      || (typeof candidate.max === "number" && Number.isFinite(candidate.max));
-    valid = minIsValid
-      && maxIsValid
-      && !(typeof candidate.min === "number"
-        && typeof candidate.max === "number"
-        && candidate.min > candidate.max);
-  }
-  return valid
+  return migrateValidationRule(rule)
     ? null
     : {
         status: "rejected",
@@ -1129,6 +1143,62 @@ function validationRuleValidation(
           sheetId
         }]
       };
+}
+
+function clipboardPasteModeValidation(
+  mode: unknown,
+  sheetId: string
+): WorkbookMutationResult | null {
+  return mode === "all" || mode === "values" || mode === "formats" || mode === "transpose"
+    ? null
+    : {
+        status: "rejected",
+        reason: "validation",
+        issues: [{
+          code: "clipboard.mode.invalid",
+          message: "Clipboard paste mode is invalid",
+          sheetId
+        }]
+      };
+}
+
+function clipboardContentValidation(
+  clipboard: RichClipboardRange,
+  mode: RichPasteMode,
+  sheetId: string
+): WorkbookMutationResult | null {
+  if (mode === "formats") return null;
+  for (const row of clipboard.cells) {
+    for (const cell of row) {
+      const content = mode === "values" ? cell.displayContent : cell.content;
+      if (!isMigratableCellContent(content)) {
+        return {
+          status: "rejected",
+          reason: "validation",
+          issues: [{
+            code: "clipboard.content.invalid",
+            message: "Clipboard content must be a finite number, text, boolean, or blank",
+            sheetId
+          }]
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function clipboardValidationRulesValidation(
+  clipboard: RichClipboardRange,
+  sheetId: string
+): WorkbookMutationResult | null {
+  for (const row of clipboard.cells) {
+    for (const cell of row) {
+      if (cell.validation !== null && !migrateValidationRule(cell.validation)) {
+        return validationRuleValidation(cell.validation, sheetId);
+      }
+    }
+  }
+  return null;
 }
 
 function chartShapeValidation(
