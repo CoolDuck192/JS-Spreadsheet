@@ -18,7 +18,7 @@ import {
   getStructuredTable,
   getStructuredTableBodyRange,
   regenerateStructuredTableTotals,
-  reduceStructuredTableCommand,
+  resizeStructuredTableMetadata,
   type StructuredTableCommandServices,
   type StructuredTableReduction
 } from "./structuredTables";
@@ -72,13 +72,9 @@ export function insertStructuredTableRows(
     operation: "insert"
   }]);
   if (rewritten.status === "rejected") return rewritten;
-  const resized = reduceStructuredTableCommand(rewritten.workbook, {
-    type: "table.resize",
-    tableId,
-    range: {
-      start: { ...table.range.start },
-      end: { ...table.range.end, row: newBottom }
-    }
+  const resized = resizeStructuredTableMetadata(rewritten.workbook, tableId, {
+    start: { ...table.range.start },
+    end: { ...table.range.end, row: newBottom }
   }, services);
   if (resized.status === "rejected") return resized;
   const resizedTable = getStructuredTable(resized.workbook, tableId)!;

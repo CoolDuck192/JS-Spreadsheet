@@ -349,6 +349,30 @@ function resizeTable(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  const resized = resizeStructuredTableMetadata(workbook, tableId, requestedRange, services);
+  if (resized.status !== "committed" || !table.totalsRow) return resized;
+  const resizedTable = getStructuredTable(resized.workbook, tableId)!;
+  if (resizedTable.range.end.row === table.range.end.row) return resized;
+
+  let next = rotateTableTotalsRow(
+    resized.workbook,
+    table.sheetId,
+    resizedTable.range,
+    table.range.end.row,
+    resizedTable.range.end.row
+  );
+  next = regenerateStructuredTableTotals(next, resizedTable);
+  return { status: "committed", workbook: next };
+}
+
+export function resizeStructuredTableMetadata(
+  workbook: WorkbookModel,
+  tableId: string,
+  requestedRange: CellRange,
+  services: StructuredTableCommandServices
+): StructuredTableReduction {
+  const table = getStructuredTable(workbook, tableId);
+  if (!table) return tableNotFound(workbook);
   const range = cloneRange(requestedRange);
   if (range.start.row !== table.range.start.row || range.start.column !== table.range.start.column) {
     return reject(workbook, "TABLE_RANGE_BLOCKED", "Table resize must preserve its top-left cell");
@@ -687,6 +711,64 @@ function shiftTableSlice(
     unlockedCells: shiftAddressRecord(sheet.protection.unlockedCells, table.range, startRow, endRow, rowOffset)
   };
   const nextSheet = { ...sheet, cells, formats, validations, comments, hyperlinks, protection };
+  return {
+    ...workbook,
+    sheets: workbook.sheets.map((candidate, index) => index === sheetIndex ? nextSheet : candidate)
+  };
+}
+
+function rotateTableTotalsRow(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  sourceRow: number,
+  targetRow: number
+): WorkbookModel {
+  const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === sheetId);
+  const sheet = workbook.sheets[sheetIndex];
+  const firstRow = Math.min(sourceRow, targetRow);
+  const lastRow = Math.max(sourceRow, targetRow);
+  const mappings: Array<{ sourceRow: number; targetRow: number }> = [];
+  if (targetRow > sourceRow) {
+    for (let row = sourceRow + 1; row <= targetRow; row += 1) {
+      mappings.push({ sourceRow: row, targetRow: row - 1 });
+    }
+  } else {
+    for (let row = targetRow; row < sourceRow; row += 1) {
+      mappings.push({ sourceRow: row, targetRow: row + 1 });
+    }
+  }
+  mappings.push({ sourceRow, targetRow });
+
+  const rotate = <T>(record: Readonly<Record<string, T>>): Record<string, T> => {
+    const next = { ...record };
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        delete next[formatCellAddress({ row, column })];
+      }
+    }
+    for (const mapping of mappings) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        const sourceAddress = formatCellAddress({ row: mapping.sourceRow, column });
+        if (!Object.prototype.hasOwnProperty.call(record, sourceAddress)) continue;
+        next[formatCellAddress({ row: mapping.targetRow, column })] = record[sourceAddress];
+      }
+    }
+    return next;
+  };
+  const nextSheet: typeof sheet = {
+    ...sheet,
+    cells: rotate(sheet.cells),
+    formats: rotate(sheet.formats),
+    validations: rotate(sheet.validations),
+    comments: rotate(sheet.comments),
+    hyperlinks: rotate(sheet.hyperlinks),
+    protection: {
+      ...sheet.protection,
+      lockedCells: rotate(sheet.protection.lockedCells),
+      unlockedCells: rotate(sheet.protection.unlockedCells)
+    }
+  };
   return {
     ...workbook,
     sheets: workbook.sheets.map((candidate, index) => index === sheetIndex ? nextSheet : candidate)

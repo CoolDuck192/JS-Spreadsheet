@@ -147,6 +147,54 @@ describe("structured table metadata", () => {
     }, services, "TABLE_RANGE_BLOCKED");
   });
 
+  it("moves a totals row and its cell metadata when a table grows", () => {
+    const workbook = totalsResizeFixture({ A7: "middle", B7: 50, A8: "tail", B8: 99 });
+    const services = deterministicServices();
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, services);
+
+    expect(getCellContent(resized, "sheet-1", "A8")).toBe("Total");
+    expect(getCellContent(resized, "sheet-1", "B8")).toBe("=SUBTOTAL(109,B2:B7)");
+    expect(resized.sheets[0].formats.B8).toEqual({ bold: true });
+    expect(resized.sheets[0].validations.B8).toEqual({ type: "number", min: 0 });
+    expect(resized.sheets[0].comments.B8).toBe("generated total");
+    expect(resized.sheets[0].hyperlinks.B8).toBe("https://example.com/total");
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe("middle");
+    expect(getCellContent(resized, "sheet-1", "B6")).toBe(50);
+    expect(getCellContent(resized, "sheet-1", "A7")).toBe("tail");
+    expect(getCellContent(resized, "sheet-1", "B7")).toBe(99);
+  });
+
+  it("keeps displaced body data when a shrunken table later disables totals", () => {
+    const workbook = totalsResizeFixture();
+    const services = deterministicServices();
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 3, 1)
+    }, services);
+    expect(getCellContent(resized, "sheet-1", "A4")).toBe("Total");
+    expect(getCellContent(resized, "sheet-1", "B4")).toBe("=SUBTOTAL(109,B2:B3)");
+
+    const withoutTotals = commit(resized, {
+      type: "table.setTotalsRow",
+      tableId: "table-totals",
+      enabled: false
+    }, services);
+
+    expect(getCellContent(withoutTotals, "sheet-1", "A5")).toBe("Linus");
+    expect(getCellContent(withoutTotals, "sheet-1", "B5")).toBe(30);
+    expect(getCellContent(withoutTotals, "sheet-1", "A6")).toBe("Margaret");
+    expect(getCellContent(withoutTotals, "sheet-1", "B6")).toBe(40);
+    expect(getCellContent(withoutTotals, "sheet-1", "A4")).toBeNull();
+    expect(getCellContent(withoutTotals, "sheet-1", "B4")).toBeNull();
+  });
+
   it("toggles headers and totals without replacing body row IDs", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "Ada");
@@ -246,6 +294,42 @@ function tableFixture(columnCount: number, rowCount: number) {
     }
   }
   return { workbook, services: deterministicServices() };
+}
+
+function totalsResizeFixture(overrides: Record<string, string | number> = {}): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  return {
+    ...workbook,
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A1: "Name", B1: "Amount",
+        A2: "Ada", B2: 10,
+        A3: "Grace", B3: 20,
+        A4: "Linus", B4: 30,
+        A5: "Margaret", B5: 40,
+        A6: "Total", B6: "=SUBTOTAL(109,B2:B5)",
+        ...overrides
+      },
+      formats: { B6: { bold: true } },
+      validations: { B6: { type: "number", min: 0 } },
+      comments: { B6: "generated total" },
+      hyperlinks: { B6: "https://example.com/total" }
+    }],
+    tables: [{
+      id: "table-totals",
+      name: "TotalsTable",
+      sheetId: "sheet-1",
+      range: range(0, 0, 5, 1),
+      headerRow: true,
+      totalsRow: true,
+      columns: [
+        { id: "column-name", name: "Name", sheetColumn: 0, totalsLabel: "Total" },
+        { id: "column-amount", name: "Amount", sheetColumn: 1, totalsFunction: "sum" }
+      ],
+      rowIds: ["row-ada", "row-grace", "row-linus", "row-margaret"]
+    }]
+  };
 }
 
 function deterministicServices(): StructuredTableCommandServices {
