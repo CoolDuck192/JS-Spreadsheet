@@ -371,6 +371,88 @@ describe("useGoogleSheetsImport", () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "unknown" }));
   });
 
+  it("disables stored client-ID actions throughout provider and import work", async () => {
+    const preparation = deferred<void>();
+    const token = deferred<string>();
+    const response = deferred<void>();
+    const storedProvider = provider({
+      prepare: vi.fn(() => preparation.promise),
+      getAccessToken: vi.fn(() => token.promise)
+    });
+    googleMocks.importWorkbook.mockImplementation(async (_sheet: string, importProvider: TokenProvider) => {
+      await importProvider.getAccessToken([]);
+      await response.promise;
+      return result("Pending actions");
+    });
+    const controller = renderController({
+      configuration: {
+        clientIdStorage: storage({ load: vi.fn().mockResolvedValue(STORED_CLIENT_ID) }),
+        tokenProviderFactory: vi.fn(() => storedProvider)
+      }
+    });
+
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("preparing"));
+    expect(controller.result.current.clientIdSource).toBe("stored");
+    expect(controller.result.current.canChangeClientId).toBe(false);
+    expect(controller.result.current.canForgetClientId).toBe(false);
+
+    await act(async () => preparation.resolve(undefined));
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+    expect(controller.result.current.canChangeClientId).toBe(true);
+    expect(controller.result.current.canForgetClientId).toBe(true);
+
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+    expect(controller.result.current.phase).toBe("authorizing");
+    expect(controller.result.current.canChangeClientId).toBe(false);
+    expect(controller.result.current.canForgetClientId).toBe(false);
+
+    await act(async () => token.resolve("ephemeral-token"));
+    await waitFor(() => expect(controller.result.current.phase).toBe("importing"));
+    expect(controller.result.current.canChangeClientId).toBe(false);
+    expect(controller.result.current.canForgetClientId).toBe(false);
+
+    await act(async () => response.resolve(undefined));
+  });
+
+  it("invalidates an active import before a programmatic stored-ID forget waits on storage", async () => {
+    const pendingImport = deferred<GoogleSheetsImportResult>();
+    const pendingClear = deferred<void>();
+    const onImported = vi.fn();
+    googleMocks.importWorkbook.mockReturnValue(pendingImport.promise);
+    const clientIdStorage = storage({
+      load: vi.fn().mockResolvedValue(STORED_CLIENT_ID),
+      clear: vi.fn(() => pendingClear.promise)
+    });
+    const controller = renderController({
+      configuration: {
+        clientIdStorage,
+        tokenProviderFactory: vi.fn(() => provider())
+      },
+      onImported
+    });
+
+    await openReady(controller);
+    act(() => controller.result.current.setSheetDraft(SHEET_ID));
+    act(() => controller.result.current.importSheet());
+
+    let forgetting!: Promise<void>;
+    act(() => {
+      forgetting = controller.result.current.forgetClientId();
+    });
+    expect(clientIdStorage.clear).toHaveBeenCalledTimes(1);
+
+    await act(async () => pendingImport.resolve(result("Too late")));
+    expect(onImported).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingClear.resolve(undefined);
+      await forgetting;
+    });
+    expect(controller.result.current.clientIdSource).toBe("missing");
+  });
+
   it("caches and prepares a factory provider once per hook instance", async () => {
     const firstProvider = provider();
     const secondProvider = provider();

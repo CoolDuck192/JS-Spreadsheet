@@ -9,6 +9,7 @@ import { GoogleSheetsError } from "./lib/googleErrors";
 import { createBlankWorkbook, setCellContent } from "./lib/workbook";
 
 const SHEET_ID = "12345678901234567890";
+const STORED_CLIENT_ID = "stored.apps.googleusercontent.com";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,6 +30,15 @@ async function openGoogleImport(user: ReturnType<typeof userEvent.setup>) {
   const tabs = within(screen.getByRole("tablist", { name: "Ribbon tabs" }));
   await user.click(tabs.getByRole("tab", { name: "File" }));
   await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+}
+
+function invokeProgrammaticReactButtonAction(button: HTMLElement) {
+  const propsKey = Object.keys(button).find((key) => key.startsWith("__reactProps$"));
+  if (!propsKey) {
+    throw new Error("React button props were not available to the test.");
+  }
+  const props = (button as unknown as Record<string, { onClick?: () => void }>)[propsKey];
+  props.onClick?.();
 }
 
 describe("Task 8 Google Sheets App integration", () => {
@@ -146,6 +156,71 @@ describe("Task 8 Google Sheets App integration", () => {
       canUndo: false,
       canRedo: false
     });
+    session.destroy();
+  });
+
+  it("Task 8 stored-ID Forget is disabled during import and defensively ignores a late result", async () => {
+    const initial = workbookWith("before");
+    const session = createWorkbookSession({ workbook: initial });
+    const token = deferred<string>();
+    const pendingClear = deferred<void>();
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn(() => token.promise)
+    };
+    const clientIdStorage = {
+      load: vi.fn().mockResolvedValue(STORED_CLIENT_ID),
+      save: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn(() => pendingClear.promise)
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        properties: { title: "Late workbook" },
+        sheets: [{ properties: { title: "Late sheet" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        valueRanges: [{ values: [["late"]] }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(
+      <Spreadsheet
+        session={session}
+        services={{
+          googleSheets: {
+            clientIdStorage,
+            tokenProviderFactory: vi.fn(() => tokenProvider)
+          }
+        }}
+      />
+    );
+
+    await openGoogleImport(user);
+    await user.type(await screen.findByLabelText("Google Sheet URL or spreadsheet ID"), SHEET_ID);
+    await user.click(screen.getByRole("button", { name: "Import and replace workbook" }));
+
+    const changeButton = screen.getByRole("button", { name: "Change client ID" });
+    const forgetButton = screen.getByRole("button", { name: "Forget client ID" });
+    expect(changeButton).toBeDisabled();
+    expect(forgetButton).toBeDisabled();
+
+    // Invoke the bound controller action directly to exercise its defensive path
+    // without weakening the disabled UI contract above.
+    act(() => invokeProgrammaticReactButtonAction(forgetButton));
+    expect(clientIdStorage.clear).toHaveBeenCalledTimes(1);
+
+    await act(async () => token.resolve("ephemeral-token"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await act(async () => Promise.resolve());
+
+    expect(session.getSnapshot()).toMatchObject({
+      workbook: initial,
+      revision: "0",
+      canUndo: false,
+      canRedo: false
+    });
+
+    await act(async () => pendingClear.resolve(undefined));
     session.destroy();
   });
 });

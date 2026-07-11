@@ -269,6 +269,29 @@ describe("GoogleSheetsImportDialog", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 
+  it.each(["preparing", "authorizing", "importing"] as const)(
+    "honors explicit stored-ID action legality while %s",
+    (phase) => {
+      render(
+        <GoogleSheetsImportDialog
+          controller={setupController({
+            phase,
+            clientIdSource: "stored",
+            clientIdDraft: CLIENT_ID,
+            sheetDraft: phase === "preparing" ? "" : "12345678901234567890",
+            canChangeClientId: false,
+            canForgetClientId: false,
+            canImport: false
+          })}
+          opener={dialogOpener()}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Change client ID" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Forget client ID" })).toBeDisabled();
+    }
+  );
+
   it("shows a nonfatal storage warning without disabling a ready import", () => {
     render(
       <GoogleSheetsImportDialog
