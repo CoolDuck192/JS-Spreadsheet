@@ -72,6 +72,13 @@ export type LocalRecordTableSessionOptions<
   onDiagnostic?(event: TableDiagnosticEvent): void;
 };
 
+export class RecordTableSessionError extends Error {
+  constructor(readonly code: string, message: string = code) {
+    super(message);
+    this.name = "RecordTableSessionError";
+  }
+}
+
 const EMPTY_TABLE_DOCUMENT: TableMetadataDocument = {
   version: 1,
   cells: {},
@@ -465,6 +472,13 @@ export class RecordTableSession<
     const commandId = this.commandIdFactory();
     const startedAt = now();
     if (this.destroyed) throw new Error("Table session is destroyed");
+    const operation = this.getSnapshot().operationStates.export;
+    if (!operation.enabled) {
+      throw new RecordTableSessionError(
+        "TABLE_CAPABILITY_UNSUPPORTED",
+        operation.reason ?? "Local export is unsupported"
+      );
+    }
     const { rows, columns } = this.exportRows(options.scope);
     const fileName = exportFileName(options.fileName, options.format);
     let artifact: ExportArtifact;

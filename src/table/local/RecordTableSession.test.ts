@@ -506,6 +506,16 @@ describe("createLocalRecordTableSession", () => {
     expect(xlsx.bytes.byteLength).toBeGreaterThan(0);
   });
 
+  it("rejects export when the host disables the export feature", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions({
+      features: { export: false }
+    }));
+
+    expect(session.getSnapshot().operationStates.export).toMatchObject({ enabled: false });
+    await expect(session.export({ format: "csv", scope: "completeDataset" }))
+      .rejects.toMatchObject({ code: "TABLE_CAPABILITY_UNSUPPORTED" });
+  });
+
   it("includes collapsed descendants in a complete-dataset export", async () => {
     type TreeEmployee = Employee & { children?: readonly TreeEmployee[] };
     const helper = createColumnHelper<TreeEmployee>();
