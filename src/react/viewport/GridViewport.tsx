@@ -132,6 +132,13 @@ export function GridViewport({
   const liveRegionId = gridLiveRegionDomId(idPrefix);
   const canvasWidth = rowHeaderWidth + virtualizer.totalWidth;
   const canvasHeight = headerHeight + virtualizer.totalHeight;
+  const gridTemplateColumns = useMemo(
+    () => [
+      ...(rowHeaderWidth > 0 ? [`${rowHeaderWidth}px`] : []),
+      ...columns.map((column) => `${column.width}px`)
+    ].join(" "),
+    [columns, rowHeaderWidth]
+  );
   const pinnedColumnOffsets = useMemo(() => createPinnedColumnOffsets(columns), [columns]);
   const pinnedRowOffsets = useMemo(() => createPinnedRowOffsets(rows), [rows]);
   const rowMeasurementsById = useMemo(
@@ -314,7 +321,14 @@ export function GridViewport({
             role="row"
             aria-label="Column headers"
             aria-rowindex={1}
-            style={{ position: "sticky", top: 0, zIndex: 3, height: headerHeight }}
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 3,
+              display: "grid",
+              gridTemplateColumns,
+              height: headerHeight
+            }}
           >
             {renderRowHeader ? (
               <div
@@ -325,6 +339,7 @@ export function GridViewport({
                   ...headerCellStyle(0, rowHeaderWidth, headerHeight),
                   position: "sticky",
                   left: 0,
+                  gridColumn: 1,
                   zIndex: 4
                 }}
               >
@@ -347,7 +362,8 @@ export function GridViewport({
                     headerCellStyle(rowHeaderWidth + measurement.start, measurement.size, headerHeight),
                     column,
                     rowHeaderWidth,
-                    pinnedColumnOffsets
+                    pinnedColumnOffsets,
+                    measurement.index
                   )}
                   onMouseDown={(event) => onColumnHeaderMouseDown?.(column, event)}
                   onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
@@ -376,13 +392,17 @@ export function GridViewport({
               aria-label={row.ariaLabel ?? `Row ${row.label}`}
               aria-rowindex={row.ariaRowIndex}
               data-row-kind={row.kind}
-              style={rowPositionStyle(
-                rowMeasurement,
-                row,
-                canvasWidth,
-                headerHeight,
-                pinnedRowOffsets
-              )}
+              style={{
+                ...rowPositionStyle(
+                  rowMeasurement,
+                  row,
+                  canvasWidth,
+                  headerHeight,
+                  pinnedRowOffsets
+                ),
+                display: "grid",
+                gridTemplateColumns
+              }}
             >
               {renderRowHeader ? (
                 <div
@@ -392,7 +412,7 @@ export function GridViewport({
                   aria-selected={rowHeaderState?.ariaSelected}
                   tabIndex={rowHeaderState?.tabIndex}
                   className={rowHeaderState?.className}
-                  style={rowHeaderCellStyle(rowMeasurement.size, rowHeaderWidth)}
+                  style={{ ...rowHeaderCellStyle(rowMeasurement.size, rowHeaderWidth), gridColumn: 1 }}
                   onMouseDown={(event) => onRowHeaderMouseDown?.(row, event)}
                   onMouseEnter={(event) => onRowHeaderMouseEnter?.(row, event)}
                   onClick={(event) => onRowHeaderClick?.(row, event)}
@@ -442,7 +462,8 @@ export function GridViewport({
                       cell.style,
                       column,
                       rowHeaderWidth,
-                      pinnedColumnOffsets
+                      pinnedColumnOffsets,
+                      columnMeasurement.index
                     )}
                     onPointerDown={
                       interactionEventMode === "pointer"
@@ -738,18 +759,28 @@ function columnPositionStyle(
   base: CSSProperties,
   column: GridViewportColumn,
   rowHeaderWidth: number,
-  offsets: ReadonlyMap<string, number>
+  offsets: ReadonlyMap<string, number>,
+  columnIndex: number
 ): CSSProperties {
+  const gridColumn = columnIndex + (rowHeaderWidth > 0 ? 2 : 1);
   if (column.pinned === "left") {
     return {
       ...base,
       position: "sticky",
       left: rowHeaderWidth + (offsets.get(column.id) ?? 0),
+      gridColumn,
       zIndex: 4
     };
   }
   if (column.pinned === "right") {
-    return { ...base, position: "sticky", left: undefined, right: offsets.get(column.id) ?? 0, zIndex: 4 };
+    return {
+      ...base,
+      position: "sticky",
+      left: undefined,
+      right: offsets.get(column.id) ?? 0,
+      gridColumn,
+      zIndex: 4
+    };
   }
   return base;
 }
@@ -761,7 +792,8 @@ function cellPositionStyle(
   style: CSSProperties | undefined,
   column: GridViewportColumn,
   rowHeaderWidth: number,
-  offsets: ReadonlyMap<string, number>
+  offsets: ReadonlyMap<string, number>,
+  columnIndex: number
 ): CSSProperties {
   return columnPositionStyle(
     {
@@ -775,7 +807,8 @@ function cellPositionStyle(
     },
     column,
     rowHeaderWidth,
-    offsets
+    offsets,
+    columnIndex
   );
 }
 

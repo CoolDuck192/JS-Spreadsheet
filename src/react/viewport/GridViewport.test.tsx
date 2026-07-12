@@ -240,6 +240,39 @@ describe("GridViewport", () => {
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-invalid", "true");
   });
 
+  it("keeps pinned columns in their natural grid slots", () => {
+    const pinnedColumns: readonly GridViewportColumn[] = [
+      { ...columns[0], pinned: "left" },
+      { ...columns[1], pinned: "left" },
+      { ...columns[2], pinned: "right" }
+    ];
+    render(<StatefulViewport viewportColumns={pinnedColumns} />);
+
+    expect(screen.getByRole("row", { name: "Column headers" })).toHaveStyle({
+      display: "grid",
+      gridTemplateColumns: "56px 120px 100px 90px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Name" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "2",
+      left: "56px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Salary" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "3",
+      left: "176px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Active" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "4",
+      right: "0px"
+    });
+    expect(screen.getByRole("gridcell", { name: "Ada Active" })).toHaveStyle({
+      gridColumn: "4",
+      right: "0px"
+    });
+  });
+
   it("forwards native context-menu events from column headers", () => {
     const contexts: Array<{ column: string; x: number; y: number }> = [];
     render(
