@@ -25,7 +25,12 @@ import type {
   TableViewSnapshot,
   TableViewState
 } from "../core/types";
-import { buildLocalRowModel, type LocalEvaluatedValue, type LocalRowModel } from "./localRowModel";
+import {
+  buildLocalRowModel,
+  validateLocalQueryRequest,
+  type LocalEvaluatedValue,
+  type LocalRowModel
+} from "./localRowModel";
 import {
   createLocalHistory,
   pushLocalHistory,
@@ -1041,13 +1046,10 @@ export class RecordTableSession<
 
   private validateViewState(candidate: TableViewState): TableCellIssue | null {
     try {
-      buildLocalRowModel(
-        this.rows,
+      validateLocalQueryRequest(
         this.columns,
         queryFromState(candidate),
-        this.options.source.getRowId,
-        undefined,
-        this.options.source.getSubRows
+        this.options.source.getSubRows !== undefined
       );
       return null;
     } catch (error) {
