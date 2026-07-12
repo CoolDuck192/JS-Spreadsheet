@@ -101,6 +101,10 @@ const MAX_PART_XML_ATTRIBUTES =
 // scaled XML parts, so aggregate scaling never exceeds four dense envelopes.
 const MAX_PACKAGE_XML_ELEMENTS = MAX_PART_XML_ELEMENTS * 4;
 const MAX_PACKAGE_XML_ATTRIBUTES = MAX_PART_XML_ATTRIBUTES * 4;
+// The validated count bounds unique stored items because uniqueCount <= count.
+// Eight elements cover two rich-text runs plus one phonetic run and properties.
+const SHARED_STRING_XML_ELEMENTS_PER_COUNT = 8;
+const SHARED_STRING_XML_ATTRIBUTES_PER_COUNT = 4;
 const SPREADSHEETML_NAMESPACES = new Set([
   "",
   "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -805,8 +809,14 @@ function sharedStringsBudget(tag: SaxesTagNS): XmlCounts | null {
   const uniqueCount = safeNonNegativeInteger(saxAttribute(tag, "uniqueCount"));
   if (count === null || uniqueCount === null || uniqueCount > count) return null;
 
-  const stringElements = checkedMultiply(uniqueCount, 3);
-  const stringAttributes = checkedMultiply(uniqueCount, 4);
+  const stringElements = checkedMultiply(
+    count,
+    SHARED_STRING_XML_ELEMENTS_PER_COUNT
+  );
+  const stringAttributes = checkedMultiply(
+    count,
+    SHARED_STRING_XML_ATTRIBUTES_PER_COUNT
+  );
   if (stringElements === null || stringAttributes === null) return null;
   const elements = checkedBudgetAdd(XML_BUDGET_BASE, stringElements);
   const attributes = checkedBudgetAdd(XML_BUDGET_BASE, stringAttributes);

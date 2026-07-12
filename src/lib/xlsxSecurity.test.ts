@@ -127,6 +127,7 @@ function makePackageWithGenericXmlBeforeGrantedWorksheets(): Uint8Array {
 
 let overFloorRows: string | undefined;
 let overFloorSharedStringItems: string | undefined;
+let richSharedStringItems: string | undefined;
 
 function worksheetRowsAboveFixedElementLimit(): string {
   overFloorRows ??= `<row>${"<c><v/></c>".repeat(10)}</row>`.repeat(47_620);
@@ -136,6 +137,12 @@ function worksheetRowsAboveFixedElementLimit(): string {
 function sharedStringItemsAboveFixedElementLimit(): string {
   overFloorSharedStringItems ??= "<si><r><t>x</t></r></si>".repeat(333_334);
   return overFloorSharedStringItems;
+}
+
+function twoRunRichSharedStringItems(): string {
+  richSharedStringItems ??=
+    "<si><r><t>x</t></r><r><t>y</t></r></si>".repeat(300_000);
+  return richSharedStringItems;
 }
 
 function worksheetWithDimension(
@@ -531,6 +538,18 @@ describe("validateXlsxArchive bounded XML validation", () => {
         "xl/sharedStrings.xml":
           '<sst count="333334" uniqueCount="333334">' +
           sharedStringItemsAboveFixedElementLimit() +
+          "</sst>"
+      }
+    }))).toEqual({ ok: true });
+  });
+
+  it("allows two rich-text runs for every declared shared string", () => {
+    expect(validateXlsxArchive(makePackage({
+      contentTypesXml: sharedStringsContentTypes(),
+      extraEntries: {
+        "xl/sharedStrings.xml":
+          '<sst count="300000" uniqueCount="300000">' +
+          twoRunRichSharedStringItems() +
           "</sst>"
       }
     }))).toEqual({ ok: true });
