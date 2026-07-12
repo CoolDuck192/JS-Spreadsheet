@@ -290,6 +290,35 @@ describe("buildLocalRowModel", () => {
     });
   });
 
+  it("computes mixed-type min and max independently of row sort order", () => {
+    type MixedRow = { id: string; value: unknown };
+    const mixedHelper = createColumnHelper<MixedRow>();
+    const mixedColumns = [mixedHelper.accessor("value", { id: "value", header: "Value" })];
+    const mixedRows: readonly MixedRow[] = [
+      { id: "number", value: 10 },
+      { id: "string", value: "abc" },
+      { id: "boolean", value: false }
+    ];
+    const aggregates = [
+      { id: "minimum", columnId: "value", function: "min" as const },
+      { id: "maximum", columnId: "value", function: "max" as const }
+    ];
+
+    const sourceOrder = buildLocalRowModel(mixedRows, mixedColumns, query({ aggregates }), (row) => row.id);
+    const sortedOrder = buildLocalRowModel(mixedRows, mixedColumns, query({
+      sorting: [{ columnId: "value", direction: "desc" }],
+      aggregates
+    }), (row) => row.id);
+    const sourceAggregate = sourceOrder.items.at(-1);
+    const sortedAggregate = sortedOrder.items.at(-1);
+
+    expect(sourceAggregate).toMatchObject({
+      kind: "aggregate",
+      aggregates: { minimum: false, maximum: "abc" }
+    });
+    expect(sortedAggregate).toMatchObject(sourceAggregate!);
+  });
+
   it("rejects unknown aggregate columns and unsupported cursor pagination", () => {
     expect(() => buildLocalRowModel(rows, columns, query({
       aggregates: [{ id: "missing", columnId: "missing", function: "sum" }]
