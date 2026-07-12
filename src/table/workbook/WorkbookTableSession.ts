@@ -484,7 +484,7 @@ export function createWorkbookTableSession(
       }
       if (update.patch.format) {
         metadataCommands.push({
-          type: "range.format",
+          type: "range.format.replace",
           sheetId: table.sheetId,
           range,
           format: fromTableFormat(update.patch.format)

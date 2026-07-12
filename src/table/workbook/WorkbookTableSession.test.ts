@@ -290,6 +290,29 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("replaces workbook table formats so omitted fields are cleared", async () => {
+    const workbook = workbookFixture();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      formats: { A2: { backgroundColor: "#eaf7f2", bold: true } }
+    };
+    const parent = createWorkbookSession({ workbook });
+    const table = parent.table("table-people");
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { format: { bold: true } }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(getCellFormat(parent.getSnapshot().workbook, "sheet-1", "A2"))
+      .toEqual({ bold: true });
+
+    parent.destroy();
+  });
+
   it("applies repeated metadata targets with deterministic last-write-wins semantics", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");

@@ -93,29 +93,31 @@ export function DataTableToolbar<TRow>({
     const values = validationList.split(",").map((value) => value.trim()).filter(Boolean);
     const hasFormatUpdate = touched.numberFormat
       || touched.bold
-      || Boolean(touched.fillColor && fillColor);
+      || touched.fillColor;
     const result = await run({
       type: "update-cell-metadata",
       updates: selectedCells.map((cell) => {
         const currentFormat = snapshot.getCell(cell.rowId, cell.columnId).metadata.format;
+        const nextFormat = { ...currentFormat };
+        if (touched.numberFormat) {
+          nextFormat.numberFormat = numberFormat;
+        }
+        if (touched.bold) {
+          nextFormat.bold = bold;
+        }
+        if (touched.fillColor) {
+          if (fillColor) nextFormat.backgroundColor = fillColor;
+          else delete nextFormat.backgroundColor;
+        }
         return {
           ...cell,
           patch: {
-            ...(hasFormatUpdate ? {
-              format: {
-                ...currentFormat,
-                ...(touched.numberFormat ? {
-                  numberFormat: numberFormat as "general" | "number" | "currency" | "percent" | "date" | "datetime"
-                } : {}),
-                ...(touched.bold ? { bold } : {}),
-                ...(touched.fillColor && fillColor ? { backgroundColor: fillColor } : {})
-              }
-            } : {}),
-            ...(touched.validationList && validationState.enabled && values.length > 0
-              ? { validation: { kind: "list" as const, values } }
+            ...(hasFormatUpdate ? { format: nextFormat } : {}),
+            ...(touched.validationList && validationState.enabled
+              ? { validation: values.length > 0 ? { kind: "list" as const, values } : undefined }
               : {}),
-            ...(touched.comment && comment ? { comment } : {}),
-            ...(touched.formula && formulaState.enabled && formula ? { formula } : {}),
+            ...(touched.comment ? { comment: comment || undefined } : {}),
+            ...(touched.formula && formulaState.enabled ? { formula: formula || undefined } : {}),
             ...(touched.readOnly ? { readOnly } : {})
           }
         };

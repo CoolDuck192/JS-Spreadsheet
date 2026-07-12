@@ -402,6 +402,30 @@ describe("DataTable", () => {
     session.destroy();
   });
 
+  it("clears quick-tool fill color, validation, comment, and formula values", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      formulaService: { evaluate: () => ({ value: 42, displayValue: "42" }) }
+    });
+    render(<DataTable aria-label="Metadata employees" session={session} />);
+    await user.click(screen.getByRole("gridcell", { name: "e1 Salary" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.type(screen.getByLabelText("Fill color"), "#eaf7f2");
+    await user.type(screen.getByLabelText("Validation list"), "10,42,100");
+    await user.type(screen.getByLabelText("Comment"), "Reviewed");
+    await user.type(screen.getByLabelText("Formula"), "=salary");
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    await user.clear(screen.getByLabelText("Fill color"));
+    await user.clear(screen.getByLabelText("Validation list"));
+    await user.clear(screen.getByLabelText("Comment"));
+    await user.clear(screen.getByLabelText("Formula"));
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(session.getSnapshot().getCell("e1", "salary").metadata).toEqual({ format: {} });
+    session.destroy();
+  });
+
   it("does not overwrite untouched metadata when applying one quick tool", async () => {
     const user = userEvent.setup();
     const session = createSession({
