@@ -34,7 +34,9 @@ describe("DataTable style boundary", () => {
 
   it("keeps mobile pagination and dynamic toolbar labels visible", () => {
     const css = readFileSync(resolve(process.cwd(), "src/styles/data-table.css"), "utf8");
-    const compact = css.slice(css.indexOf("@container js-spreadsheet-table (max-width: 640px)"));
+    const markerIndex = css.indexOf("@container js-spreadsheet-table (max-width: 640px)");
+    expect(markerIndex).toBeGreaterThan(-1);
+    const compact = css.slice(markerIndex);
 
     expect(compact).not.toMatch(/__toolbar\s*>\s*button\s*\{[^}]*font-size:\s*0;/s);
     expect(compact).not.toMatch(/__toolbar\s*>\s*span\s*\{[^}]*display:\s*none;/s);
