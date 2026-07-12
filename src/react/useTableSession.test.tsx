@@ -1,9 +1,13 @@
 import { Activity, StrictMode, type ReactNode } from "react";
+import { renderToString } from "react-dom/server";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ColumnDef } from "./tableTypes";
 import * as localSessionModule from "../table/local/RecordTableSession";
-import { createLocalRecordTableSession } from "../table/local/RecordTableSession";
+import {
+  createLocalRecordTableSession,
+  type RecordTableSession
+} from "../table/local/RecordTableSession";
 import { useTableSession } from "./useTableSession";
 import { useTableSnapshot } from "./useTableSnapshot";
 
@@ -64,6 +68,51 @@ describe("useTableSession", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
+  it("does not publish controlled-state corrections during an abandoned render", () => {
+    const onStateChange = vi.fn();
+    function Probe() {
+      useTableSession({
+        ...options([{ id: "1", name: "Ada" }]),
+        state: {
+          grouping: [{ columnId: "name" }],
+          pagination: { kind: "offset", offset: 0, limit: 25 }
+        },
+        onStateChange
+      });
+      return null;
+    }
+
+    renderToString(<Probe />);
+
+    expect(onStateChange).not.toHaveBeenCalled();
+  });
+
+  it("publishes one controlled-state correction after a StrictMode commit", async () => {
+    let rendering = false;
+    const calledDuringRender: boolean[] = [];
+    const onStateChange = vi.fn(() => { calledDuringRender.push(rendering); });
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+
+    renderHook(() => {
+      rendering = true;
+      try {
+        return useTableSession({
+          ...options([{ id: "1", name: "Ada" }]),
+          state: {
+            grouping: [{ columnId: "name" }],
+            pagination: { kind: "offset", offset: 0, limit: 25 }
+          },
+          onStateChange
+        });
+      } finally {
+        rendering = false;
+      }
+    }, { wrapper });
+
+    await waitFor(() => expect(onStateChange).toHaveBeenCalledTimes(1));
+    expect(calledDuringRender).toEqual([false]);
+  });
+
   it("destroys an owned session after real unmount", async () => {
     const { result, unmount } = renderHook(() => useTableSession(options([{ id: "1", name: "Ada" }])));
     const destroy = vi.spyOn(result.current, "destroy");
@@ -73,7 +122,7 @@ describe("useTableSession", () => {
   });
 
   it("recreates a destroyed raw table session when effects are restored", async () => {
-    let current!: ReturnType<typeof useTableSession<Employee>>;
+    let current!: RecordTableSession<Employee, ColumnDef<Employee>>;
     function Probe() {
       current = useTableSession(options([{ id: "1", name: "Ada" }]));
       useTableSnapshot(current);

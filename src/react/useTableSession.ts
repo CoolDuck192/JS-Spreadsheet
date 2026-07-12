@@ -9,6 +9,7 @@ import {
   type RemoteTableSession,
   type RemoteTableSessionOptions
 } from "../table/remote/RemoteTableSession";
+import type { ChangeContext, TableStateUpdater } from "../table/core/types";
 import type { ColumnDef } from "./tableTypes";
 
 type OwnedTableSession<TRow> =
@@ -39,27 +40,59 @@ export function useTableSession<TRow>(
   options: TableSessionOptions<TRow>
 ): OwnedTableSession<TRow> {
   const sessionRef = useRef<OwnedTableSessionState<TRow> | null>(null);
-  const kind = options.source.kind;
-
-  if (!sessionRef.current || sessionRef.current.kind !== kind) {
-    sessionRef.current = createOwnedTableSession(options);
-  } else {
-    const ownership = sessionRef.current;
-    if (ownership.destroyed && ownership.revivable) {
-      ownership.raw = createRawTableSession(options);
-      ownership.destroyed = false;
-      ownership.revivable = false;
-    } else if (kind === "remote") {
-      (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>)
-        .updateOptions(options as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>);
-    } else {
-      (ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>)
-        .updateOptions(options as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
+  const renderingRef = useRef(false);
+  const onStateChangeRef = useRef(options.onStateChange);
+  const pendingCorrectionRef = useRef<{
+    updater: TableStateUpdater;
+    context: ChangeContext;
+  } | null>(null);
+  const deferredOnStateChange = useRef((updater: TableStateUpdater, context: ChangeContext) => {
+    const onStateChange = onStateChangeRef.current;
+    if (!onStateChange) return;
+    if (renderingRef.current) {
+      pendingCorrectionRef.current = { updater, context };
+      return;
     }
+    onStateChange(updater, context);
+  }).current;
+  onStateChangeRef.current = options.onStateChange;
+  const kind = options.source.kind;
+  const renderOptions = options.onStateChange
+    ? { ...options, onStateChange: deferredOnStateChange } as TableSessionOptions<TRow>
+    : options;
+
+  renderingRef.current = true;
+  try {
+    if (!sessionRef.current || sessionRef.current.kind !== kind) {
+      sessionRef.current = createOwnedTableSession(renderOptions);
+    } else {
+      const ownership = sessionRef.current;
+      if (ownership.destroyed && ownership.revivable) {
+        ownership.raw = createRawTableSession(renderOptions);
+        ownership.destroyed = false;
+        ownership.revivable = false;
+      } else if (kind === "remote") {
+        (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>)
+          .updateOptions(renderOptions as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>);
+      } else {
+        (ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>)
+          .updateOptions(renderOptions as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
+      }
+    }
+  } finally {
+    renderingRef.current = false;
   }
 
   const ownership = sessionRef.current;
   const session = ownership.facade;
+
+  useEffect(() => {
+    const correction = pendingCorrectionRef.current;
+    pendingCorrectionRef.current = null;
+    const onStateChange = onStateChangeRef.current;
+    if (!correction || !onStateChange) return;
+    try { onStateChange(correction.updater, correction.context); } catch { /* Host callbacks are isolated. */ }
+  });
 
   useEffect(() => {
     ownership.cleanupToken = undefined;
