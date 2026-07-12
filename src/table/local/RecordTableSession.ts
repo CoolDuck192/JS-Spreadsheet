@@ -857,10 +857,19 @@ export class RecordTableSession<
     if (!replay.operation) return this.finishNoChange(commandId, { type: kind } as TableIntent<TRow>, startedAt);
     const beforeRows = this.rows;
     const beforeDocument = this.document;
+    const beforeState = this.state;
     const applied = applyHistoryOperation(beforeRows, beforeDocument, replay.operation, this.options.source.getRowId);
+    const retainedRowIds = new Set(rowIdList(applied.rows, this.options.source.getRowId));
+    const removedRowIds = new Set(
+      rowIdList(beforeRows, this.options.source.getRowId).filter((rowId) => !retainedRowIds.has(rowId))
+    );
     this.history = replay.history;
     this.rows = applied.rows;
     this.document = applied.document;
+    this.state = removedRowIds.size > 0
+      ? pruneDeletedRowsFromState(this.state, removedRowIds)
+      : this.state;
+    const replayedState = this.state;
     this.revision += 1;
     this.invalidate();
     const context = this.context(commandId, kind);
@@ -869,6 +878,12 @@ export class RecordTableSession<
     }
     if (this.controlledDocument && !documentEqual(beforeDocument, this.document)) {
       this.safeHostCallback(() => this.options.onDocumentChange?.(documentUpdater(beforeDocument, this.document), context));
+    }
+    if ([...this.controlledStateKeys].some((key) => !stateSliceEqual(beforeState[key], replayedState[key]))) {
+      this.safeHostCallback(() => this.options.onStateChange?.(
+        (state) => applyControlledStateDiff(state, beforeState, replayedState, this.controlledStateKeys),
+        context
+      ));
     }
     this.publish();
     this.emitDiagnostic(commandId, kind, startedAt, true, "command", 0, 0);
@@ -1096,9 +1111,12 @@ export class RecordTableSession<
   private dropInvalidSelection(source: LocalRecordSource<TRow>, rows: readonly TRow[]): void {
     const ids = new Set(rowIdList(rows, source.getRowId));
     const selection = this.state.selection;
-    if (selection && (!ids.has(selection.anchor.rowId) || !ids.has(selection.focus.rowId))) {
-      this.state = { ...this.state, selection: null };
-    }
+    const missing = new Set([
+      ...this.state.selectedRowIds,
+      ...this.state.expandedRowIds,
+      ...(selection ? [selection.anchor.rowId, selection.focus.rowId] : [])
+    ].filter((rowId) => !ids.has(rowId)));
+    if (missing.size > 0) this.state = pruneDeletedRowsFromState(this.state, missing);
   }
 
   private context(commandId: string, reason: TableIntent<TRow>["type"]): ChangeContext {

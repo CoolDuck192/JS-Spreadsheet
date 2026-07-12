@@ -950,6 +950,41 @@ describe("createLocalRecordTableSession", () => {
       .toMatchObject({ status: "committed" });
   });
 
+  it("prunes inserted-row selection through undo and redo cycles", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+    await session.dispatch({ type: "insert-rows", rows: [employee("e2", "Grace")] });
+    await session.dispatch({
+      type: "set-selection",
+      selection: {
+        anchor: { rowId: "e2", columnId: "name" },
+        focus: { rowId: "e2", columnId: "name" }
+      }
+    });
+    await session.dispatch({ type: "set-row-selection", rowIds: ["e2"] });
+    await session.dispatch({ type: "set-row-expanded", rowId: "e2", expanded: true });
+
+    await session.undo();
+    expect(session.getSnapshot().rows.map((row) => row.id)).toEqual(["e1"]);
+    expect(session.getSnapshot().state).toMatchObject({
+      selection: null,
+      selectedRowIds: [],
+      expandedRowIds: []
+    });
+
+    await session.redo();
+    expect(session.getSnapshot().rows.map((row) => row.id)).toEqual(["e1", "e2"]);
+    expect(session.getSnapshot().state).toMatchObject({
+      selection: null,
+      selectedRowIds: [],
+      expandedRowIds: []
+    });
+
+    await session.dispatch({ type: "set-row-selection", rowIds: ["e2"] });
+    await session.undo();
+    expect(session.getSnapshot().rows.map((row) => row.id)).toEqual(["e1"]);
+    expect(session.getSnapshot().state.selectedRowIds).toEqual([]);
+  });
+
   it("undoes and redoes values, row order, and metadata together", async () => {
     const metadataKey = createTableMetadataKey("e2", "name");
     const session = createLocalRecordTableSession(deterministicOptions({
