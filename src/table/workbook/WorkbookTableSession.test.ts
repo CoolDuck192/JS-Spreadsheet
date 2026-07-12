@@ -137,6 +137,43 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("keeps read-only metadata attached to stable row IDs through sorting", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-grace", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({
+      type: "set-sorting",
+      sorting: [{ columnId: "column-score", direction: "desc" }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(table.getSnapshot().getCell("row-grace", "column-score").editable).toBe(false);
+    expect(table.getSnapshot().getCell("row-ada", "column-score").editable).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B2")).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B3")).toBe(false);
+    parent.destroy();
+  });
+
+  it("keeps read-only metadata attached to stable row IDs through deletion", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-grace", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({ type: "delete-rows", rowIds: ["row-ada"] }))
+      .toMatchObject({ status: "committed" });
+
+    expect(table.getSnapshot().getCell("row-grace", "column-score").editable).toBe(false);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B2")).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B3")).toBe(false);
+    parent.destroy();
+  });
+
   it("validates metadata IDs before dispatch and commits a valid metadata batch once", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");

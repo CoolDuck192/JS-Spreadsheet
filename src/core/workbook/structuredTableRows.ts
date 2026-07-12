@@ -583,7 +583,12 @@ function remapTableRows(
     formats: remap(sheet.formats),
     validations: remap(sheet.validations),
     comments: remap(sheet.comments),
-    hyperlinks: remap(sheet.hyperlinks)
+    hyperlinks: remap(sheet.hyperlinks),
+    protection: {
+      ...sheet.protection,
+      lockedCells: remap(sheet.protection.lockedCells),
+      unlockedCells: remap(sheet.protection.unlockedCells)
+    }
   };
   return {
     ...workbook,
