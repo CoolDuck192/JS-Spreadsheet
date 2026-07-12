@@ -98,6 +98,11 @@ const GROUPING_PAGINATION_ISSUE: TableCellIssue = {
   message: "Grouping requires pagination kind none"
 };
 
+const PAGINATED_SOURCE_GROUPING_ISSUE: TableCellIssue = {
+  code: "TABLE_GROUPING_PAGINATION_CONFLICT",
+  message: "Grouping is unavailable for paginated remote sources"
+};
+
 export function createRemoteTableSession<
   TRow,
   TColumn extends ColumnDef<TRow, any> = ColumnDef<TRow, any>
@@ -133,7 +138,7 @@ class RemoteTableSessionImpl<
   private destroyed = false;
   private needsQuery = true;
   private sourceChanged = false;
-  private invalidControlledState = false;
+  private invalidStateIssue: TableCellIssue | null = null;
   private invalidPublicationPending = false;
   private lastQuery: QueryRequest | null = null;
 
@@ -146,8 +151,8 @@ class RemoteTableSessionImpl<
     this.state = mergeState<TRow, TColumn>(defaultState(options.source), options.defaultState, options.state, this.columns);
     this.controlledStateKeys = new Set(Object.keys(options.state ?? {}) as Array<keyof TableViewState>);
     this.commandIdFactory = options.commandIdFactory ?? createCommandIdFactory();
-    this.invalidControlledState = hasGroupingPaginationConflict(this.state);
-    this.invalidPublicationPending = this.invalidControlledState;
+    this.invalidStateIssue = validateSourceViewState(this.state, options.source);
+    this.invalidPublicationPending = this.invalidStateIssue !== null;
   }
 
   updateOptions(options: RemoteTableSessionOptions<TRow, TColumn>): void {
@@ -173,15 +178,18 @@ class RemoteTableSessionImpl<
     }
 
     const candidate = mergeControlledState<TRow, TColumn>(this.state, options.state, this.columns);
-    const invalid = hasGroupingPaginationConflict(candidate);
-    if (invalid) {
-      if (!this.invalidControlledState) this.invalidPublicationPending = true;
-      this.invalidControlledState = true;
+    const invalidIssue = validateSourceViewState(candidate, options.source);
+    if (invalidIssue) {
+      if (!this.invalidStateIssue) this.invalidPublicationPending = true;
+      this.invalidStateIssue = invalidIssue;
       this.needsQuery = false;
       projectionChanged = true;
     } else {
-      if (this.invalidControlledState) projectionChanged = true;
-      this.invalidControlledState = false;
+      if (this.invalidStateIssue) {
+        projectionChanged = true;
+        this.needsQuery = true;
+      }
+      this.invalidStateIssue = null;
       this.invalidPublicationPending = false;
       if (!stateEqual(candidate, this.state)) {
         if (!queryStateEqual(candidate, this.state)) this.needsQuery = true;
@@ -199,7 +207,7 @@ class RemoteTableSessionImpl<
   start(): void {
     if (this.destroyed) return;
     this.started = true;
-    if (this.invalidControlledState) {
+    if (this.invalidStateIssue) {
       if (this.invalidPublicationPending) {
         this.invalidPublicationPending = false;
         this.localRevision += 1;
@@ -304,17 +312,17 @@ class RemoteTableSessionImpl<
       operationStates.group = {
         ...operationStates.group,
         enabled: false,
-        reason: "Grouping requires pagination mode none"
+        reason: PAGINATED_SOURCE_GROUPING_ISSUE.message
       };
     }
-    if (this.invalidControlledState) {
+    if (this.invalidStateIssue) {
       operationStates.pagination = {
         enabled: false,
-        reason: GROUPING_PAGINATION_ISSUE.message
+        reason: this.invalidStateIssue.message
       };
     }
-    const baseIssues: TableCellIssue[] = this.invalidControlledState
-      ? [GROUPING_PAGINATION_ISSUE]
+    const baseIssues: TableCellIssue[] = this.invalidStateIssue
+      ? [this.invalidStateIssue]
       : query.error
         ? [{ code: query.error.code, message: query.error.message }]
         : [];
@@ -328,8 +336,8 @@ class RemoteTableSessionImpl<
       completeness: query.completeness,
       state: this.state,
       selection: this.state.selection,
-      status: this.invalidControlledState
-        ? { phase: "error", message: GROUPING_PAGINATION_ISSUE.message }
+      status: this.invalidStateIssue
+        ? { phase: "error", message: this.invalidStateIssue.message }
         : query.error
           ? { phase: "error", message: query.error.message }
           : { phase: query.status },
@@ -362,7 +370,8 @@ class RemoteTableSessionImpl<
     const commandId = this.commandIdFactory();
     if (this.destroyed) return unsupported("Remote table session is destroyed");
     const feature = featureForRemoteIntent(intent);
-    if (feature) {
+    const clearsGrouping = intent.type === "set-grouping" && intent.grouping.length === 0;
+    if (feature && !clearsGrouping) {
       const operation = this.getSnapshot().operationStates[feature];
       if (!operation.enabled) return unsupported(operation.reason ?? "Unsupported operation");
     }
@@ -470,11 +479,17 @@ class RemoteTableSessionImpl<
   }
 
   private beginQuery(): void {
-    if (!this.started || !this.controller || this.invalidControlledState) return;
+    if (!this.started || !this.controller || this.invalidStateIssue) return;
     const query = queryFromState(this.state);
     if (query.pagination.kind !== this.options.source.paginationMode) {
-      this.invalidControlledState = true;
+      this.invalidStateIssue = paginationModeIssue(
+        query.pagination.kind,
+        this.options.source.paginationMode
+      );
+      this.invalidPublicationPending = false;
+      this.localRevision += 1;
       this.snapshot = null;
+      this.publish();
       return;
     }
     this.needsQuery = false;
@@ -510,9 +525,13 @@ class RemoteTableSessionImpl<
     >,
     commandId: string
   ): CommandResult {
-    const candidate = stateForIntent(this.state, intent);
+    const candidate = stateForIntent(this.state, intent, this.options.source.paginationMode);
     if (candidate instanceof RemoteSessionError) {
       return { status: "rejected", reason: "validation", issues: [{ code: candidate.code, message: candidate.message }] };
+    }
+    const stateIssue = validateSourceViewState(candidate, this.options.source);
+    if (stateIssue) {
+      return { status: "rejected", reason: "validation", issues: [stateIssue] };
     }
     const invalidColumn = validateViewStateColumns<TRow, TColumn>(candidate, this.columnsById);
     if (invalidColumn) {
@@ -540,6 +559,8 @@ class RemoteTableSessionImpl<
       let next = before;
       for (const key of uncontrolled) next = { ...next, [key]: candidate[key] };
       this.state = next;
+      this.invalidStateIssue = validateSourceViewState(this.state, this.options.source);
+      this.invalidPublicationPending = false;
       this.localRevision += 1;
       this.snapshot = null;
       this.publish();
@@ -1298,7 +1319,8 @@ function stateForIntent<TRow>(
     | { type: "refresh" }
     | { type: "reload-authoritative" }
     | { type: "retry-with-revision" }
-  >
+  >,
+  paginationMode: RemoteTableSource<unknown>["paginationMode"]
 ): TableViewState | RemoteSessionError {
   switch (intent.type) {
     case "set-selection": return { ...state, selection: intent.selection };
@@ -1311,11 +1333,19 @@ function stateForIntent<TRow>(
     };
     case "set-sorting": return { ...state, sorting: [...intent.sorting] };
     case "set-filter": return { ...state, filter: intent.filter };
-    case "set-grouping": return {
-      ...state,
-      grouping: [...intent.grouping],
-      ...(intent.grouping.length > 0 ? { pagination: { kind: "none" } as const } : {})
-    };
+    case "set-grouping": {
+      const clearingPaginatedGrouping = intent.grouping.length === 0
+        && state.pagination.kind !== paginationMode;
+      return {
+        ...state,
+        grouping: [...intent.grouping],
+        ...(intent.grouping.length > 0
+          ? { pagination: { kind: "none" } as const }
+          : clearingPaginatedGrouping
+            ? { pagination: defaultPagination(paginationMode) }
+            : {})
+      };
+    }
     case "set-aggregates": return { ...state, aggregates: [...intent.aggregates] };
     case "set-pagination":
       return state.grouping.length > 0 && intent.pagination.kind !== "none"
@@ -1441,6 +1471,29 @@ function stateEqual(left: unknown, right: unknown): boolean {
 
 function hasGroupingPaginationConflict(state: TableViewState): boolean {
   return state.grouping.length > 0 && state.pagination.kind !== "none";
+}
+
+function validateSourceViewState<TRow>(
+  state: TableViewState,
+  source: RemoteTableSource<TRow>
+): TableCellIssue | null {
+  if (source.paginationMode !== "none" && state.grouping.length > 0) {
+    return PAGINATED_SOURCE_GROUPING_ISSUE;
+  }
+  if (hasGroupingPaginationConflict(state)) return GROUPING_PAGINATION_ISSUE;
+  return state.pagination.kind === source.paginationMode
+    ? null
+    : paginationModeIssue(state.pagination.kind, source.paginationMode);
+}
+
+function paginationModeIssue(
+  stateMode: TableViewState["pagination"]["kind"],
+  sourceMode: RemoteTableSource<unknown>["paginationMode"]
+): TableCellIssue {
+  return {
+    code: "TABLE_PAGINATION_MODE_MISMATCH",
+    message: `Pagination ${stateMode} is unsupported by ${sourceMode} source`
+  };
 }
 
 function validateOptions<TRow, TColumn extends ColumnDef<TRow, any>>(

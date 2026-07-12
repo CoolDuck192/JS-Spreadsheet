@@ -437,6 +437,89 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it.each(["offset", "cursor", "infinite"] as const)(
+    "rejects invalid default grouping before a %s query and recovers when grouping is cleared",
+    async (mode) => {
+      const query = vi.fn(async (request: QueryRequest) => resultForRequest("1", employees, request));
+      const source = createTestRemoteSource<Employee>({
+        capabilities: capabilitiesForPagination(mode),
+        paginationMode: mode,
+        query
+      });
+      const session = createRemoteTableSession({
+        source,
+        columns,
+        defaultState: {
+          grouping: [{ columnId: "department" }],
+          pagination: { kind: "none" }
+        }
+      });
+
+      expect(session.getSnapshot()).toMatchObject({
+        status: { phase: "error", message: "Grouping is unavailable for paginated remote sources" },
+        issues: [{ code: "TABLE_GROUPING_PAGINATION_CONFLICT" }]
+      });
+      session.start();
+      expect(query).not.toHaveBeenCalled();
+
+      await expect(session.dispatch({ type: "set-grouping", grouping: [] })).resolves.toMatchObject({
+        status: "committed"
+      });
+      await waitForCalls(query, 1);
+      await waitUntilReady(session);
+      expect(session.getSnapshot().state).toMatchObject({
+        grouping: [],
+        pagination: defaultPaginationForMode(mode)
+      });
+
+      session.stop();
+      session.start();
+      await waitForCalls(query, 2);
+      await waitUntilReady(session);
+      session.destroy();
+    }
+  );
+
+  it.each(["offset", "cursor", "infinite"] as const)(
+    "rejects invalid controlled grouping during %s option sync and accepts a valid recovery",
+    async (mode) => {
+      const query = vi.fn(async (request: QueryRequest) => resultForRequest("1", employees, request));
+      const source = createTestRemoteSource<Employee>({
+        capabilities: capabilitiesForPagination(mode),
+        paginationMode: mode,
+        query
+      });
+      const session = createRemoteTableSession({ source, columns });
+      session.start();
+      await waitUntilReady(session);
+
+      session.updateOptions({
+        source,
+        columns,
+        state: {
+          grouping: [{ columnId: "department" }],
+          pagination: { kind: "none" }
+        }
+      });
+      expect(session.getSnapshot()).toMatchObject({
+        status: { phase: "error", message: "Grouping is unavailable for paginated remote sources" },
+        issues: [{ code: "TABLE_GROUPING_PAGINATION_CONFLICT" }]
+      });
+      expect(query).toHaveBeenCalledTimes(1);
+
+      session.updateOptions({
+        source,
+        columns,
+        state: { grouping: [], pagination: defaultPaginationForMode(mode) }
+      });
+      session.start();
+      await waitForCalls(query, 2);
+      await waitUntilReady(session);
+      expect(session.getSnapshot().state.grouping).toEqual([]);
+      session.destroy();
+    }
+  );
+
   it("prevalidates a typed batch, publishes bounded overlays, and reconciles an authoritative row", async () => {
     let serverRow: Employee = employees[0];
     let serverRevision = "1";
@@ -1404,7 +1487,7 @@ describe("RemoteTableSession", () => {
     expect(query).not.toHaveBeenCalled();
     expect(publications).toBe(1);
     expect(session.getSnapshot()).toMatchObject({
-      status: { phase: "error", message: "Grouping requires pagination kind none" },
+      status: { phase: "error", message: "Grouping is unavailable for paginated remote sources" },
       issues: [{ code: "TABLE_GROUPING_PAGINATION_CONFLICT" }]
     });
 
@@ -1589,6 +1672,50 @@ function infiniteResult(
       total: { kind: "unknown" }
     }
   };
+}
+
+function resultForRequest(
+  revision: string,
+  rows: readonly Employee[],
+  request: QueryRequest
+): QueryResult<Employee> {
+  switch (request.pagination.kind) {
+    case "none":
+      return unpaginatedResult(revision, rows);
+    case "offset":
+      return offsetResult(revision, rows, request);
+    case "cursor":
+      return {
+        items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+        revision,
+        completeness: "loadedRows",
+        pageInfo: { kind: "cursor", total: { kind: "unknown" } }
+      };
+    case "infinite":
+      return infiniteResult(revision, rows);
+  }
+}
+
+function capabilitiesForPagination(
+  mode: "offset" | "cursor" | "infinite"
+): TableCapabilities {
+  const complete = { executor: "server" as const, scope: "completeDataset" as const };
+  return {
+    ...defaultRemoteCapabilities(),
+    group: { ...complete },
+    pagination: { ...complete, modes: [mode] },
+    subscription: false
+  };
+}
+
+function defaultPaginationForMode(
+  mode: "offset" | "cursor" | "infinite"
+): TableViewState["pagination"] {
+  switch (mode) {
+    case "offset": return { kind: "offset", offset: 0, limit: 50 };
+    case "cursor": return { kind: "cursor", limit: 50 };
+    case "infinite": return { kind: "infinite", limit: 50 };
+  }
 }
 
 function createDeferredMutation<TRow>() {
