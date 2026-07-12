@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { useLayoutEffect, useRef, type ReactElement } from "react";
 import type { TableCellRef, TableSession } from "../../table/core/types";
 import type {
   WorkbookTableRow,
@@ -19,6 +19,13 @@ export function WorkbookTableView({
   onClose,
   onOpenInSpreadsheet
 }: WorkbookTableViewProps): ReactElement {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const openerRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
+  );
   const snapshot = useTableSnapshot(session);
   const selectedCell = snapshot.selection?.focus
     ?? (snapshot.rows[0] && snapshot.columns[0]
@@ -26,12 +33,46 @@ export function WorkbookTableView({
       : undefined);
   const unavailable = snapshot.status.phase === "error";
 
+  function restoreOpenerFocus() {
+    if (openerRef.current?.isConnected) {
+      openerRef.current.focus({ preventScroll: true });
+    }
+  }
+
+  function closeView() {
+    const dialog = dialogRef.current;
+    if (dialog?.open) {
+      dialog.close();
+    }
+    restoreOpenerFocus();
+    onClose();
+  }
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+    closeButtonRef.current?.focus({ preventScroll: true });
+
+    return () => {
+      if (dialog.open) {
+        dialog.close();
+      }
+    };
+  }, []);
+
   return (
-    <section
+    <dialog
+      ref={dialogRef}
       className="js-spreadsheet-workbook-table-view"
-      role="dialog"
       aria-modal="true"
       aria-label={`Workbook table ${session.tableId}`}
+      onCancel={(event) => {
+        event.preventDefault();
+        closeView();
+      }}
     >
       <header className="js-spreadsheet-workbook-table-view__header">
         <div>
@@ -48,7 +89,7 @@ export function WorkbookTableView({
               Open in Spreadsheet
             </button>
           ) : null}
-          <button type="button" onClick={onClose}>Close table view</button>
+          <button ref={closeButtonRef} type="button" onClick={closeView}>Close table view</button>
         </div>
       </header>
       <DataTable
@@ -60,6 +101,6 @@ export function WorkbookTableView({
         inlineFilters
         noDataMessage={unavailable ? "Table unavailable" : "No table rows"}
       />
-    </section>
+    </dialog>
   );
 }

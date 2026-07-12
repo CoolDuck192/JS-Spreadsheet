@@ -1319,6 +1319,9 @@ describe("App", () => {
 
     expect(screen.queryByRole("dialog", { name: "Workbook table table-sales" })).not.toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => {
+      expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveFocus();
+    });
   });
 
   it("opens saved workbooks with stale active sheet ids", () => {

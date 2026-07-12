@@ -838,8 +838,10 @@ function SpreadsheetWorkbook({
     }, `Selected ${formatCellAddress(coordinate)} in the spreadsheet`);
     if (result.status !== "committed") return;
     setOpenTableId(null);
-    gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
-    gridScrollRef.current?.focus({ preventScroll: true });
+    queueMicrotask(() => {
+      gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
+      gridScrollRef.current?.focus({ preventScroll: true });
+    });
   }
 
   function applyFormatPainter(targetSelection: CellRange) {

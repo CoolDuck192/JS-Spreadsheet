@@ -1,5 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkbookSession } from "../../core/workbook/WorkbookSession";
 import { createBlankWorkbook, getCellContent } from "../../lib/workbook";
@@ -7,6 +8,32 @@ import type { StructuredTable, WorkbookModel } from "../../types";
 import { WorkbookTableView } from "./WorkbookTableView";
 
 describe("WorkbookTableView", () => {
+  it("opens modally, moves focus inside, closes on Escape, and restores the opener", async () => {
+    const user = userEvent.setup();
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const onClose = vi.fn();
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, "showModal");
+
+    render(
+      <ModalHarness session={parent.table("table-people")} onClose={onClose} />
+    );
+    const opener = screen.getByRole("button", { name: "Open table view" });
+    await user.click(opener);
+
+    const dialog = screen.getByRole("dialog", { name: "Workbook table table-people" });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Close table view" })).toHaveFocus();
+
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(dialog).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    showModal.mockRestore();
+    parent.destroy();
+  });
+
   it("stays live with its workbook session and edits through the shared table adapter", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
@@ -73,6 +100,30 @@ describe("WorkbookTableView", () => {
     parent.destroy();
   });
 });
+
+function ModalHarness({
+  session,
+  onClose
+}: {
+  session: ReturnType<ReturnType<typeof createWorkbookSession>["table"]>;
+  onClose(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>Open table view</button>
+      {open ? (
+        <WorkbookTableView
+          session={session}
+          onClose={() => {
+            setOpen(false);
+            onClose();
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
 
 function workbookFixture(cellOverrides: Record<string, string | number> = {}): WorkbookModel {
   const workbook = createBlankWorkbook();
