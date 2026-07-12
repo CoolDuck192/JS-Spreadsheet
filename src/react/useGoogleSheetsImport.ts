@@ -548,9 +548,13 @@ export function useGoogleSheetsImport(options: Readonly<{
       : {}),
     canSaveClientId: clientIdEditable && !storageBusy,
     canChangeClientId:
-      clientIdSource === "stored" && !storageBusy && !configurationActionPending,
+      (clientIdSource === "stored" || clientIdSource === "session") &&
+      !storageBusy &&
+      !configurationActionPending,
     canForgetClientId:
-      clientIdSource === "stored" && !storageBusy && !configurationActionPending,
+      (clientIdSource === "stored" || clientIdSource === "session") &&
+      !storageBusy &&
+      !configurationActionPending,
     canImport:
       readiness === "ready" && operation === null && !storageBusy && !importPendingRef.current,
     canRetry,

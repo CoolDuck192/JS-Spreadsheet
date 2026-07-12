@@ -367,7 +367,7 @@ function ConfigurationSummary({ controller }: { controller: GoogleSheetsImportCo
             ? "This public client ID is saved in this browser."
             : "This public client ID is available for this session."}
       </p>
-      {controller.clientIdSource === "stored" ? (
+      {controller.clientIdSource === "stored" || controller.clientIdSource === "session" ? (
         <div className="google-sheets-import-inline-actions">
           <button
             className="google-sheets-import-button secondary"

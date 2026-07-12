@@ -268,6 +268,39 @@ describe("useGoogleSheetsImport", () => {
     expect(onError).toHaveBeenCalled();
   });
 
+  it("can change and forget a session-only client ID without remounting", async () => {
+    const hostFactory = vi.fn(() => provider());
+    const controller = renderController({
+      configuration: { tokenProviderFactory: hostFactory }
+    });
+
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    act(() => controller.result.current.setClientIdDraft(CLIENT_ID));
+    await act(async () => controller.result.current.saveClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+
+    expect(controller.result.current.clientIdSource).toBe("session");
+    expect(controller.result.current.canChangeClientId).toBe(true);
+    expect(controller.result.current.canForgetClientId).toBe(true);
+
+    act(() => controller.result.current.changeClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    expect(controller.result.current.clientIdEditable).toBe(true);
+    expect(controller.result.current.clientIdDraft).toBe(CLIENT_ID);
+
+    act(() => controller.result.current.setClientIdDraft(SECOND_CLIENT_ID));
+    await act(async () => controller.result.current.saveClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+    expect(controller.result.current.clientIdDraft).toBe(SECOND_CLIENT_ID);
+
+    await act(async () => controller.result.current.forgetClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    expect(controller.result.current.clientIdSource).toBe("missing");
+    expect(controller.result.current.clientIdDraft).toBe("");
+    expect(controller.result.current.clientIdEditable).toBe(true);
+  });
+
   it("retains the usable stored ID when clearing storage fails", async () => {
     const pendingClear = deferred<void>();
     const clear = vi.fn(() => pendingClear.promise);
