@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   createLocalRecordTableSession,
+  reviveLocalRecordTableSession,
   type LocalRecordTableSessionOptions,
   type RecordTableSession
 } from "../table/local/RecordTableSession";
@@ -68,7 +69,13 @@ export function useTableSession<TRow>(
     } else {
       const ownership = sessionRef.current;
       if (ownership.destroyed && ownership.revivable) {
-        ownership.raw = createRawTableSession(renderOptions);
+        if (kind === "local") {
+          const local = ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>;
+          reviveLocalRecordTableSession(local);
+          local.updateOptions(renderOptions as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
+        } else {
+          ownership.raw = createRawTableSession(renderOptions);
+        }
         ownership.destroyed = false;
         ownership.revivable = false;
       } else if (kind === "remote") {

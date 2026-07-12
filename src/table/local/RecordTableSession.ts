@@ -128,6 +128,15 @@ type Evaluation = {
   issues: readonly TableCellIssue[];
 };
 
+const REVIVE_LOCAL_TABLE_SESSION = Symbol("revive-local-table-session");
+
+export function reviveLocalRecordTableSession<
+  TRow,
+  TColumn extends ColumnDef<TRow, any>
+>(session: RecordTableSession<TRow, TColumn>): void {
+  session[REVIVE_LOCAL_TABLE_SESSION]();
+}
+
 export class RecordTableSession<
   TRow,
   TColumn extends ColumnDef<TRow, any> = ColumnDef<TRow, any>
@@ -512,6 +521,12 @@ export class RecordTableSession<
     if (this.destroyed) return;
     this.destroyed = true;
     this.listeners.clear();
+    this.snapshot = null;
+  }
+
+  [REVIVE_LOCAL_TABLE_SESSION](): void {
+    if (!this.destroyed) return;
+    this.destroyed = false;
     this.snapshot = null;
   }
 

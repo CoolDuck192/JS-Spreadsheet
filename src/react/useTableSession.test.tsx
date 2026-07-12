@@ -121,37 +121,60 @@ describe("useTableSession", () => {
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
   });
 
-  it("recreates a destroyed raw table session when effects are restored", async () => {
+  it("preserves edits, metadata, view state, and history when Activity effects are restored", async () => {
     let current!: RecordTableSession<Employee, ColumnDef<Employee>>;
+    const stableOptions = options([{ id: "1", name: "Ada" }]);
     function Probe() {
-      current = useTableSession(options([{ id: "1", name: "Ada" }]));
+      current = useTableSession(stableOptions);
       useTableSnapshot(current);
       return null;
     }
 
     const view = render(<Activity mode="visible"><Probe /></Activity>);
     const facade = current;
-    view.rerender(<Activity mode="hidden"><Probe /></Activity>);
-    await act(async () => Promise.resolve());
-    view.rerender(<Activity mode="visible"><Probe /></Activity>);
-
-    let dispatchResult: Awaited<ReturnType<typeof facade.dispatch>> | undefined;
     await act(async () => {
-      dispatchResult = await current.dispatch({
+      await current.dispatch({
+        type: "edit-cells",
+        edits: [{ rowId: "1", columnId: "name", rawText: "Grace" }]
+      });
+      await current.dispatch({
+        type: "update-cell-metadata",
+        updates: [{ rowId: "1", columnId: "name", patch: { comment: "keep me" } }]
+      });
+      await current.dispatch({
         type: "set-selection",
         selection: {
           anchor: { rowId: "1", columnId: "name" },
           focus: { rowId: "1", columnId: "name" }
         }
       });
+      await current.dispatch({ type: "resize-column", columnId: "name", width: 240 });
     });
+    expect(current.getSnapshot().canUndo).toBe(true);
+
+    view.rerender(<Activity mode="hidden"><Probe /></Activity>);
+    await act(async () => Promise.resolve());
+    view.rerender(<Activity mode="visible"><Probe /></Activity>);
 
     expect(current).toBe(facade);
-    expect(dispatchResult).toMatchObject({ status: "committed" });
+    expect(current.getSnapshot().getCell("1", "name")).toMatchObject({
+      storedValue: "Grace",
+      metadata: { comment: "keep me" }
+    });
     expect(current.getSnapshot().selection).toEqual({
       anchor: { rowId: "1", columnId: "name" },
       focus: { rowId: "1", columnId: "name" }
     });
+    expect(current.getSnapshot().state.columnWidths.name).toBe(240);
+    expect(current.getSnapshot().canUndo).toBe(true);
+
+    await act(async () => { await current.undo(); });
+    expect(current.getSnapshot().getCell("1", "name")).toMatchObject({
+      storedValue: "Grace",
+      metadata: {}
+    });
+    await act(async () => { await current.undo(); });
+    expect(current.getSnapshot().getCell("1", "name").storedValue).toBe("Ada");
   });
 
   it("never destroys a supplied table session", async () => {
