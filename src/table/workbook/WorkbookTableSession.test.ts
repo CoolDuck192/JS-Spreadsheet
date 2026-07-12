@@ -81,6 +81,38 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("allows row insertion past existing read-only cells but protects the expansion band", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-ada", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({ type: "insert-rows", count: 1 }))
+      .toMatchObject({ status: "committed", changed: true });
+    expect(table.getSnapshot().rowCount).toBe(3);
+    expect(table.getSnapshot().getCell("row-ada", "column-score").editable).toBe(false);
+    parent.destroy();
+
+    const protectedBandParent = createWorkbookSession({ workbook: workbookFixture() });
+    const protectedBandTable = protectedBandParent.table("table-people");
+    expect(protectedBandParent.dispatch({
+      type: "range.readOnly.set",
+      sheetId: "sheet-1",
+      range: { start: { row: 3, column: 1 }, end: { row: 3, column: 1 } },
+      readOnly: true
+    })).toMatchObject({ status: "committed" });
+
+    expect(await protectedBandTable.dispatch({ type: "insert-rows", count: 1 }))
+      .toMatchObject({
+        status: "rejected",
+        issues: [{ code: "TABLE_PROTECTED" }]
+      });
+    expect(protectedBandTable.getSnapshot().rowCount).toBe(2);
+    protectedBandParent.destroy();
+  });
+
   it("reads current values lazily and retains column definitions across value-only revisions", () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");

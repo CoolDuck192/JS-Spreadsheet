@@ -383,7 +383,8 @@ export function resizeStructuredTableMetadata(
   workbook: WorkbookModel,
   tableId: string,
   requestedRange: CellRange,
-  services: StructuredTableCommandServices
+  services: StructuredTableCommandServices,
+  readOnlyRange: CellRange = requestedRange
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
@@ -391,7 +392,7 @@ export function resizeStructuredTableMetadata(
   if (range.start.row !== table.range.start.row || range.start.column !== table.range.start.column) {
     return reject(workbook, "TABLE_RANGE_BLOCKED", "Table resize must preserve its top-left cell");
   }
-  const issue = validateRange(workbook, table.sheetId, range, table.id);
+  const issue = validateRange(workbook, table.sheetId, range, table.id, readOnlyRange);
   if (issue) return { status: "rejected", workbook, issues: [issue] };
   const height = range.end.row - range.start.row + 1;
   if (height < Number(table.headerRow) + Number(table.totalsRow)) {
@@ -691,7 +692,8 @@ function validateRange(
   workbook: WorkbookModel,
   sheetId: string,
   range: CellRange,
-  ownTableId?: string
+  ownTableId?: string,
+  readOnlyRange: CellRange = range
 ): TableIssue | null {
   const sheet = workbook.sheets.find((candidate) => candidate.id === sheetId);
   if (!sheet || !validRange(range)
@@ -705,8 +707,8 @@ function validateRange(
     return issue("TABLE_MERGE_CONFLICT", "Table range intersects a merged cell");
   }
   if (sheet.protection.isProtected) return issue("TABLE_PROTECTED", "Protected sheets cannot change tables");
-  for (let row = range.start.row; row <= range.end.row; row += 1) {
-    for (let column = range.start.column; column <= range.end.column; column += 1) {
+  for (let row = readOnlyRange.start.row; row <= readOnlyRange.end.row; row += 1) {
+    for (let column = readOnlyRange.start.column; column <= readOnlyRange.end.column; column += 1) {
       if (getCellReadOnly(workbook, sheetId, formatCellAddress({ row, column }))) {
         return issue("TABLE_PROTECTED", "Table range contains a locked cell");
       }

@@ -79,7 +79,10 @@ export function insertStructuredTableRows(
   const resized = resizeStructuredTableMetadata(rewritten.workbook, tableId, {
     start: { ...table.range.start },
     end: { ...table.range.end, row: newBottom }
-  }, services);
+  }, services, {
+    start: { row: table.range.end.row + 1, column: table.range.start.column },
+    end: { row: newBottom, column: table.range.end.column }
+  });
   if (resized.status === "rejected") return resized;
   const resizedTable = getStructuredTable(resized.workbook, tableId)!;
   const generatedIds = resizedTable.rowIds.slice(table.rowIds.length);
