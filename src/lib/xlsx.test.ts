@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type { WorkbookModel } from "../types";
 import {
+  insertStructuredTableRows,
+  setStructuredTableCalculatedColumn
+} from "../core/workbook/structuredTableRows";
+import {
   addSheet,
   addConditionalFormatRule,
   createBlankWorkbook,
@@ -732,6 +736,66 @@ describe("native structured table XLSX", () => {
     expect(sheet.cells.D4).toBe("=SUM(D$2:D$3)");
     expect(sheet.cells.C4).toBe(99);
     expect(table.filter).toMatchObject({ kind: "set", operator: "in" });
+  });
+
+  it("preserves a one-row data selector through XLSX reimport and table-row insertion", async () => {
+    const base = createBlankWorkbook();
+    const sheet = base.sheets[0];
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [{
+        ...sheet,
+        cells: {
+          A1: "Label", B1: "Total", C1: "Quantity",
+          A2: "Only row", C2: 10
+        }
+      }],
+      tables: [{
+        id: "calculated-table",
+        name: "Calculated",
+        sheetId: sheet.id,
+        range: { start: { row: 0, column: 0 }, end: { row: 1, column: 2 } },
+        headerRow: true,
+        totalsRow: false,
+        columns: [
+          { id: "label", name: "Label", sheetColumn: 0 },
+          { id: "total", name: "Total", sheetColumn: 1 },
+          { id: "quantity", name: "Quantity", sheetColumn: 2 }
+        ],
+        rowIds: ["only-row"]
+      }]
+    };
+    const configured = setStructuredTableCalculatedColumn(
+      workbook,
+      "calculated-table",
+      "total",
+      "=SUM(Calculated[Quantity])",
+      { createId: (kind) => `${kind}-configured`, getCellEvaluation: () => null }
+    );
+    expect(configured.status).toBe("committed");
+    expect(getCellContent(configured.workbook, sheet.id, "B2")).toBe("=SUM(C$2)");
+
+    const exported = await exportWorkbookToXlsx(configured.workbook);
+    const tableXml = strFromU8(unzipSync(new Uint8Array(exported))["xl/tables/table1.xml"]);
+    expect(tableXml).toContain("SUM(Calculated[[#Data],[Quantity]])");
+
+    const imported = await importWorkbookFromXlsx(exported);
+    const importedTable = imported.tables[0];
+    const importedTotal = importedTable.columns.find((column) => column.name === "Total");
+    expect(importedTotal?.calculatedFormula).toBe("=SUM(C$2)");
+
+    let nextId = 0;
+    const inserted = insertStructuredTableRows(imported, importedTable.id, { count: 1 }, {
+      createId(kind) {
+        nextId += 1;
+        return `${kind}-inserted-${nextId}`;
+      },
+      getCellEvaluation: () => null
+    });
+    expect(inserted.status).toBe("committed");
+    const insertedSheetId = inserted.workbook.tables[0].sheetId;
+    expect(getCellContent(inserted.workbook, insertedSheetId, "B2")).toBe("=SUM(C$2)");
+    expect(getCellContent(inserted.workbook, insertedSheetId, "B3")).toBe("=SUM(C$2)");
   });
 
   it("sizes imported sheets from table ranges with trailing empty rows", async () => {

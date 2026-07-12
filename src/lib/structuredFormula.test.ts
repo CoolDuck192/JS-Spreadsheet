@@ -117,6 +117,32 @@ describe("structuredFormula", () => {
     );
   });
 
+  it("distinguishes a locked one-row data selector from an unlocked current row", () => {
+    const oneRowTable: StructuredTable = {
+      id: "one-row-table",
+      name: "Calculated",
+      sheetId: "sheet-1",
+      range: {
+        start: { row: 0, column: 2 },
+        end: { row: 1, column: 2 }
+      },
+      headerRow: true,
+      totalsRow: false,
+      columns: [{ id: "quantity", name: "Quantity", sheetColumn: 2 }],
+      rowIds: ["row-1"]
+    };
+
+    expect(expectFormula(a1FormulaToStructured("=SUM(C2)", oneRowTable, 1))).toBe(
+      "=SUM(Calculated[@Quantity])"
+    );
+    expect(expectFormula(a1FormulaToStructured("=SUM(C$2)", oneRowTable, 1))).toBe(
+      "=SUM(Calculated[[#Data],[Quantity]])"
+    );
+    expect(expectFormula(a1FormulaToStructured("=SUM(C2:C$2)", oneRowTable, 1))).toBe(
+      "=SUM(C2:C$2)"
+    );
+  });
+
   it.each([
     ["an A1-shaped sheet name", "='A1'!B2+C2", "='A1'!B2+SalesTable[@Region]"],
     ["an escaped apostrophe in a sheet name", "='Sheet''s'!B2+C2", "='Sheet''s'!B2+SalesTable[@Region]"]
