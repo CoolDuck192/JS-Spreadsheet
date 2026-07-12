@@ -53,28 +53,28 @@ describe("structuredFormula", () => {
   it("imports headers, totals, data, all, and adjacent column ranges", () => {
     expect(
       expectFormula(structuredFormulaToA1("=SalesTable[[#Headers],[Region]]", salesTable, 1))
-    ).toBe("=C1");
+    ).toBe("=C$1");
     expect(
       expectFormula(structuredFormulaToA1("=SalesTable[[#Totals],[Amount]]", salesTable, 1))
-    ).toBe("=F6");
+    ).toBe("=F$6");
     expect(
       expectFormula(structuredFormulaToA1("=SUM(SalesTable[[#Data],[Amount]])", salesTable, 1))
-    ).toBe("=SUM(F2:F5)");
+    ).toBe("=SUM(F$2:F$5)");
     expect(
       expectFormula(structuredFormulaToA1("=SUM(SalesTable[[#All],[Amount]])", salesTable, 1))
-    ).toBe("=SUM(F1:F6)");
+    ).toBe("=SUM(F$1:F$6)");
     expect(
       expectFormula(
         structuredFormulaToA1("=SUM(SalesTable[[#Data],[Units]:[Amount]])", salesTable, 1)
       )
-    ).toBe("=SUM(D2:F5)");
+    ).toBe("=SUM(D$2:F$5)");
   });
 
   it("imports single item specifiers without treating them as column names", () => {
-    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Headers]", salesTable, 1))).toBe("=A1:G1");
-    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Data]", salesTable, 1))).toBe("=A2:G5");
-    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Totals]", salesTable, 1))).toBe("=A6:G6");
-    expect(expectFormula(structuredFormulaToA1("=SalesTable[#All]", salesTable, 1))).toBe("=A1:G6");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Headers]", salesTable, 1))).toBe("=A$1:G$1");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Data]", salesTable, 1))).toBe("=A$2:G$5");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Totals]", salesTable, 1))).toBe("=A$6:G$6");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#All]", salesTable, 1))).toBe("=A$1:G$6");
 
     const escapedSelectorColumn: StructuredTable = {
       ...salesTable,
@@ -86,7 +86,7 @@ describe("structuredFormula", () => {
     };
     expect(expectFormula(
       structuredFormulaToA1("=SalesTable['#Data]", escapedSelectorColumn, 1)
-    )).toBe("=H2:H5");
+    )).toBe("=H$2:H$5");
   });
 
   it("decodes and re-encodes escaped right brackets, pound signs, and apostrophes in headers", () => {

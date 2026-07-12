@@ -130,7 +130,7 @@ describe("xlsxTables", () => {
       metadata,
       { idGenerator: sequencedIds("single-selector") }
     )).resolves.toHaveLength(1);
-    expect(worksheet.getCell("F6").formula).toBe("COUNTA(A2:F5)");
+    expect(worksheet.getCell("F6").formula).toBe("COUNTA(A$2:F$5)");
   });
 
   it("degrades cross-table calculated-column metadata without aborting import", async () => {

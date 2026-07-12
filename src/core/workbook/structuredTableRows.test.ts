@@ -240,6 +240,67 @@ describe("structured table rows", () => {
     }
   });
 
+  it("keeps a structured data range pinned while filling current-row formulas", () => {
+    const workbook = calculatedFixture();
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=[@Quantity]/SUM(Calculated[Quantity])",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "E2")).toBe("=C2/SUM(C$2:C$4)");
+    expect(getCellContent(result.workbook, "sheet-1", "E3")).toBe("=C3/SUM(C$2:C$4)");
+    expect(getCellContent(result.workbook, "sheet-1", "E4")).toBe("=C4/SUM(C$2:C$4)");
+  });
+
+  it("keeps a structured header reference pinned in every generated body row", () => {
+    const workbook = calculatedFixture();
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=Calculated[[#Headers],[Quantity]]",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "E2")).toBe("=C$1");
+    expect(getCellContent(result.workbook, "sheet-1", "E3")).toBe("=C$1");
+    expect(getCellContent(result.workbook, "sheet-1", "E4")).toBe("=C$1");
+  });
+
+  it("pins a structured data range above a totals row in every generated body row", () => {
+    const base = calculatedFixture();
+    const workbook: WorkbookModel = {
+      ...base,
+      tables: [{
+        ...base.tables[0],
+        range: { ...base.tables[0].range, end: { ...base.tables[0].range.end, row: 4 } },
+        totalsRow: true
+      }],
+      sheets: [{
+        ...base.sheets[0],
+        cells: { ...base.sheets[0].cells, C5: 9 }
+      }]
+    };
+    const result = setStructuredTableCalculatedColumn(
+      workbook,
+      "table-calc",
+      "column-total",
+      "=SUM(Calculated[Quantity])",
+      servicesFor(workbook)
+    );
+
+    expect(result.status).toBe("committed");
+    expect(getCellContent(result.workbook, "sheet-1", "E2")).toBe("=SUM(C$2:C$4)");
+    expect(getCellContent(result.workbook, "sheet-1", "E3")).toBe("=SUM(C$2:C$4)");
+    expect(getCellContent(result.workbook, "sheet-1", "E4")).toBe("=SUM(C$2:C$4)");
+    expect(getCellContent(result.workbook, "sheet-1", "C5")).toBe(9);
+  });
+
   it("rejects an unknown structured calculated-column reference atomically", () => {
     const workbook = calculatedFixture();
 

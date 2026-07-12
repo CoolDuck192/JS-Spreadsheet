@@ -729,7 +729,7 @@ describe("native structured table XLSX", () => {
     expect(table.columns.find((column) => column.name === "Label")?.totalsLabel).toBe("Grand Total");
     expect(table.columns.find((column) => column.name === "Standard")?.totalsFunction).toBe("sum");
     expect(table.columns.find((column) => column.name === "Custom Formula")?.calculatedFormula).toBe("=B2*C2");
-    expect(sheet.cells.D4).toBe("=SUM(D2:D3)");
+    expect(sheet.cells.D4).toBe("=SUM(D$2:D$3)");
     expect(sheet.cells.C4).toBe(99);
     expect(table.filter).toMatchObject({ kind: "set", operator: "in" });
   });

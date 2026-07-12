@@ -283,8 +283,9 @@ function structuredReferenceAddress(
   }
   if (startRow > endRow) return { message: "The table has no body rows" };
 
-  const start = formatA1(reference.startColumn.sheetColumn, startRow);
-  const end = formatA1(reference.endColumn.sheetColumn, endRow);
+  const lockRow = reference.selector !== "thisRow";
+  const start = formatA1(reference.startColumn.sheetColumn, startRow, lockRow);
+  const end = formatA1(reference.endColumn.sheetColumn, endRow, lockRow);
   return start === end ? start : `${start}:${end}`;
 }
 
@@ -475,8 +476,8 @@ function tableRows(table: StructuredTable): { bodyStart: number; bodyEnd: number
   };
 }
 
-function formatA1(column: number, row: number): string {
-  return `${columnIndexToName(column)}${row + 1}`;
+function formatA1(column: number, row: number, lockRow = false): string {
+  return `${columnIndexToName(column)}${lockRow ? "$" : ""}${row + 1}`;
 }
 
 function rangeKey(range: CellRange): string {
