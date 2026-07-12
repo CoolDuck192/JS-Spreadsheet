@@ -198,6 +198,74 @@ describe("RemoteQueryController", () => {
     expect(infinite.getSnapshot().items.map((item) => item.id)).toEqual(["1", "2"]);
   });
 
+  it.each(["cursor", "infinite"] as const)(
+    "replays the loaded %s window from the head after invalidation",
+    async (kind) => {
+      const pageRows = [rows(1, 50), rows(51, 50), rows(101, 50)];
+      const responses = [
+        accumulatedResult(kind, "1", pageRows[0], "page-2"),
+        accumulatedResult(kind, "2", pageRows[1], "page-3"),
+        accumulatedResult(kind, "3", pageRows[2]),
+        accumulatedResult(kind, "4", pageRows[0], "refreshed-page-2"),
+        accumulatedResult(kind, "5", pageRows[1], "refreshed-page-3"),
+        accumulatedResult(kind, "6", pageRows[2])
+      ];
+      const query = vi.fn(async (_request: QueryRequest) => responses.shift()!);
+      const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+        capabilities: accumulatedCapabilities(kind),
+        paginationMode: kind,
+        compareRevisions: numericComparator,
+        query
+      }));
+
+      await controller.load(accumulatedRequest(kind), "page-1");
+      await controller.load(accumulatedRequest(kind, "page-2"), "page-2");
+      await controller.load(accumulatedRequest(kind, "page-3"), "page-3");
+      expect(controller.getSnapshot().items).toHaveLength(150);
+
+      controller.invalidate();
+      await controller.refresh("refresh");
+
+      expect(controller.getSnapshot()).toMatchObject({ status: "ready", revision: "6" });
+      expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(
+        Array.from({ length: 150 }, (_, index) => String(index + 1))
+      );
+      expect(query.mock.calls.slice(3).map(([request]) => request.pagination)).toEqual([
+        accumulatedRequest(kind).pagination,
+        accumulatedRequest(kind, "refreshed-page-2").pagination,
+        accumulatedRequest(kind, "refreshed-page-3").pagination
+      ]);
+    }
+  );
+
+  it("stops accumulated replay when a newer load supersedes it", async () => {
+    const replayHead = createDeferred<QueryResult<Row>>();
+    const query = vi.fn()
+      .mockResolvedValueOnce(accumulatedResult("infinite", "1", rows(1, 1), "page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "2", rows(2, 1)))
+      .mockReturnValueOnce(replayHead.promise)
+      .mockResolvedValueOnce(accumulatedResult("infinite", "10", rows(999, 1), "user-page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "11", rows(2, 1)));
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      capabilities: accumulatedCapabilities("infinite"),
+      paginationMode: "infinite",
+      compareRevisions: numericComparator,
+      query
+    }));
+    await controller.load(accumulatedRequest("infinite"), "page-1");
+    await controller.load(accumulatedRequest("infinite", "page-2"), "page-2");
+
+    controller.invalidate();
+    const replay = controller.refresh("refresh");
+    await controller.load(accumulatedRequest("infinite"), "user-load");
+    replayHead.resolve(accumulatedResult("infinite", "3", rows(1, 1), "stale-page-2"));
+    await replay;
+
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(["999"]);
+    expect(controller.getSnapshot().revision).toBe("10");
+  });
+
   it("rejects refresh before load and stops all work after destroy", async () => {
     const query = vi.fn(async () => result("r1", []));
     const controller = new RemoteQueryController(createTestRemoteSource<Row>({ query }));
@@ -298,6 +366,51 @@ function infiniteResult(
       total: { kind: "unknown" }
     }
   };
+}
+
+function accumulatedRequest(kind: "cursor" | "infinite", token?: string): QueryRequest {
+  return {
+    sorting: [], filter: null, grouping: [], aggregates: [],
+    pagination: kind === "cursor"
+      ? { kind, ...(token === undefined ? {} : { cursor: token }), limit: 50 }
+      : { kind, ...(token === undefined ? {} : { after: token }), limit: 50 }
+  };
+}
+
+function accumulatedResult(
+  kind: "cursor" | "infinite",
+  revision: string,
+  resultRows: readonly Row[],
+  nextCursor?: string
+): QueryResult<Row> {
+  return {
+    items: resultRows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "loadedRows",
+    pageInfo: kind === "cursor"
+      ? { kind, ...(nextCursor === undefined ? {} : { nextCursor }), total: { kind: "unknown" } }
+      : {
+          kind,
+          ...(nextCursor === undefined ? {} : { nextCursor }),
+          loadedCount: resultRows.length,
+          total: { kind: "unknown" }
+        }
+  };
+}
+
+function accumulatedCapabilities(kind: "cursor" | "infinite"): TableCapabilities {
+  const source = createTestRemoteSource<Row>();
+  return {
+    ...source.capabilities,
+    pagination: { executor: "server", scope: "completeDataset", modes: [kind] }
+  };
+}
+
+function rows(start: number, length: number): Row[] {
+  return Array.from({ length }, (_, index) => ({
+    id: String(start + index),
+    name: `Row ${start + index}`
+  }));
 }
 
 function infiniteCapabilities(): TableCapabilities {

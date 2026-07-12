@@ -41,6 +41,10 @@ export class RemotePageCache<TRow> {
     return entry.result;
   }
 
+  getRequests(): readonly QueryRequest[] {
+    return this.orderedEntries().map((entry) => entry.request);
+  }
+
   put(request: QueryRequest, result: QueryResult<TRow>): void {
     const key = getRemotePageKey(request.pagination);
     const existing = this.entries.get(key);

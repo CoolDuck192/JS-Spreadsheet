@@ -40,6 +40,7 @@ export class RemoteQueryController<TRow> {
   private readonly cache: RemotePageCache<TRow>;
   private destroyed = false;
   private lastQuery: QueryRequest | null = null;
+  private recoveryQueries: readonly QueryRequest[] = [];
   private queryFamily: string | null = null;
   private currentRevision: string | null = null;
 
@@ -50,7 +51,7 @@ export class RemoteQueryController<TRow> {
     this.cache = new RemotePageCache(options.maxCachedPages);
   }
 
-  async load(query: QueryRequest, operationId: string): Promise<void> {
+  async load(query: QueryRequest, operationId: string): Promise<boolean> {
     this.assertActive();
     if (query.pagination.kind !== this.source.paginationMode) {
       throw new RemoteTableError(
@@ -64,6 +65,7 @@ export class RemoteQueryController<TRow> {
       this.cache.clear();
       this.queryFamily = family;
     }
+    this.recoveryQueries = [];
     this.lastQuery = query;
     const generation = ++this.generation;
     this.abortController?.abort();
@@ -78,14 +80,14 @@ export class RemoteQueryController<TRow> {
         generation,
         operationId
       });
-      if (!this.isCurrent(generation, abortController)) return;
+      if (!this.isCurrent(generation, abortController)) return false;
 
       if (this.currentRevision !== null) {
         const order = this.source.compareRevisions(result.revision, this.currentRevision);
         if (order === "older") {
           const current = this.snapshot;
           this.publish({ ...current, status: current.revision === null ? "idle" : "ready", error: undefined });
-          return;
+          return false;
         }
         if (order === "unknown") {
           this.cache.clear();
@@ -99,7 +101,7 @@ export class RemoteQueryController<TRow> {
               retryable: true
             }
           });
-          return;
+          return false;
         }
       }
 
@@ -117,17 +119,33 @@ export class RemoteQueryController<TRow> {
         completeness: result.completeness
       });
       this.publish({ status: "ready", ...combined, error: undefined });
+      return true;
     } catch (error) {
-      if (!this.isCurrent(generation, abortController)) return;
+      if (!this.isCurrent(generation, abortController)) return false;
       if (error instanceof RemotePageCacheError) this.cache.clear();
       this.publish({ ...this.snapshot, status: "error", error: normalizeRemoteError(error) });
+      return false;
     }
   }
 
-  async refresh(operationId: string): Promise<void> {
+  async refresh(operationId: string): Promise<boolean> {
     this.assertActive();
     if (!this.lastQuery) throw new RemoteTableError("NO_QUERY");
-    await this.load(this.lastQuery, operationId);
+    const recoveryQueries = this.recoveryQueries;
+    this.recoveryQueries = [];
+    if (recoveryQueries.length > 0) {
+      let recoveryQuery = recoveryQueries[0];
+      let accepted = false;
+      for (let index = 0; index < recoveryQueries.length; index += 1) {
+        accepted = await this.load(recoveryQuery, `${operationId}:${index + 1}`);
+        if (!accepted) return false;
+        const nextQuery = nextAccumulatedQuery(recoveryQuery, this.snapshot.pageInfo);
+        if (!nextQuery) break;
+        recoveryQuery = nextQuery;
+      }
+      return accepted;
+    }
+    return this.load(this.lastQuery, operationId);
   }
 
   getSnapshot = (): RemoteQuerySnapshot<TRow> => this.snapshot;
@@ -198,6 +216,10 @@ export class RemoteQueryController<TRow> {
     this.generation += 1;
     this.abortController?.abort();
     this.abortController = null;
+    this.recoveryQueries = this.lastQuery?.pagination.kind === "cursor"
+      || this.lastQuery?.pagination.kind === "infinite"
+      ? this.cache.getRequests()
+      : [];
     this.cache.clear();
     this.publish({
       ...emptySnapshot<TRow>(),
@@ -217,6 +239,7 @@ export class RemoteQueryController<TRow> {
     this.generation += 1;
     this.abortController?.abort();
     this.abortController = null;
+    this.recoveryQueries = [];
     this.cache.clear();
     this.listeners.clear();
     this.acceptanceListeners.clear();
@@ -299,4 +322,19 @@ function queryFamilyKey(query: QueryRequest): string {
       return serializeQueryRequest({ ...query, pagination });
     }
   }
+}
+
+function nextAccumulatedQuery(
+  query: QueryRequest,
+  pageInfo: QueryResult<unknown>["pageInfo"]
+): QueryRequest | null {
+  if (query.pagination.kind === "cursor") {
+    if (pageInfo.kind !== "cursor" || pageInfo.nextCursor === undefined) return null;
+    return { ...query, pagination: { ...query.pagination, cursor: pageInfo.nextCursor } };
+  }
+  if (query.pagination.kind === "infinite") {
+    if (pageInfo.kind !== "infinite" || pageInfo.nextCursor === undefined) return null;
+    return { ...query, pagination: { ...query.pagination, after: pageInfo.nextCursor } };
+  }
+  return null;
 }
