@@ -177,6 +177,35 @@ describe("useTableSession", () => {
     expect(current.getSnapshot().getCell("1", "name").storedValue).toBe("Ada");
   });
 
+  it("destroys a session revived by a hidden render when the subtree unmounts before reveal", async () => {
+    let current!: RecordTableSession<Employee, ColumnDef<Employee>>;
+    let renderCount = 0;
+    const stableOptions = options([{ id: "1", name: "Ada" }]);
+    function Probe({ marker }: { marker: number }) {
+      renderCount += 1;
+      current = useTableSession(stableOptions);
+      return <span>{marker}</span>;
+    }
+
+    const view = render(<Activity mode="visible"><Probe marker={0} /></Activity>);
+    const facade = current;
+    const destroy = vi.spyOn(facade, "destroy");
+    view.rerender(<Activity mode="hidden"><Probe marker={0} /></Activity>);
+    await act(async () => Promise.resolve());
+    expect(destroy).toHaveBeenCalledTimes(1);
+
+    const rendersBeforeRevival = renderCount;
+    view.rerender(<Activity mode="hidden"><Probe marker={1} /></Activity>);
+    await waitFor(() => expect(renderCount).toBeGreaterThan(rendersBeforeRevival));
+    view.unmount();
+    await act(async () => Promise.resolve());
+
+    expect(destroy).toHaveBeenCalledTimes(2);
+    await expect(facade.dispatch({ type: "set-selection", selection: null })).resolves.toMatchObject({
+      status: "rejected"
+    });
+  });
+
   it("never destroys a supplied table session", async () => {
     const session = createLocalRecordTableSession(options([{ id: "1", name: "Ada" }]));
     const destroy = vi.spyOn(session, "destroy");

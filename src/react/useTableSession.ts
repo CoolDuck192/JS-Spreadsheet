@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import {
   createLocalRecordTableSession,
   reviveLocalRecordTableSession,
@@ -78,6 +78,7 @@ export function useTableSession<TRow>(
         }
         ownership.destroyed = false;
         ownership.revivable = false;
+        scheduleOwnedSessionDestroy(ownership, ownership.facade);
       } else if (kind === "remote") {
         (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>)
           .updateOptions(renderOptions as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>);
@@ -93,6 +94,10 @@ export function useTableSession<TRow>(
   const ownership = sessionRef.current;
   const session = ownership.facade;
 
+  useLayoutEffect(() => {
+    ownership.cleanupToken = undefined;
+  }, [ownership, session]);
+
   useEffect(() => {
     const correction = pendingCorrectionRef.current;
     pendingCorrectionRef.current = null;
@@ -106,16 +111,7 @@ export function useTableSession<TRow>(
     if (isRemoteSession(session)) session.start();
     return () => {
       if (isRemoteSession(session)) session.stop();
-      const token = {};
-      ownership.cleanupToken = token;
-      queueMicrotask(() => {
-        if (ownership.cleanupToken === token) {
-          ownership.cleanupToken = undefined;
-          ownership.cleanupDestroy = true;
-          session.destroy();
-          ownership.cleanupDestroy = false;
-        }
-      });
+      scheduleOwnedSessionDestroy(ownership, session);
     };
   }, [ownership, session]);
 
@@ -168,6 +164,21 @@ function createOwnedTableSession<TRow>(
           (ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>).updateOptions(next)
       } as RecordTableSession<TRow, ColumnDef<TRow>>;
   return ownership;
+}
+
+function scheduleOwnedSessionDestroy<TRow>(
+  ownership: OwnedTableSessionState<TRow>,
+  session: OwnedTableSession<TRow>
+): void {
+  const token = {};
+  ownership.cleanupToken = token;
+  queueMicrotask(() => {
+    if (ownership.cleanupToken !== token) return;
+    ownership.cleanupToken = undefined;
+    ownership.cleanupDestroy = true;
+    session.destroy();
+    ownership.cleanupDestroy = false;
+  });
 }
 
 function createRawTableSession<TRow>(options: TableSessionOptions<TRow>): OwnedTableSession<TRow> {
