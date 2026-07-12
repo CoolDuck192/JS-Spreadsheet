@@ -263,6 +263,7 @@ export class RecordTableSession<
       this.requestControlledStateCorrection(controlledCandidate);
       externalChanged = true;
     } else {
+      if (this.invalidControlledState) externalChanged = true;
       this.invalidControlledState = false;
       this.sessionIssues = [];
       if (!stateEqual(this.state, safeCandidate)) {

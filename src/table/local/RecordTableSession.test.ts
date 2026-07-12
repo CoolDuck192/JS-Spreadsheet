@@ -732,6 +732,27 @@ describe("createLocalRecordTableSession", () => {
     expect(session.getSnapshot().state.sorting).toEqual([{ columnId: "name", direction: "asc" }]);
   });
 
+  it("invalidates a cached initial-state error when unchanged options confirm the sanitized state", () => {
+    const stableOptions = deterministicOptions({
+      defaultState: {
+        grouping: [{ columnId: "active" }],
+        pagination: { kind: "offset", offset: 0, limit: 25 }
+      }
+    });
+    const session = createLocalRecordTableSession(stableOptions);
+    const invalidSnapshot = session.getSnapshot();
+    expect(invalidSnapshot.status.phase).toBe("error");
+
+    session.updateOptions(stableOptions);
+
+    expect(session.getSnapshot()).not.toBe(invalidSnapshot);
+    expect(session.getSnapshot()).toMatchObject({
+      status: { phase: "ready" },
+      state: { grouping: [{ columnId: "active" }], pagination: { kind: "none" } },
+      issues: []
+    });
+  });
+
   it("prunes query state that references columns removed by updateOptions", () => {
     const source = { kind: "local" as const, rows: [employee()], getRowId: (row: Employee) => row.id };
     const initialColumns = createColumns();
