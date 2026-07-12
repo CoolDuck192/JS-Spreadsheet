@@ -1277,7 +1277,7 @@ describe("App", () => {
     }));
   });
 
-  it("includes the contextual Table tab in ribbon keyboard navigation and restores Home when it disappears", async () => {
+  it("keeps grid focus when the contextual Table tab disappears after a cell selection", async () => {
     const user = userEvent.setup();
     render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
 
@@ -1290,6 +1290,17 @@ describe("App", () => {
     await user.click(screen.getByRole("gridcell", { name: "H10" }));
     expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("gridcell", { name: "H10" })).toHaveFocus();
+  });
+
+  it("restores Home focus when a focused contextual control tears down the Table tab", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Convert to range" }));
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   });
 

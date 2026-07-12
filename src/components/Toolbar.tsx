@@ -259,6 +259,8 @@ type ToolbarProps = {
 
 export function Toolbar(props: ToolbarProps) {
   const [activeTab, setActiveTab] = useState<RibbonTabId>("home");
+  const homeTabRef = useRef<HTMLButtonElement>(null);
+  const tableFocusWithinRef = useRef(false);
   const tableTabVisible = props.features?.structuredTables !== false && Boolean(props.structuredTable);
   const ribbonTabs: ReadonlyArray<{ id: RibbonTabId; label: string }> = tableTabVisible
     ? [...BASE_RIBBON_TABS, TABLE_RIBBON_TAB]
@@ -270,8 +272,10 @@ export function Toolbar(props: ToolbarProps) {
     if (tableTabVisible || activeTab !== "table") {
       return;
     }
+    const restoreFocus = tableFocusWithinRef.current;
+    tableFocusWithinRef.current = false;
     setActiveTab("home");
-    queueMicrotask(() => document.getElementById(ribbonTabId("home"))?.focus());
+    if (restoreFocus) queueMicrotask(() => homeTabRef.current?.focus());
   }, [activeTab, tableTabVisible]);
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -293,7 +297,17 @@ export function Toolbar(props: ToolbarProps) {
   }
 
   return (
-    <div className="toolbar" role="toolbar" aria-label="Toolbar">
+    <div
+      className="toolbar"
+      role="toolbar"
+      aria-label="Toolbar"
+      onFocusCapture={(event) => {
+        tableFocusWithinRef.current = isTableRibbonTarget(event.target);
+      }}
+      onBlurCapture={(event) => {
+        tableFocusWithinRef.current = isTableRibbonTarget(event.relatedTarget);
+      }}
+    >
       <div className="ribbon-header">
         <div className="brand">
           <span className="brand-mark">JS</span>
@@ -306,7 +320,9 @@ export function Toolbar(props: ToolbarProps) {
             return (
               <button
                 key={tab.id}
+                ref={tab.id === "home" ? homeTabRef : undefined}
                 id={ribbonTabId(tab.id)}
+                data-ribbon-context={tab.id === "table" ? "table" : undefined}
                 className={[
                   "ribbon-tab",
                   selected ? "active-ribbon-tab" : "",
@@ -328,6 +344,7 @@ export function Toolbar(props: ToolbarProps) {
       </div>
       <div
         id={ribbonPanelId(activeTab)}
+        data-ribbon-context={activeTab === "table" ? "table" : undefined}
         className="ribbon-panel"
         role="tabpanel"
         aria-label={`${activeTabLabel} ribbon`}
@@ -874,6 +891,10 @@ function ribbonTabId(tab: RibbonTabId): string {
 
 function ribbonPanelId(tab: RibbonTabId): string {
   return `ribbon-panel-${tab}`;
+}
+
+function isTableRibbonTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('[data-ribbon-context="table"]'));
 }
 
 function ToolbarGroup({ label, children }: { label: string; children: ReactNode }) {
