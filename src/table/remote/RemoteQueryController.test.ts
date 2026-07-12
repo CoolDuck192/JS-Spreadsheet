@@ -271,6 +271,44 @@ describe("RemoteQueryController", () => {
     }
   );
 
+  it.each(["cursor", "infinite"] as const)(
+    "replays the loaded %s window from the head on manual refresh",
+    async (kind) => {
+      const pageRows = [rows(1, 50), rows(51, 50), rows(101, 50)];
+      const responses = [
+        accumulatedResult(kind, "1", pageRows[0], "page-2"),
+        accumulatedResult(kind, "2", pageRows[1], "page-3"),
+        accumulatedResult(kind, "3", pageRows[2]),
+        accumulatedResult(kind, "4", pageRows[0], "refreshed-page-2"),
+        accumulatedResult(kind, "5", pageRows[1], "refreshed-page-3"),
+        accumulatedResult(kind, "6", pageRows[2])
+      ];
+      const query = vi.fn(async (_request: QueryRequest) => responses.shift()!);
+      const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+        capabilities: accumulatedCapabilities(kind),
+        paginationMode: kind,
+        compareRevisions: numericComparator,
+        query
+      }));
+
+      await controller.load(accumulatedRequest(kind), "page-1");
+      await controller.load(accumulatedRequest(kind, "page-2"), "page-2");
+      await controller.load(accumulatedRequest(kind, "page-3"), "page-3");
+
+      await controller.refresh("manual-refresh");
+
+      expect(query.mock.calls.slice(3).map(([request]) => request.pagination)).toEqual([
+        accumulatedRequest(kind).pagination,
+        accumulatedRequest(kind, "refreshed-page-2").pagination,
+        accumulatedRequest(kind, "refreshed-page-3").pagination
+      ]);
+      expect(controller.getSnapshot()).toMatchObject({ status: "ready", revision: "6" });
+      expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(
+        Array.from({ length: 150 }, (_, index) => String(index + 1))
+      );
+    }
+  );
+
   it("stops accumulated replay when a newer load supersedes it", async () => {
     const replayHead = createDeferred<QueryResult<Row>>();
     const query = vi.fn()

@@ -188,7 +188,8 @@ export class RemoteQueryController<TRow> {
   async refresh(operationId: string): Promise<boolean> {
     this.assertActive();
     if (!this.lastQuery) throw new RemoteTableError("NO_QUERY");
-    const recoveryWindow = this.recoveryWindow;
+    const recoveryWindow = this.recoveryWindow
+      ?? (isAccumulatedQuery(this.lastQuery) ? this.cache.getRecoveryWindow() : null);
     this.recoveryWindow = null;
     if (recoveryWindow) {
       this.cache.clear();
@@ -399,6 +400,10 @@ function queryFamilyKey(query: QueryRequest): string {
       return serializeQueryRequest({ ...query, pagination });
     }
   }
+}
+
+function isAccumulatedQuery(query: QueryRequest): boolean {
+  return query.pagination.kind === "cursor" || query.pagination.kind === "infinite";
 }
 
 function nextAccumulatedQuery(
