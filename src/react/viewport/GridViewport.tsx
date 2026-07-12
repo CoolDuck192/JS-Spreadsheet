@@ -479,6 +479,14 @@ export function GridViewport({
             headerHeight={headerHeight}
             getCell={getCell}
             getCellRect={virtualizer.getCellRect}
+            pinnedColumnOffsets={pinnedColumnOffsets}
+            pinnedRowOffsets={pinnedRowOffsets}
+            scrollElement={rootRef.current}
+            scrollTop={rootRef.current?.scrollTop ?? 0}
+            scrollLeft={rootRef.current?.scrollLeft ?? 0}
+            viewportHeight={rootRef.current?.clientHeight ?? 0}
+            viewportWidth={rootRef.current?.clientWidth ?? 0}
+            scale={scale}
             renderEditor={renderEditor}
             onInteraction={onInteraction}
           />
@@ -500,6 +508,14 @@ function EditorOverlay({
   headerHeight,
   getCell,
   getCellRect,
+  pinnedColumnOffsets,
+  pinnedRowOffsets,
+  scrollElement,
+  scrollTop,
+  scrollLeft,
+  viewportHeight,
+  viewportWidth,
+  scale,
   renderEditor,
   onInteraction
 }: {
@@ -510,9 +526,22 @@ function EditorOverlay({
   headerHeight: number;
   getCell: GridViewportProps["getCell"];
   getCellRect(rowIndex: number, columnIndex: number): { top: number; left: number; width: number; height: number };
+  pinnedColumnOffsets: ReadonlyMap<string, number>;
+  pinnedRowOffsets: ReadonlyMap<string, number>;
+  scrollElement: HTMLElement | null;
+  scrollTop: number;
+  scrollLeft: number;
+  viewportHeight: number;
+  viewportWidth: number;
+  scale: number;
   renderEditor: GridViewportProps["renderEditor"];
   onInteraction: GridViewportProps["onInteraction"];
 }) {
+  useLayoutEffect(() => {
+    if (!scrollElement) return;
+    scrollElement.scrollTop = scrollTop;
+    scrollElement.scrollLeft = scrollLeft;
+  }, [editing.columnId, editing.rowId, scrollElement, scrollLeft, scrollTop]);
   const rowIndex = rows.findIndex((row) => row.id === editing.rowId);
   const columnIndex = columns.findIndex((column) => column.id === editing.columnId);
   if (rowIndex < 0 || columnIndex < 0) {
@@ -522,6 +551,17 @@ function EditorOverlay({
   const column = columns[columnIndex];
   const cell = getCell(row.id, column.id);
   const rect = getCellRect(rowIndex, columnIndex);
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const top = row.pinned === "top"
+    ? scrollTop / safeScale + headerHeight + (pinnedRowOffsets.get(row.id) ?? 0)
+    : row.pinned === "bottom"
+      ? scrollTop / safeScale + viewportHeight / safeScale - rect.height - (pinnedRowOffsets.get(row.id) ?? 0)
+      : headerHeight + rect.top;
+  const left = column.pinned === "left"
+    ? scrollLeft / safeScale + rowHeaderWidth + (pinnedColumnOffsets.get(column.id) ?? 0)
+    : column.pinned === "right"
+      ? scrollLeft / safeScale + viewportWidth / safeScale - rect.width - (pinnedColumnOffsets.get(column.id) ?? 0)
+      : rowHeaderWidth + rect.left;
   const context = { row, column, cell, selected: true, active: true, editing };
   return (
     <div
@@ -531,8 +571,8 @@ function EditorOverlay({
         ...cell.style,
         position: "absolute",
         zIndex: 8,
-        top: headerHeight + rect.top,
-        left: rowHeaderWidth + rect.left,
+        top,
+        left,
         width: cell.style?.width ?? rect.width,
         height: cell.style?.height ?? rect.height,
         minWidth: undefined,

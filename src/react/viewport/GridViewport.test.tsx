@@ -303,6 +303,34 @@ describe("GridViewport", () => {
     });
   });
 
+  it("keeps scroll position when selecting and editing a pinned cell", () => {
+    const pinnedRows: readonly GridViewportRow[] = [
+      { ...rows[0], pinned: "top" },
+      ...rows.slice(1)
+    ];
+    const pinnedColumns: readonly GridViewportColumn[] = [
+      { ...columns[0], pinned: "left" },
+      ...columns.slice(1)
+    ];
+    render(<StatefulViewport viewportRows={pinnedRows} viewportColumns={pinnedColumns} />);
+    const grid = screen.getByRole("grid", { name: "People grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 240 },
+      scrollLeft: { configurable: true, writable: true, value: 180 }
+    });
+    const pinnedCell = screen.getByRole("gridcell", { name: "Ada Name" });
+
+    fireEvent.pointerDown(pinnedCell);
+    expect({ top: grid.scrollTop, left: grid.scrollLeft }).toEqual({ top: 240, left: 180 });
+
+    fireEvent.doubleClick(pinnedCell);
+    const overlay = screen.getByRole("textbox", { name: "Edit Ada Name" }).parentElement;
+    expect(overlay).toHaveStyle({ top: "268px", left: "236px" });
+    expect({ top: grid.scrollTop, left: grid.scrollLeft }).toEqual({ top: 240, left: 180 });
+  });
+
   it("navigates by keyboard and keeps exactly one roving tab stop", () => {
     render(<StatefulViewport />);
     const grid = screen.getByRole("grid", { name: "People grid" });

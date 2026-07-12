@@ -62,6 +62,7 @@ export function useGridInteraction({
   const draggingRef = useRef(false);
   const dragAnchorRef = useRef<TableCellRef | null>(null);
   const focusPendingRef = useRef(false);
+  const ensureFocusVisibleRef = useRef(false);
   const previousEditingRef = useRef<GridEditorState | null>(editing);
   const activeCell = resolveActiveCell(
     controlledActiveCell ?? selection?.focus ?? null,
@@ -71,11 +72,12 @@ export function useGridInteraction({
   const activeDescendantId = activeCell ? gridCellDomId(idPrefix, activeCell) : undefined;
 
   const emitSelection = useCallback(
-    (nextSelection: TableSelection) => {
+    (nextSelection: TableSelection, ensureVisible = true) => {
       focusPendingRef.current = true;
+      ensureFocusVisibleRef.current = ensureVisible;
       const rowIndex = rowIndexById.get(nextSelection.focus.rowId);
       const columnIndex = columnIndexById.get(nextSelection.focus.columnId);
-      if (rowIndex !== undefined && columnIndex !== undefined) {
+      if (ensureVisible && rowIndex !== undefined && columnIndex !== undefined) {
         ensureCellVisible(rowIndex, columnIndex);
       }
       if (!document.getElementById(gridCellDomId(idPrefix, nextSelection.focus))) {
@@ -203,7 +205,7 @@ export function useGridInteraction({
       const next = reduceGridInteraction(state, { type: "pointer-down", cell, extend }, model);
       draggingRef.current = true;
       dragAnchorRef.current = next.selection.anchor;
-      emitSelection(next.selection);
+      emitSelection(next.selection, false);
     },
     [activeCell, editing, emitSelection, model, selection]
   );
@@ -214,7 +216,7 @@ export function useGridInteraction({
       if (!draggingRef.current || !anchor) {
         return;
       }
-      emitSelection({ anchor, focus: { ...cell } });
+      emitSelection({ anchor, focus: { ...cell } }, false);
     },
     [emitSelection]
   );
@@ -227,6 +229,7 @@ export function useGridInteraction({
   useLayoutEffect(() => {
     if (previousEditingRef.current && !editing) {
       focusPendingRef.current = true;
+      ensureFocusVisibleRef.current = true;
     }
     previousEditingRef.current = editing;
     if (editing) {
@@ -237,13 +240,14 @@ export function useGridInteraction({
     }
     const rowIndex = rowIndexById.get(activeCell.rowId);
     const columnIndex = columnIndexById.get(activeCell.columnId);
-    if (rowIndex !== undefined && columnIndex !== undefined) {
+    if (ensureFocusVisibleRef.current && rowIndex !== undefined && columnIndex !== undefined) {
       ensureCellVisible(rowIndex, columnIndex);
     }
     const activeElement = document.getElementById(gridCellDomId(idPrefix, activeCell));
     if (activeElement instanceof HTMLElement) {
       activeElement.focus({ preventScroll: true });
       focusPendingRef.current = false;
+      ensureFocusVisibleRef.current = false;
     } else {
       rootRef.current?.focus({ preventScroll: true });
     }
