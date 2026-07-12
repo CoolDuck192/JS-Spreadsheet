@@ -258,6 +258,33 @@ describe("DataTable", () => {
     expect(dataRowTexts()[0]).toContain("Lin");
   });
 
+  it("keeps one visible roving tab stop when selected rows or columns disappear", async () => {
+    const user = userEvent.setup();
+    const ref = createRef<DataTableHandle>();
+    renderTable({ ref });
+    const grid = screen.getByRole("grid", { name: "Employees" });
+    await user.click(screen.getByRole("gridcell", { name: "e3 Salary" }));
+
+    await dispatch(ref, {
+      type: "set-filter",
+      filter: {
+        kind: "comparison",
+        columnId: "department",
+        operator: "eq",
+        value: { type: "string", value: "Engineering" }
+      }
+    });
+
+    expect(grid.querySelectorAll('[role="gridcell"][tabindex="0"]')).toHaveLength(1);
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveAttribute("tabindex", "0");
+
+    await dispatch(ref, { type: "set-filter", filter: null });
+    await dispatch(ref, { type: "set-column-visibility", columnId: "salary", visible: false });
+
+    expect(grid.querySelectorAll('[role="gridcell"][tabindex="0"]')).toHaveLength(1);
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveAttribute("tabindex", "0");
+  });
+
   it("copies and atomically pastes a tab/newline matrix", async () => {
     const user = userEvent.setup();
     renderTable();

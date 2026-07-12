@@ -169,6 +169,9 @@ function DataTableSurface<TRow>({
   const defaultActiveCell = viewportRows[0] && viewportColumns[0]
     ? { rowId: viewportRows[0].id, columnId: viewportColumns[0].id }
     : null;
+  const viewportSelection = selectionWithinViewport(snapshot.selection, viewportRows, viewportColumns)
+    ? snapshot.selection
+    : null;
 
   const reportDiagnostic = useCallback((event: TableDiagnosticEvent) => {
     try {
@@ -490,8 +493,8 @@ function DataTableSurface<TRow>({
         columns={viewportColumns}
         ariaColumnCount={orderedColumns.length + 1}
         getCell={(rowId, columnId) => createViewportCell(snapshot, rowId, columnId, columnsById)}
-        selection={snapshot.selection}
-        activeCell={snapshot.selection?.focus ?? defaultActiveCell}
+        selection={viewportSelection}
+        activeCell={viewportSelection?.focus ?? defaultActiveCell}
         editing={editing}
         onInteraction={(interaction) => void handleInteraction(interaction)}
         scrollRef={scrollRef}
@@ -731,6 +734,20 @@ function tableAriaRowCount<TRow>(snapshot: TableViewSnapshot<TRow, ColumnDef<TRo
   }
   const aggregateRows = snapshot.rows.filter((row) => row.kind === "aggregate").length;
   return snapshot.totalRowCount.value + aggregateRows + 1;
+}
+
+function selectionWithinViewport(
+  selection: TableSelection | null,
+  rows: readonly GridViewportRow[],
+  columns: readonly GridViewportColumn[]
+): boolean {
+  if (!selection) return false;
+  const rowIds = new Set(rows.map((row) => row.id));
+  const columnIds = new Set(columns.map((column) => column.id));
+  return rowIds.has(selection.anchor.rowId)
+    && rowIds.has(selection.focus.rowId)
+    && columnIds.has(selection.anchor.columnId)
+    && columnIds.has(selection.focus.columnId);
 }
 
 function createViewportCell<TRow>(
