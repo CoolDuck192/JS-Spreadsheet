@@ -1,5 +1,6 @@
 import type { ColumnDef } from "../core/types";
 import type { FilterExpression, QueryScalar } from "../core/query";
+import { parseExcelTemporalInput } from "../../core/values/excelDate";
 
 type EvaluationError = { kind: "error"; code: string };
 
@@ -102,8 +103,12 @@ function compareToScalar<TRow>(
     return typeof value === "boolean" ? comparePrimitive(Number(value), Number(scalar.value)) : null;
   }
   if (scalar.type === "date" || scalar.type === "datetime") {
-    return typeof value === "string" && column.dataType === scalar.type
-      ? comparePrimitive(value, scalar.value)
+    if (typeof value !== "string" || column.dataType !== scalar.type) return null;
+    const expectedKind = scalar.type === "date" ? "date" : "dateTime";
+    const parsedValue = parseExcelTemporalInput(value);
+    const parsedScalar = parseExcelTemporalInput(scalar.value);
+    return parsedValue?.kind === expectedKind && parsedScalar?.kind === expectedKind
+      ? comparePrimitive(parsedValue.serial, parsedScalar.serial)
       : null;
   }
   return typeof value === "string" ? comparePrimitive(value.toLowerCase(), scalar.value.toLowerCase()) : null;

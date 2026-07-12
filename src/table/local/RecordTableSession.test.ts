@@ -103,17 +103,22 @@ describe("createLocalRecordTableSession", () => {
     await session.dispatch({
       type: "set-filter",
       filter: {
-        kind: "logical",
-        operator: "and",
-        operands: [
-          { kind: "comparison", columnId: "day", operator: "eq", value: { type: "date", value: "2026-03-05" } },
-          {
-            kind: "comparison",
-            columnId: "instant",
-            operator: "eq",
-            value: { type: "datetime", value: "2026-03-05T12:30:00.000Z" }
-          }
-        ]
+        kind: "comparison",
+        columnId: "day",
+        operator: "eq",
+        value: { type: "date", value: "2026-03-05" }
+      }
+    });
+    expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
+      .toEqual(["edited"]);
+
+    await session.dispatch({
+      type: "set-filter",
+      filter: {
+        kind: "comparison",
+        columnId: "instant",
+        operator: "eq",
+        value: { type: "datetime", value: "2026-03-05T12:30" }
       }
     });
     expect(session.getSnapshot().rows.filter((row) => row.kind === "data").map((row) => row.id))
