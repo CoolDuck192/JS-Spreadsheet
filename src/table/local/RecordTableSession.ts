@@ -703,7 +703,16 @@ export class RecordTableSession<
       return !address || !deleted.has(address.rowId);
     }));
     const document = { ...this.document, cells };
-    return this.commitDurable(rows, document, "delete-rows", commandId, startedAt, rowIds.length, 0);
+    return this.commitDurable(
+      rows,
+      document,
+      "delete-rows",
+      commandId,
+      startedAt,
+      rowIds.length,
+      0,
+      pruneDeletedRowsFromState(this.state, deleted)
+    );
   }
 
   private async updateViewState(
@@ -765,14 +774,17 @@ export class RecordTableSession<
     commandId: string,
     startedAt: number,
     rowCount: number,
-    cellCount: number
+    cellCount: number,
+    nextState: TableViewState = this.state
   ): Promise<CommandResult> {
     const beforeRows = this.rows;
     const beforeDocument = this.document;
+    const beforeState = this.state;
     const redo = createHistoryOperation(beforeRows, rows, beforeDocument, document, this.options.source.getRowId);
     const undo = createHistoryOperation(rows, beforeRows, document, beforeDocument, this.options.source.getRowId);
     this.rows = rows;
     this.document = document;
+    this.state = nextState;
     this.history = pushLocalHistory(this.history, undo, redo);
     this.revision += 1;
     this.invalidate();
@@ -782,6 +794,12 @@ export class RecordTableSession<
     }
     if (this.controlledDocument && !documentEqual(beforeDocument, document)) {
       this.safeHostCallback(() => this.options.onDocumentChange?.(documentUpdater(beforeDocument, document), context));
+    }
+    if ([...this.controlledStateKeys].some((key) => !stateSliceEqual(beforeState[key], nextState[key]))) {
+      this.safeHostCallback(() => this.options.onStateChange?.(
+        (state) => applyControlledStateDiff(state, beforeState, nextState, this.controlledStateKeys),
+        context
+      ));
     }
     this.publish();
     this.emitDiagnostic(commandId, reason, startedAt, true, "command", rowCount, cellCount);
@@ -1222,6 +1240,22 @@ function sanitizeLocalViewState<TRow>(
       : state.grouping.filter((grouping) => columnIds.has(grouping.columnId)),
     aggregates: state.aggregates.filter((aggregate) => columnIds.has(aggregate.columnId)),
     pagination
+  };
+}
+
+function pruneDeletedRowsFromState(
+  state: TableViewState,
+  deleted: ReadonlySet<string>
+): TableViewState {
+  const selection = state.selection
+    && (deleted.has(state.selection.anchor.rowId) || deleted.has(state.selection.focus.rowId))
+    ? null
+    : state.selection;
+  return {
+    ...state,
+    selection,
+    selectedRowIds: state.selectedRowIds.filter((rowId) => !deleted.has(rowId)),
+    expandedRowIds: state.expandedRowIds.filter((rowId) => !deleted.has(rowId))
   };
 }
 

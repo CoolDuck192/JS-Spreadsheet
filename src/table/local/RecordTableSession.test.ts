@@ -830,6 +830,44 @@ describe("createLocalRecordTableSession", () => {
       .toEqual(["e1", "e3"]);
   });
 
+  it("prunes deleted row ids from cell, row, and expansion selection state", async () => {
+    const onStateChange = vi.fn();
+    const session = createLocalRecordTableSession(deterministicOptions({
+      source: {
+        kind: "local",
+        rows: [employee("e1", "Ada"), employee("e2", "Grace"), employee("e3", "Linus")],
+        getRowId: (row) => row.id
+      },
+      state: {
+        selection: {
+          anchor: { rowId: "e2", columnId: "name" },
+          focus: { rowId: "e2", columnId: "name" }
+        },
+        selectedRowIds: ["e1", "e2", "e3"],
+        expandedRowIds: ["e2", "e3"]
+      },
+      onStateChange
+    }));
+    const beforeState = session.getSnapshot().state;
+
+    expect(await session.dispatch({ type: "delete-rows", rowIds: ["e2"] }))
+      .toMatchObject({ status: "committed" });
+    const expectedState = {
+      selection: null,
+      selectedRowIds: ["e1", "e3"],
+      expandedRowIds: ["e3"]
+    };
+    expect(session.getSnapshot().state).toMatchObject(expectedState);
+    expect(onStateChange).toHaveBeenCalledTimes(1);
+    expect(onStateChange.mock.calls[0][0](beforeState)).toMatchObject(expectedState);
+
+    await session.dispatch({ type: "insert-rows", rows: [employee("e2", "New row")] });
+    expect(session.getSnapshot().state.selectedRowIds).toEqual(["e1", "e3"]);
+    expect(session.getSnapshot().state.expandedRowIds).toEqual(["e3"]);
+    expect(await session.dispatch({ type: "delete-rows", rowIds: ["e1", "e3"] }))
+      .toMatchObject({ status: "committed" });
+  });
+
   it("undoes and redoes values, row order, and metadata together", async () => {
     const metadataKey = createTableMetadataKey("e2", "name");
     const session = createLocalRecordTableSession(deterministicOptions({
