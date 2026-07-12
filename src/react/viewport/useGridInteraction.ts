@@ -227,6 +227,17 @@ export function useGridInteraction({
   }, []);
 
   useLayoutEffect(() => {
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("mouseup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("mouseup", onPointerUp);
+    };
+  }, [onPointerUp]);
+
+  useLayoutEffect(() => {
     if (previousEditingRef.current && !editing) {
       focusPendingRef.current = true;
       ensureFocusVisibleRef.current = true;

@@ -33,6 +33,7 @@ function StatefulViewport({
   withRowHeaders = true,
   onColumnHeaderContextMenu,
   onRegisterApi,
+  interactionEventMode = "pointer",
   initialSelection = {
     anchor: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" },
     focus: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" }
@@ -47,6 +48,7 @@ function StatefulViewport({
   withRowHeaders?: boolean;
   onColumnHeaderContextMenu?: GridViewportProps["onColumnHeaderContextMenu"];
   onRegisterApi?: GridViewportProps["onRegisterApi"];
+  interactionEventMode?: GridViewportProps["interactionEventMode"];
   initialSelection?: TableSelection | null;
 }) {
   const [selection, setSelection] = useState<TableSelection | null>(initialSelection);
@@ -82,6 +84,7 @@ function StatefulViewport({
         renderRowHeader={withRowHeaders ? (row) => row.label : undefined}
         onColumnHeaderContextMenu={onColumnHeaderContextMenu}
         onRegisterApi={onRegisterApi}
+        interactionEventMode={interactionEventMode}
         announce={`${viewportRows.length} rows loaded`}
       />
       <output data-testid={`${idPrefix}-last-interaction`}>{JSON.stringify(lastInteraction)}</output>
@@ -301,6 +304,39 @@ describe("GridViewport", () => {
       anchor: { rowId: "row/ada", columnId: "full name" },
       focus: { rowId: "row/lin", columnId: "active" }
     });
+  });
+
+  it("captures pointer drags and ends them when release happens outside the grid", () => {
+    render(<StatefulViewport />);
+    const adaName = screen.getByRole("gridcell", { name: "Ada Name" });
+    const graceSalary = screen.getByRole("gridcell", { name: "Grace Salary" });
+    const linActive = screen.getByRole("gridcell", { name: "Lin Active" });
+    const setPointerCapture = vi.fn();
+    Object.defineProperty(adaName, "setPointerCapture", { configurable: true, value: setPointerCapture });
+
+    fireEvent.pointerDown(adaName, { pointerId: 7 });
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.pointerEnter(linActive);
+    const releasedSelection = readLastInteraction("people").selection;
+    fireEvent.pointerUp(window, { pointerId: 7 });
+    fireEvent.pointerEnter(graceSalary);
+
+    expect(readLastInteraction("people").selection).toEqual(releasedSelection);
+  });
+
+  it("ends legacy mouse drags when mouseup happens outside the grid", () => {
+    render(<StatefulViewport interactionEventMode="mouse" />);
+    const adaName = screen.getByRole("gridcell", { name: "Ada Name" });
+    const graceSalary = screen.getByRole("gridcell", { name: "Grace Salary" });
+    const linActive = screen.getByRole("gridcell", { name: "Lin Active" });
+
+    fireEvent.mouseDown(adaName);
+    fireEvent.mouseEnter(linActive);
+    const releasedSelection = readLastInteraction("people").selection;
+    fireEvent.mouseUp(window);
+    fireEvent.mouseEnter(graceSalary);
+
+    expect(readLastInteraction("people").selection).toEqual(releasedSelection);
   });
 
   it("keeps scroll position when selecting and editing a pinned cell", () => {

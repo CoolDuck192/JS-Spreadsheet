@@ -443,7 +443,14 @@ export function GridViewport({
                     )}
                     onPointerDown={
                       interactionEventMode === "pointer"
-                        ? (event) => handleCellDown(cell, event)
+                        ? (event) => {
+                            if (event.button === 0 && typeof event.currentTarget.setPointerCapture === "function") {
+                              try { event.currentTarget.setPointerCapture(event.pointerId); } catch {
+                                // Window-level release handling remains the fallback when capture is unavailable.
+                              }
+                            }
+                            handleCellDown(cell, event);
+                          }
                         : undefined
                     }
                     onMouseDown={
