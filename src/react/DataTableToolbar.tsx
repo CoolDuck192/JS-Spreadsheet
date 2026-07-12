@@ -127,22 +127,22 @@ export function DataTableToolbar<TRow>({
   return (
     <>
       <div className="js-spreadsheet-data-table__toolbar" role="toolbar" aria-label="Data table toolbar">
-        <button type="button" aria-label="Undo" disabled={!snapshot.canUndo} onClick={() => void run({ type: "undo" })}>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Undo" disabled={!snapshot.canUndo} onClick={() => void run({ type: "undo" })}>
           Undo
         </button>
-        <button type="button" aria-label="Redo" disabled={!snapshot.canRedo} onClick={() => void run({ type: "redo" })}>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Redo" disabled={!snapshot.canRedo} onClick={() => void run({ type: "redo" })}>
           Redo
         </button>
-        <button type="button" aria-label="Refresh" onClick={() => void session.refresh()}>Refresh</button>
-        <button type="button" aria-label="Export CSV" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("csv")}>Export CSV</button>
-        <button type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
-        {!exportState.enabled ? <span id={exportReasonId}>{exportState.reason}</span> : null}
-        <span>{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
-        <button type="button" aria-label="Quick tools" aria-controls={quickToolsOpen ? quickToolsId : undefined} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Refresh" onClick={() => void session.refresh()}>Refresh</button>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Export CSV" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("csv")}>Export CSV</button>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
+        {!exportState.enabled ? <span className="js-spreadsheet-data-table__toolbar-summary" id={exportReasonId}>{exportState.reason}</span> : null}
+        <span className="js-spreadsheet-data-table__toolbar-summary">{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Quick tools" aria-controls={quickToolsOpen ? quickToolsId : undefined} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
           Quick tools
         </button>
         {offsetPage ? (
-          <span>
+          <span className="js-spreadsheet-data-table__pagination">
             <button
               type="button"
               aria-label="Previous page"
@@ -168,7 +168,7 @@ export function DataTableToolbar<TRow>({
           </span>
         ) : null}
         {cursorPage ? (
-          <span>
+          <span className="js-spreadsheet-data-table__pagination">
             <button
               type="button"
               aria-label="Previous cursor page"
@@ -218,7 +218,7 @@ export function DataTableToolbar<TRow>({
             Load more
           </button>
         ) : null}
-        <span aria-label="Table row total">
+        <span className="js-spreadsheet-data-table__toolbar-summary" aria-label="Table row total">
           {snapshot.totalRowCount.kind === "known"
             ? `${snapshot.totalRowCount.value} total rows`
             : "Total rows unknown"}
