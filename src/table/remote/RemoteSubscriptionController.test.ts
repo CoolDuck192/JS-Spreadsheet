@@ -71,6 +71,55 @@ describe("RemoteSubscriptionController", () => {
     await vi.waitFor(() => expect(harness.query).toHaveBeenCalledTimes(2));
   });
 
+  it("retries an invalidated stale-replica response until a newer revision is available", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness();
+      harness.query
+        .mockResolvedValueOnce(result("1", []))
+        .mockResolvedValueOnce(result("3", [{ id: "1", salary: 120, group: "A" }]));
+
+      harness.subscription.accept({ kind: "invalidate", revision: "2" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.query).toHaveBeenCalledTimes(2);
+      expect(harness.queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED" }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(harness.query).toHaveBeenCalledTimes(3);
+      expect(harness.queryController.getSnapshot()).toMatchObject({ status: "ready", revision: "3" });
+    } finally {
+      harness?.subscription.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops automatic invalidation recovery after three refresh attempts", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness();
+      harness.query.mockResolvedValue(result("1", []));
+
+      harness.subscription.accept({ kind: "invalidate", revision: "2" });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(harness.query).toHaveBeenCalledTimes(4);
+      expect(harness.queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED", retryable: true }
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(harness.query).toHaveBeenCalledTimes(4);
+    } finally {
+      harness?.subscription.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a pending attempt and creates an explicit subscription conflict", async () => {
     const acknowledgement = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const harness = await createHarness(undefined, async () => acknowledgement.promise);
