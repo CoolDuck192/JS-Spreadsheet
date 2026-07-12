@@ -257,6 +257,39 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("orders combined read-only metadata patches atomically", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    let publications = 0;
+    parent.subscribe(() => { publications += 1; });
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { formula: "=B2", readOnly: true }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(1);
+    expect(getCellContent(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe("=B2");
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe(true);
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { readOnly: false, format: { bold: true }, comment: "unlocked" }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(2);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe(false);
+    expect(getCellFormat(parent.getSnapshot().workbook, "sheet-1", "A2")).toMatchObject({ bold: true });
+    expect(getCellComment(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe("unlocked");
+    parent.destroy();
+  });
+
   it("routes selection, clearing, resizing, visibility, and replacement through stable IDs", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");

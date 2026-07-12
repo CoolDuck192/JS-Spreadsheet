@@ -460,14 +460,30 @@ export function createWorkbookTableSession(
     table: StructuredTable,
     updates: readonly TableCellMetadataUpdate[]
   ): CommandResult {
-    const commands: WorkbookCommand[] = [];
+    const unlockCommands: WorkbookCommand[] = [];
+    const metadataCommands: WorkbookCommand[] = [];
+    const lockCommands: WorkbookCommand[] = [];
     const formulaEdits: Array<{ rowId: string; columnId: string; rawText: string }> = [];
+    const targets = new Set<string>();
     for (const update of updates) {
       const coord = resolveCell(table, update);
       if (!coord) return rejected("validation", "TABLE_CELL_NOT_FOUND", "Metadata target does not exist");
+      const target = `${update.rowId.length}:${update.rowId}${update.columnId}`;
+      if (targets.has(target)) {
+        return rejected("validation", "TABLE_CELL_DUPLICATE", "Metadata batch targets must be unique");
+      }
+      targets.add(target);
       const range = { start: coord, end: coord };
+      if (update.patch.readOnly === false) {
+        unlockCommands.push({
+          type: "range.readOnly.set",
+          sheetId: table.sheetId,
+          range,
+          readOnly: false
+        });
+      }
       if (update.patch.format) {
-        commands.push({
+        metadataCommands.push({
           type: "range.format",
           sheetId: table.sheetId,
           range,
@@ -475,24 +491,24 @@ export function createWorkbookTableSession(
         });
       }
       if ("validation" in update.patch) {
-        commands.push(update.patch.validation
+        metadataCommands.push(update.patch.validation
           ? { type: "range.validation.set", sheetId: table.sheetId, range, rule: fromTableValidation(update.patch.validation) }
           : { type: "range.validation.clear", sheetId: table.sheetId, range });
       }
       if ("comment" in update.patch) {
-        commands.push({
+        metadataCommands.push({
           type: "cell.comment.set",
           sheetId: table.sheetId,
           address: formatCellAddress(coord),
           comment: update.patch.comment ?? null
         });
       }
-      if ("readOnly" in update.patch) {
-        commands.push({
+      if (update.patch.readOnly === true) {
+        lockCommands.push({
           type: "range.readOnly.set",
           sheetId: table.sheetId,
           range,
-          readOnly: update.patch.readOnly === true
+          readOnly: true
         });
       }
       if ("formula" in update.patch) {
@@ -503,7 +519,9 @@ export function createWorkbookTableSession(
         });
       }
     }
+    const commands: WorkbookCommand[] = [...unlockCommands, ...metadataCommands];
     if (formulaEdits.length > 0) commands.push({ type: "table.editCells", tableId, edits: formulaEdits });
+    commands.push(...lockCommands);
     if (commands.length === 0) return { status: "committed", revision: getSnapshot().revision, changed: false };
     return workbookSession.dispatch({ type: "transaction", commands });
   }
