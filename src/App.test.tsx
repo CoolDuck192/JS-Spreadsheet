@@ -1745,15 +1745,27 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: "Filter" })).toBeInTheDocument();
   });
 
-  it("keeps keyboard navigation active after selecting a cell with the mouse", async () => {
+  it("moves DOM focus with the active cell through repeated keyboard navigation", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("gridcell", { name: "A3" })).toHaveFocus();
+
     await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("gridcell", { name: "B3" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
 
     expect(screen.getByLabelText("Formula input")).toHaveValue("");
-    expect(screen.getByLabelText("Name box")).toHaveValue("B1");
+    expect(screen.getByLabelText("Name box")).toHaveValue("B4");
+    expect(screen.getByRole("gridcell", { name: "B4" })).toHaveFocus();
   });
 
   it("extends the selection with Shift+Arrow keys", async () => {

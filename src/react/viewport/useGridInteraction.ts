@@ -35,6 +35,7 @@ export type UseGridInteractionOptions = {
 
 export type GridInteractionBindings = {
   onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void;
+  requestFocusRestoration(ensureVisible?: boolean): void;
   onCellPointerDown(cell: TableCellRef, extend: boolean): void;
   onCellPointerEnter(cell: TableCellRef): void;
   onPointerUp(): void;
@@ -71,21 +72,26 @@ export function useGridInteraction({
   );
   const activeDescendantId = activeCell ? gridCellDomId(idPrefix, activeCell) : undefined;
 
+  const requestFocusRestoration = useCallback((ensureVisible = true) => {
+    focusPendingRef.current = true;
+    ensureFocusVisibleRef.current = ensureVisible;
+  }, []);
+
   const emitSelection = useCallback(
     (nextSelection: TableSelection, ensureVisible = true) => {
-      focusPendingRef.current = true;
-      ensureFocusVisibleRef.current = ensureVisible;
+      requestFocusRestoration(ensureVisible);
       const rowIndex = rowIndexById.get(nextSelection.focus.rowId);
       const columnIndex = columnIndexById.get(nextSelection.focus.columnId);
       if (ensureVisible && rowIndex !== undefined && columnIndex !== undefined) {
         ensureCellVisible(rowIndex, columnIndex);
       }
-      if (!document.getElementById(gridCellDomId(idPrefix, nextSelection.focus))) {
+      const targetId = gridCellDomId(idPrefix, nextSelection.focus);
+      if (!rootRef.current?.querySelector(`[id="${targetId}"]`)) {
         rootRef.current?.focus({ preventScroll: true });
       }
       onInteraction({ type: "selection-change", selection: nextSelection });
     },
-    [columnIndexById, ensureCellVisible, idPrefix, onInteraction, rootRef, rowIndexById]
+    [columnIndexById, ensureCellVisible, idPrefix, onInteraction, requestFocusRestoration, rootRef, rowIndexById]
   );
 
   const moveSelection = useCallback(
@@ -254,7 +260,8 @@ export function useGridInteraction({
     if (ensureFocusVisibleRef.current && rowIndex !== undefined && columnIndex !== undefined) {
       ensureCellVisible(rowIndex, columnIndex);
     }
-    const activeElement = document.getElementById(gridCellDomId(idPrefix, activeCell));
+    const activeId = gridCellDomId(idPrefix, activeCell);
+    const activeElement = rootRef.current?.querySelector(`[id="${activeId}"]`);
     if (activeElement instanceof HTMLElement) {
       activeElement.focus({ preventScroll: true });
       focusPendingRef.current = false;
@@ -266,6 +273,7 @@ export function useGridInteraction({
 
   return {
     onKeyDown,
+    requestFocusRestoration,
     onCellPointerDown,
     onCellPointerEnter,
     onPointerUp,

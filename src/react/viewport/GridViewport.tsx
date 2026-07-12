@@ -239,6 +239,9 @@ export function GridViewport({
     }
     onBeforeKeyDown?.(event);
     if (event.defaultPrevented) {
+      if (isNavigationKey(event.key)) {
+        interaction.requestFocusRestoration(false);
+      }
       return;
     }
     interaction.onKeyDown(event);
@@ -543,6 +546,18 @@ export function GridViewport({
       </div>
     </div>
   );
+}
+
+function isNavigationKey(key: string): boolean {
+  return key === "ArrowUp"
+    || key === "ArrowDown"
+    || key === "ArrowLeft"
+    || key === "ArrowRight"
+    || key === "Home"
+    || key === "End"
+    || key === "PageUp"
+    || key === "PageDown"
+    || key === "Tab";
 }
 
 function EditorOverlay({
