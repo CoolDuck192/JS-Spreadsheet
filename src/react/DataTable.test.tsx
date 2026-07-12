@@ -214,6 +214,20 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("120");
   });
 
+  it("replaces a cell from the first printable key", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const salary = screen.getByRole("gridcell", { name: "e1 Salary" });
+    await user.click(salary);
+
+    fireEvent.keyDown(salary, { key: "4" });
+
+    const editor = screen.getByRole("textbox", { name: "Edit e1 Salary" });
+    expect(editor).toHaveValue("4");
+    await user.type(editor, "5{Enter}");
+    expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("45");
+  });
+
   it("sorts, filters, groups, aggregates, and paginates the complete local dataset", async () => {
     const user = userEvent.setup();
     const ref = createRef<DataTableHandle>();

@@ -248,10 +248,9 @@ function DataTableSurface<TRow>({
         await run({ type: "set-selection", selection: interaction.selection });
         return;
       case "edit-start": {
-        const cell = snapshot.getCell(interaction.cell.rowId, interaction.cell.columnId);
         setEditing({
           ...interaction.cell,
-          rawText: cell.formula ?? (cell.storedValue === null || cell.storedValue === undefined ? "" : String(cell.storedValue))
+          rawText: interaction.initialRawText
         });
         setIssue("");
         return;
@@ -747,6 +746,8 @@ function createViewportCell<TRow>(
     ref: { rowId, columnId },
     ariaLabel: `${rowId} ${columnLabel(column)}`,
     displayValue: cell.displayValue,
+    editValue: cell.formula
+      ?? (cell.storedValue === null || cell.storedValue === undefined ? "" : String(cell.storedValue)),
     editable: cell.editable,
     invalid: cell.issues.length > 0,
     className: cell.metadata.readOnly ? "js-spreadsheet-data-table__cell--readonly" : undefined,

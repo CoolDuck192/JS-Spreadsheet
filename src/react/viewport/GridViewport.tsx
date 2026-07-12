@@ -123,7 +123,10 @@ export function GridViewport({
     onInteraction,
     ensureCellVisible: virtualizer.ensureCellVisible,
     rootRef,
-    getInitialRawText: (cell) => getCell(cell.rowId, cell.columnId).displayValue,
+    getInitialRawText: (cell) => {
+      const viewportCell = getCell(cell.rowId, cell.columnId);
+      return viewportCell.editValue ?? viewportCell.displayValue;
+    },
     isCellEditable: (cell) => getCell(cell.rowId, cell.columnId).editable
   });
   const liveRegionId = gridLiveRegionDomId(idPrefix);
@@ -473,7 +476,11 @@ export function GridViewport({
                     onContextMenu={(event) => onCellContextMenu?.(cell.ref, event)}
                     onDoubleClick={() => {
                       if (cell.editable) {
-                        onInteraction({ type: "edit-start", cell: cell.ref, initialRawText: cell.displayValue });
+                        onInteraction({
+                          type: "edit-start",
+                          cell: cell.ref,
+                          initialRawText: cell.editValue ?? cell.displayValue
+                        });
                       } else {
                         onReadOnlyCellEditAttempt?.(cell.ref);
                       }
