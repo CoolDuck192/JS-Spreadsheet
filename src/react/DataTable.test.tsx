@@ -229,6 +229,31 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("45");
   });
 
+  it("commits the option displayed by a select editor", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      defaultDocument: {
+        version: 1,
+        cells: {
+          [createTableMetadataKey("e1", "name")]: {
+            validation: { kind: "list", values: ["Grace", "Lin"] }
+          }
+        },
+        calculatedColumns: [],
+        namedStyles: []
+      }
+    });
+    render(<DataTable aria-label="List editor employees" session={session} />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "e1 Name" }));
+    const editor = screen.getByRole("combobox", { name: "Edit e1 Name" });
+    expect(editor).toHaveValue("Grace");
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveTextContent("Grace");
+    session.destroy();
+  });
+
   it("sorts, filters, groups, aggregates, and paginates the complete local dataset", async () => {
     const user = userEvent.setup();
     const ref = createRef<DataTableHandle>();

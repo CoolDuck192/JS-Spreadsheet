@@ -538,7 +538,7 @@ function DataTableSurface<TRow>({
               cell={snapshot.getCell(row.id, column.id)}
               rawText={editorState.rawText}
               onChange={(rawText) => setEditing((current) => current ? { ...current, rawText } : current)}
-              onCommit={(move) => void commitEdit({ rowId: row.id, columnId: column.id }, editorState.rawText, move)}
+              onCommit={(rawText, move) => void commitEdit({ rowId: row.id, columnId: column.id }, rawText, move)}
               onCancel={() => setEditing(null)}
               onDiagnostic={reportDiagnostic}
             />
