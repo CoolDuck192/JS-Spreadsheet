@@ -23,9 +23,6 @@
   },
   "files": ["dist/lib", "dist/types", "README.md", "LICENSE"],
   "packageManager": "pnpm@11.7.0",
-  "engines": {
-    "node": ">=22.13"
-  },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "typecheck": "tsc -b --pretty false",

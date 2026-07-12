@@ -97,6 +97,15 @@ describe("public entrypoints", () => {
     });
   });
 
+  it("does not publish the build-only Node requirement as a consumer engine", async () => {
+    const manifest = JSON.parse(await readFile(
+      new URL("../../package.json", import.meta.url),
+      "utf8"
+    ));
+
+    expect(manifest).not.toHaveProperty("engines.node");
+  });
+
   it("routes functional and performance tests without shell-quoted globs", async () => {
     const manifest = JSON.parse(await readFile(
       new URL("../../package.json", import.meta.url),
