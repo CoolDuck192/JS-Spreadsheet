@@ -827,7 +827,7 @@ export class RemoteMutationController<TRow> {
     const query = this.queryController.getSnapshot();
     const queryGeneration = this.queryController.getDiagnostics().generation;
     const authoritativeRefreshCompleted = batch.authoritativeRefreshCompleted
-      || (queryGeneration >= batch.cancelledAtQueryGeneration + 2 && query.status !== "loading");
+      || (queryGeneration >= batch.cancelledAtQueryGeneration + 2 && query.status === "ready");
     const protocolIssue = validateResults(batch.mutationIds, results);
     if (protocolIssue) {
       this.issues = [{ code: "REMOTE_MUTATION_PROTOCOL_ERROR", message: protocolIssue }];

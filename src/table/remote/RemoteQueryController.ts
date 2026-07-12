@@ -85,8 +85,20 @@ export class RemoteQueryController<TRow> {
       if (this.currentRevision !== null) {
         const order = this.source.compareRevisions(result.revision, this.currentRevision);
         if (order === "older") {
-          const current = this.snapshot;
-          this.publish({ ...current, status: current.revision === null ? "idle" : "ready", error: undefined });
+          const cached = this.cache.combine();
+          if (cached) {
+            this.publish({ status: "ready", ...cached, error: undefined });
+          } else {
+            this.publish({
+              ...before,
+              status: "error",
+              error: before.error ?? {
+                code: "REMOTE_STALE_RESPONSE",
+                message: "The remote response is older than the current revision; retry required.",
+                retryable: true
+              }
+            });
+          }
           return false;
         }
         if (order === "unknown") {
@@ -137,8 +149,14 @@ export class RemoteQueryController<TRow> {
       let recoveryQuery = recoveryQueries[0];
       let accepted = false;
       for (let index = 0; index < recoveryQueries.length; index += 1) {
+        const generationBeforeLoad = this.generation;
         accepted = await this.load(recoveryQuery, `${operationId}:${index + 1}`);
-        if (!accepted) return false;
+        if (!accepted) {
+          if (this.generation === generationBeforeLoad + 1) {
+            this.recoveryQueries = recoveryQueries;
+          }
+          return false;
+        }
         const nextQuery = nextAccumulatedQuery(recoveryQuery, this.snapshot.pageInfo);
         if (!nextQuery) break;
         recoveryQuery = nextQuery;

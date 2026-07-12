@@ -791,8 +791,8 @@ class RemoteTableSessionImpl<
     if (claim.kind === "pending") {
       const cancellation = mutations.cancelOperation(claim.entry.operationId);
       controller.invalidate();
-      void controller.refresh(`${commandId}:refresh`).then(() => {
-        cancellation?.markAuthoritativeRefreshCompleted();
+      void controller.refresh(`${commandId}:refresh`).then((accepted) => {
+        if (accepted) cancellation?.markAuthoritativeRefreshCompleted();
       }).catch(() => {});
       return { status: "pending", operationId: commandId };
     }

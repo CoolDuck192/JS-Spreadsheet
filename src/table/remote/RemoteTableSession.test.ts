@@ -699,6 +699,58 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("does not treat an older undo refresh as authoritative over a late acknowledgement", async () => {
+    const acknowledgement = createDeferredMutation<Employee>();
+    const compareRevisions = vi.fn(numericRevisionComparator);
+    let queryRevision = "2";
+    let queryRows: readonly Employee[] = employees;
+    const query = vi.fn(async (request: QueryRequest) =>
+      offsetResult(queryRevision, queryRows, request));
+    const mutate = vi.fn(async (_batch: readonly RemoteMutation[]) => acknowledgement.promise);
+    const session = createRemoteTableSession({
+      source: createTestRemoteSource({ query, mutate, compareRevisions }),
+      columns
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "edit-cells",
+      edits: [{ rowId: "employee-1", columnId: "salary", rawText: "120" }]
+    })).toMatchObject({ status: "pending" });
+    queryRevision = "1";
+    expect(await session.undo()).toMatchObject({ status: "pending" });
+    await vi.waitFor(() => expect(session.getSnapshot()).toMatchObject({
+      status: { phase: "error" },
+      issues: [{ code: "REMOTE_INVALIDATED" }]
+    }));
+
+    const sent = mutate.mock.calls[0][0];
+    acknowledgement.resolve(sent.map((mutation) => ({
+      clientMutationId: mutation.clientMutationId,
+      status: "committed" as const,
+      revision: "3",
+      row: { ...employees[0], salary: 120 },
+      rowVersion: "row-3"
+    })));
+    await vi.waitFor(() => expect(compareRevisions).toHaveBeenCalledWith("3", "2"));
+
+    queryRevision = "2";
+    await session.refresh();
+    expect(session.getSnapshot()).toMatchObject({
+      status: { phase: "error" },
+      issues: [{ code: "REMOTE_INVALIDATED" }]
+    });
+
+    queryRevision = "4";
+    queryRows = [{ ...employees[0], salary: 100 }];
+    await session.refresh();
+    expect(session.getSnapshot().status.phase).toBe("ready");
+    expect(session.getSnapshot().getCell("employee-1", "salary").storedValue).toBe(100);
+
+    session.destroy();
+  });
+
   it("returns a typed rejection when a custom command ID is reused after acknowledgement", async () => {
     let serverRow = employees[0];
     let serverRevision = "1";

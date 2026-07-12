@@ -83,8 +83,11 @@ describe("RemoteQueryController", () => {
     await controller.load(queryWithFilter("Grace"), "query-2");
     expect(controller.getSnapshot().revision).toBe("2");
     await controller.load(queryWithFilter("Stale"), "query-3");
-    expect(controller.getSnapshot()).toMatchObject({ status: "ready", revision: "2" });
-    expect(controller.getSnapshot().items[0].id).toBe("2");
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "error",
+      revision: "2",
+      error: { code: "REMOTE_STALE_RESPONSE", retryable: true }
+    });
     await controller.load(queryWithFilter("Unknown"), "query-4");
     expect(controller.getSnapshot()).toMatchObject({
       status: "error",
@@ -144,6 +147,36 @@ describe("RemoteQueryController", () => {
       status: "ready",
       revision: "2",
       items: [{ kind: "data", id: "1", original: { id: "1", name: "Ada Lovelace" } }]
+    });
+  });
+
+  it("keeps an invalidated empty cache retryable when refresh returns an older revision", async () => {
+    const responses = [
+      result("2", [{ id: "1", name: "Ada" }]),
+      result("1", []),
+      result("3", [{ id: "2", name: "Grace" }])
+    ];
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      compareRevisions: numericComparator,
+      query: async () => responses.shift()!
+    }));
+    await controller.load(queryWithFilter("Ada"), "initial");
+
+    controller.invalidate();
+    expect(await controller.refresh("stale-refresh")).toBe(false);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "error",
+      revision: "2",
+      items: [],
+      error: { code: "REMOTE_INVALIDATED", retryable: true }
+    });
+
+    expect(await controller.refresh("retry")).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "ready",
+      revision: "3",
+      items: [{ kind: "data", id: "2" }]
     });
   });
 
