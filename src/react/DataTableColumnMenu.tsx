@@ -211,7 +211,7 @@ export function DataTableColumnMenu<TRow>({
       ref={menuRef}
       popover="auto"
       className="js-spreadsheet-data-table__column-menu"
-      role="menu"
+      role="dialog"
       aria-label={`${label} column menu`}
       style={{ position: "fixed", top: position.top, left: position.left }}
       onKeyDown={(event) => {

@@ -574,6 +574,7 @@ function DataTableSurface<TRow>({
               <button
                 type="button"
                 aria-label={`Column options for ${label}`}
+                aria-haspopup="dialog"
                 aria-expanded={openColumnMenu?.columnId === column.id}
                 onClick={(event) => {
                   const trigger = event.currentTarget;

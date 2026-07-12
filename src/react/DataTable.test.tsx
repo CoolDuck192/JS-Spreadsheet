@@ -461,8 +461,9 @@ describe("DataTable", () => {
     renderTable();
 
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
 
     expect(menu).toHaveAttribute("popover", "auto");
     expect(menu.closest(".js-spreadsheet-data-table")).not.toBeNull();
@@ -472,7 +473,7 @@ describe("DataTable", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
 
     expect(hidePopover).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 
@@ -492,7 +493,7 @@ describe("DataTable", () => {
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
     await user.click(trigger);
 
-    expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
   });
@@ -505,7 +506,7 @@ describe("DataTable", () => {
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
 
     await user.click(trigger);
-    const firstMenu = screen.getByRole("menu", { name: "Name column menu" });
+    const firstMenu = screen.getByRole("dialog", { name: "Name column menu" });
     await user.click(trigger);
 
     expect(firstMenu).not.toBeInTheDocument();
@@ -518,7 +519,7 @@ describe("DataTable", () => {
 
     await user.click(trigger);
 
-    expect(screen.getByRole("menu", { name: "Name column menu" })).not.toBe(firstMenu);
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).not.toBe(firstMenu);
     expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
     expect(showPopover).toHaveBeenCalledTimes(2);
     expect(hidePopover).toHaveBeenCalledTimes(1);
@@ -533,11 +534,11 @@ describe("DataTable", () => {
     const departmentTrigger = screen.getByRole("button", { name: "Column options for Department" });
 
     await user.click(nameTrigger);
-    const staleMenu = screen.getByRole("menu", { name: "Name column menu" });
+    const staleMenu = screen.getByRole("dialog", { name: "Name column menu" });
     await user.click(departmentTrigger);
 
     expect(staleMenu).not.toBeInTheDocument();
-    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Department column menu" })).toBeInTheDocument();
     expect(nameTrigger).toHaveAttribute("aria-expanded", "false");
     expect(departmentTrigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
@@ -548,7 +549,7 @@ describe("DataTable", () => {
     Object.defineProperty(staleToggle, "newState", { value: "closed" });
     fireEvent(staleMenu, staleToggle);
 
-    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Department column menu" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
   });
 
@@ -573,7 +574,7 @@ describe("DataTable", () => {
     });
 
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const left = Number.parseFloat(menu.style.left);
     const top = Number.parseFloat(menu.style.top);
 
@@ -599,7 +600,7 @@ describe("DataTable", () => {
       return nativeRect.call(this);
     });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
 
     vi.stubGlobal("innerWidth", 320);
     vi.stubGlobal("innerHeight", 240);
@@ -614,13 +615,13 @@ describe("DataTable", () => {
     renderTable();
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const toggle = new Event("toggle");
     Object.defineProperty(toggle, "newState", { value: "closed" });
 
     fireEvent(menu, toggle);
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 
@@ -629,7 +630,7 @@ describe("DataTable", () => {
     renderTable();
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const cell = screen.getByRole("gridcell", { name: "e1 Name" });
     cell.focus();
     const toggle = new Event("toggle");
@@ -637,7 +638,7 @@ describe("DataTable", () => {
 
     fireEvent(menu, toggle);
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(cell).toHaveFocus();
     expect(trigger).not.toHaveFocus();
   });
@@ -650,7 +651,7 @@ describe("DataTable", () => {
 
     fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 
@@ -664,7 +665,7 @@ describe("DataTable", () => {
 
     fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(cell).toHaveFocus();
     expect(trigger).not.toHaveFocus();
   });
@@ -679,7 +680,7 @@ describe("DataTable", () => {
     expect(header).not.toBeNull();
     fireEvent.scroll(header!);
 
-    expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -711,7 +712,7 @@ describe("DataTable", () => {
       />
     );
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Column options for Name" })).not.toBeInTheDocument();
     expect(hidePopover).toHaveBeenCalledTimes(1);
   });
