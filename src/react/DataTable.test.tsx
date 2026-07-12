@@ -432,6 +432,34 @@ describe("DataTable", () => {
     session.destroy();
   });
 
+  it("does not reuse applied quick-tool state for another selection", async () => {
+    const user = userEvent.setup();
+    const session = createSession();
+    const dispatch = vi.spyOn(session, "dispatch");
+    render(<DataTable aria-label="Metadata employees" session={session} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "e1 Name" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.click(screen.getByLabelText("Read only"));
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+    expect(session.getSnapshot().getCell("e1", "name").metadata.readOnly).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.click(screen.getByRole("gridcell", { name: "e2 Name" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+
+    expect(screen.getByLabelText("Read only")).not.toBeChecked();
+    await user.type(screen.getByLabelText("Comment"), "B only");
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "e2", columnId: "name", patch: { comment: "B only" } }]
+    });
+    expect(session.getSnapshot().getCell("e2", "name").metadata).toEqual({ comment: "B only" });
+    session.destroy();
+  });
+
   it("resizes, hides, and pins columns by stable id", async () => {
     const user = userEvent.setup();
     const session = createSession();

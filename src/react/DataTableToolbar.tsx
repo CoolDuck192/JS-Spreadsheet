@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type {
   TableCellRef,
   TableSession,
@@ -17,6 +17,16 @@ type QuickToolField =
   | "formula"
   | "readOnly";
 
+type QuickToolValues = {
+  numberFormat: "general" | "number" | "currency" | "percent" | "date" | "datetime";
+  bold: boolean;
+  fillColor: string;
+  validationList: string;
+  comment: string;
+  formula: string;
+  readOnly: boolean;
+};
+
 export function DataTableToolbar<TRow>({
   session,
   snapshot,
@@ -31,14 +41,14 @@ export function DataTableToolbar<TRow>({
   onIssue(message: string): void;
 }) {
   const [quickToolsOpen, setQuickToolsOpen] = useState(false);
-  const [numberFormat, setNumberFormat] = useState("general");
-  const [bold, setBold] = useState(false);
-  const [fillColor, setFillColor] = useState("");
-  const [validationList, setValidationList] = useState("");
-  const [comment, setComment] = useState("");
-  const [formula, setFormula] = useState("");
-  const [readOnly, setReadOnly] = useState(false);
+  const [quickToolValues, setQuickToolValues] = useState<QuickToolValues>(() =>
+    quickToolValuesForSelection(snapshot, selectedCells)
+  );
   const [touched, setTouched] = useState<Partial<Record<QuickToolField, true>>>({});
+  const selectionKey = quickToolSelectionKey(selectedCells);
+  const selectionKeyRef = useRef(selectionKey);
+  selectionKeyRef.current = selectionKey;
+  const { numberFormat, bold, fillColor, validationList, comment, formula, readOnly } = quickToolValues;
   const formulaState = snapshot.operationStates.formula;
   const metadataState = snapshot.operationStates.metadata;
   const validationState = snapshot.operationStates.validation;
@@ -65,6 +75,10 @@ export function DataTableToolbar<TRow>({
     ? snapshot.state.pagination
     : null;
 
+  useEffect(() => {
+    resetQuickTools(snapshot, selectedCells);
+  }, [selectionKey]);
+
   async function run(command: Parameters<typeof session.dispatch>[0]) {
     const result = await session.dispatch(command);
     if (result.status === "rejected") {
@@ -75,11 +89,12 @@ export function DataTableToolbar<TRow>({
 
   async function applyQuickTools() {
     if (selectedCells.length === 0 || !metadataState.enabled || permissionDenied) return;
+    const appliedSelectionKey = selectionKey;
     const values = validationList.split(",").map((value) => value.trim()).filter(Boolean);
     const hasFormatUpdate = touched.numberFormat
       || touched.bold
       || Boolean(touched.fillColor && fillColor);
-    await run({
+    const result = await run({
       type: "update-cell-metadata",
       updates: selectedCells.map((cell) => {
         const currentFormat = snapshot.getCell(cell.rowId, cell.columnId).metadata.format;
@@ -106,6 +121,34 @@ export function DataTableToolbar<TRow>({
         };
       })
     });
+    if (
+      (result.status === "committed" || result.status === "pending")
+      && selectionKeyRef.current === appliedSelectionKey
+    ) {
+      resetQuickTools(session.getSnapshot(), selectedCells);
+    }
+  }
+
+  function resetQuickTools(
+    sourceSnapshot: TableViewSnapshot<TRow, ColumnDef<TRow>>,
+    sourceCells: readonly TableCellRef[]
+  ) {
+    setQuickToolValues(quickToolValuesForSelection(sourceSnapshot, sourceCells));
+    setTouched({});
+  }
+
+  function toggleQuickTools() {
+    if (!quickToolsOpen) {
+      resetQuickTools(snapshot, selectedCells);
+    }
+    setQuickToolsOpen(!quickToolsOpen);
+  }
+
+  function updateQuickToolValue<TKey extends keyof QuickToolValues>(
+    key: TKey,
+    value: QuickToolValues[TKey]
+  ) {
+    setQuickToolValues((current) => ({ ...current, [key]: value }));
   }
 
   function markTouched(field: QuickToolField) {
@@ -138,7 +181,7 @@ export function DataTableToolbar<TRow>({
         <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Export XLSX" disabled={!exportState.enabled} aria-describedby={!exportState.enabled ? exportReasonId : undefined} onClick={() => void download("xlsx")}>Export XLSX</button>
         {!exportState.enabled ? <span className="js-spreadsheet-data-table__toolbar-summary" id={exportReasonId}>{exportState.reason}</span> : null}
         <span className="js-spreadsheet-data-table__toolbar-summary">{selectedCells.length === 1 ? "1 cell selected" : `${selectedCells.length} cells selected`}</span>
-        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Quick tools" aria-controls={quickToolsOpen ? quickToolsId : undefined} aria-expanded={quickToolsOpen} onClick={() => setQuickToolsOpen(!quickToolsOpen)}>
+        <button className="js-spreadsheet-data-table__toolbar-icon-button" type="button" aria-label="Quick tools" aria-controls={quickToolsOpen ? quickToolsId : undefined} aria-expanded={quickToolsOpen} onClick={toggleQuickTools}>
           Quick tools
         </button>
         {offsetPage ? (
@@ -235,17 +278,17 @@ export function DataTableToolbar<TRow>({
             Number format
             <select aria-label="Number format" value={numberFormat} onChange={(event) => {
               markTouched("numberFormat");
-              setNumberFormat(event.currentTarget.value);
+              updateQuickToolValue("numberFormat", event.currentTarget.value as QuickToolValues["numberFormat"]);
             }}>
               {(["general", "number", "currency", "percent", "date", "datetime"] as const).map((value) => (
                 <option key={value} value={value}>{value}</option>
               ))}
             </select>
           </label>
-          <label><input type="checkbox" aria-label="Bold" checked={bold} onChange={(event) => { markTouched("bold"); setBold(event.currentTarget.checked); }} /> Bold</label>
-          <label>Fill color<input aria-label="Fill color" value={fillColor} onChange={(event) => { markTouched("fillColor"); setFillColor(event.currentTarget.value); }} /></label>
-          <label>Validation list<input aria-label="Validation list" disabled={!metadataState.enabled || !validationState.enabled || permissionDenied} aria-describedby={!validationState.enabled ? validationReasonId : undefined} value={validationList} onChange={(event) => { markTouched("validationList"); setValidationList(event.currentTarget.value); }} /></label>
-          <label>Comment<input aria-label="Comment" value={comment} onChange={(event) => { markTouched("comment"); setComment(event.currentTarget.value); }} /></label>
+          <label><input type="checkbox" aria-label="Bold" checked={bold} onChange={(event) => { markTouched("bold"); updateQuickToolValue("bold", event.currentTarget.checked); }} /> Bold</label>
+          <label>Fill color<input aria-label="Fill color" value={fillColor} onChange={(event) => { markTouched("fillColor"); updateQuickToolValue("fillColor", event.currentTarget.value); }} /></label>
+          <label>Validation list<input aria-label="Validation list" disabled={!metadataState.enabled || !validationState.enabled || permissionDenied} aria-describedby={!validationState.enabled ? validationReasonId : undefined} value={validationList} onChange={(event) => { markTouched("validationList"); updateQuickToolValue("validationList", event.currentTarget.value); }} /></label>
+          <label>Comment<input aria-label="Comment" value={comment} onChange={(event) => { markTouched("comment"); updateQuickToolValue("comment", event.currentTarget.value); }} /></label>
           <label>
             Formula
             <input
@@ -253,14 +296,14 @@ export function DataTableToolbar<TRow>({
               value={formula}
               disabled={!metadataState.enabled || !formulaState.enabled}
               aria-describedby={!formulaState.enabled ? formulaReasonId : !metadataState.enabled ? metadataReasonId : undefined}
-              onChange={(event) => { markTouched("formula"); setFormula(event.currentTarget.value); }}
+              onChange={(event) => { markTouched("formula"); updateQuickToolValue("formula", event.currentTarget.value); }}
             />
           </label>
           {!formulaState.enabled ? (
             <span id={formulaReasonId}>{formulaState.reason}</span>
           ) : null}
           {!validationState.enabled ? <span id={validationReasonId}>{validationState.reason}</span> : null}
-          <label><input type="checkbox" aria-label="Read only" checked={readOnly} onChange={(event) => { markTouched("readOnly"); setReadOnly(event.currentTarget.checked); }} /> Read only</label>
+          <label><input type="checkbox" aria-label="Read only" checked={readOnly} onChange={(event) => { markTouched("readOnly"); updateQuickToolValue("readOnly", event.currentTarget.checked); }} /> Read only</label>
           {!metadataState.enabled ? <span id={metadataReasonId}>{metadataState.reason}</span> : null}
           {permissionDenied ? <span id={permissionReasonId}>Selection contains cells that do not permit metadata changes</span> : null}
           <button
@@ -276,4 +319,29 @@ export function DataTableToolbar<TRow>({
       ) : null}
     </>
   );
+}
+
+function quickToolSelectionKey(selectedCells: readonly TableCellRef[]): string {
+  return JSON.stringify(selectedCells.map((cell) => [cell.rowId, cell.columnId]));
+}
+
+function quickToolValuesForSelection<TRow>(
+  snapshot: TableViewSnapshot<TRow, ColumnDef<TRow>>,
+  selectedCells: readonly TableCellRef[]
+): QuickToolValues {
+  const focus = snapshot.selection?.focus;
+  const target = (focus
+    ? selectedCells.find((cell) => cell.rowId === focus.rowId && cell.columnId === focus.columnId)
+    : undefined) ?? selectedCells[0];
+  const cell = target ? snapshot.getCell(target.rowId, target.columnId) : null;
+  const metadata = cell?.metadata;
+  return {
+    numberFormat: metadata?.format?.numberFormat ?? "general",
+    bold: metadata?.format?.bold ?? false,
+    fillColor: metadata?.format?.backgroundColor ?? "",
+    validationList: metadata?.validation?.kind === "list" ? metadata.validation.values.join(", ") : "",
+    comment: metadata?.comment ?? "",
+    formula: metadata?.formula ?? cell?.formula ?? "",
+    readOnly: metadata?.readOnly ?? false
+  };
 }
