@@ -21,6 +21,7 @@ import {
   deleteStructuredTableRows,
   insertStructuredTableRows,
   rewriteWorkbookForRowEdits,
+  rewriteWorkbookForRowMove,
   setStructuredTableCalculatedColumn,
   sortStructuredTableRows
 } from "./structuredTableRows";
@@ -354,14 +355,27 @@ function resizeTable(
   const resizedTable = getStructuredTable(resized.workbook, tableId)!;
   if (resizedTable.range.end.row === table.range.end.row) return resized;
 
+  const commonColumnEnd = Math.min(table.range.end.column, resizedTable.range.end.column);
+  const rewritten = rewriteWorkbookForRowMove(resized.workbook, table, {
+    sourceRow: table.range.end.row,
+    targetRow: resizedTable.range.end.row,
+    columnStart: table.range.start.column,
+    columnEnd: commonColumnEnd
+  }, { rewriteCalculatedFormulaMetadata: true });
+  if (rewritten.status === "rejected") return { ...rewritten, workbook };
+  const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+
   let next = rotateTableTotalsRow(
-    resized.workbook,
+    rewritten.workbook,
     table.sheetId,
-    resizedTable.range,
+    {
+      start: { ...table.range.start },
+      end: { row: rewrittenTable.range.end.row, column: commonColumnEnd }
+    },
     table.range.end.row,
-    resizedTable.range.end.row
+    rewrittenTable.range.end.row
   );
-  next = regenerateStructuredTableTotals(next, resizedTable);
+  next = regenerateStructuredTableTotals(next, rewrittenTable);
   return { status: "committed", workbook: next };
 }
 

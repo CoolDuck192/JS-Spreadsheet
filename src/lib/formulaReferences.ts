@@ -1,4 +1,4 @@
-import type { CellRange } from "../types";
+import type { CellCoord, CellRange } from "../types";
 import type { TableIssue } from "../core/commands/types";
 import { columnIndexToName, columnNameToIndex, formatCellAddress, normalizeRange } from "./addressing";
 
@@ -38,6 +38,16 @@ export type RectangularRowEditContext = {
   count: number;
   operation: "insert" | "delete";
   sheetBounds: { rowCount: number; columnCount: number };
+};
+
+export type RectangularRowMoveContext = {
+  formulaSheetId: string;
+  editedSheetId: string;
+  tableColumnStart: number;
+  tableColumnEnd: number;
+  sourceRow: number;
+  targetRow: number;
+  formulaCell?: CellCoord;
 };
 
 export type FormulaRewriteResult =
@@ -115,6 +125,37 @@ export function rewriteFormulaForRectangularRowEdit(
       continue;
     }
     const result = rewriteRectangularReferenceToken(token, context);
+    if (!result.ok) return result;
+    rewritten.push(result.formula);
+  }
+  return { ok: true, formula: rewritten.join("") };
+}
+
+export function rewriteFormulaForRectangularRowMove(
+  formula: string,
+  context: RectangularRowMoveContext
+): FormulaRewriteResult {
+  if (!formula.startsWith("=") || context.sourceRow === context.targetRow) {
+    return { ok: true, formula };
+  }
+  if (containsUnsupportedRectangularReference(formula)) {
+    return {
+      ok: false,
+      issue: {
+        code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+        message: "External and 3-D references cannot be rewritten for a table row move"
+      }
+    };
+  }
+
+  const formulaRowOffset = rectangularFormulaCellRowOffset(context);
+  const rewritten: string[] = [];
+  for (const token of tokenizeFormulaReferences(formula)) {
+    if (token.kind === "raw" || !rectangularReferenceTargetsEditedSheet(token, context)) {
+      rewritten.push(token.raw);
+      continue;
+    }
+    const result = rewriteRectangularRowMoveReferenceToken(token, context, formulaRowOffset);
     if (!result.ok) return result;
     rewritten.push(result.formula);
   }
@@ -627,10 +668,243 @@ function shiftReferenceIndex(value: number, context: FormulaStructureContext): n
 
 function rectangularReferenceTargetsEditedSheet(
   token: FormulaReferenceToken,
-  context: RectangularRowEditContext
+  context: Pick<RectangularRowEditContext, "formulaSheetId" | "editedSheetId">
 ): boolean {
   const target = (token.sheetName ?? context.formulaSheetId).normalize("NFKC").toLowerCase();
   return target === context.editedSheetId.normalize("NFKC").toLowerCase();
+}
+
+function rewriteRectangularRowMoveReferenceToken(
+  token: FormulaReferenceToken,
+  context: RectangularRowMoveContext,
+  formulaRowOffset: number
+): FormulaRewriteResult {
+  const originalEnd = token.end ?? token.start;
+  const lowColumn = Math.min(token.start.column, originalEnd.column);
+  const highColumn = Math.max(token.start.column, originalEnd.column);
+  if (highColumn < context.tableColumnStart || lowColumn > context.tableColumnEnd) {
+    return { ok: true, formula: token.raw };
+  }
+
+  if (!token.end) {
+    const row = mapReferenceRowForRectangularMove(token.start, context, formulaRowOffset);
+    if (row === null) return { ok: true, formula: "#REF!" };
+    return row === token.start.row
+      ? { ok: true, formula: token.raw }
+      : {
+          ok: true,
+          formula: `${token.sheetPrefix}${formatParsedCellReference({ ...token.start, row })}`
+        };
+  }
+
+  const interval = rewriteRowIntervalForLocationAwareMove(
+    token.start,
+    token.end,
+    context,
+    formulaRowOffset
+  );
+  if (interval === null) return unsupportedRowMoveReference();
+  if (interval !== "invalid"
+    && interval.start === token.start.row
+    && interval.end === token.end.row) {
+    return { ok: true, formula: token.raw };
+  }
+  if (lowColumn < context.tableColumnStart || highColumn > context.tableColumnEnd) {
+    return unsupportedRowMoveReference();
+  }
+  if (interval === "invalid") return { ok: true, formula: "#REF!" };
+
+  return {
+    ok: true,
+    formula: formatRectangularMember(
+      token.sheetPrefix,
+      { ...token.start, row: interval.start },
+      { ...token.end, row: interval.end }
+    )
+  };
+}
+
+function rectangularFormulaCellRowOffset(context: RectangularRowMoveContext): number {
+  const formulaCell = context.formulaCell;
+  if (
+    !formulaCell
+    || context.formulaSheetId.normalize("NFKC").toLowerCase()
+      !== context.editedSheetId.normalize("NFKC").toLowerCase()
+    || formulaCell.column < context.tableColumnStart
+    || formulaCell.column > context.tableColumnEnd
+    || !rowIsInRectangularMoveBand(formulaCell.row, context)
+  ) {
+    return 0;
+  }
+  return mapRectangularRowMove(formulaCell.row, context) - formulaCell.row;
+}
+
+function mapReferenceRowForRectangularMove(
+  reference: ParsedFormulaCellReference,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">,
+  formulaRowOffset: number
+): number | null {
+  if (rowIsInRectangularMoveBand(reference.row, context)) {
+    return mapRectangularRowMove(reference.row, context);
+  }
+  if (formulaRowOffset === 0 || reference.rowLock) return reference.row;
+  const row = reference.row + formulaRowOffset;
+  return row < 0 ? null : row;
+}
+
+function rowIsInRectangularMoveBand(
+  row: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): boolean {
+  return row >= Math.min(context.sourceRow, context.targetRow)
+    && row <= Math.max(context.sourceRow, context.targetRow);
+}
+
+function rewriteRowIntervalForLocationAwareMove(
+  start: ParsedFormulaCellReference,
+  end: ParsedFormulaCellReference,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">,
+  formulaRowOffset: number
+): { start: number; end: number } | null | "invalid" {
+  if (formulaRowOffset === 0) {
+    return rewriteRowIntervalForRectangularRowMove(start.row, end.row, context);
+  }
+
+  const ascending = start.row <= end.row;
+  const low = Math.min(start.row, end.row);
+  const high = Math.max(start.row, end.row);
+  const movementStart = Math.min(context.sourceRow, context.targetRow);
+  const movementEnd = Math.max(context.sourceRow, context.targetRow);
+  if (high < movementStart || low > movementEnd) {
+    const translatedStart = translateRelativeReferenceRow(start, formulaRowOffset);
+    const translatedEnd = translateRelativeReferenceRow(end, formulaRowOffset);
+    return translatedStart && translatedEnd
+      ? { start: translatedStart.row, end: translatedEnd.row }
+      : "invalid";
+  }
+
+  const lowEndpoint = ascending ? start : end;
+  const highEndpoint = ascending ? end : start;
+  const images: Array<{ start: number; end: number }> = [];
+  if (low < movementStart) {
+    appendMappedRowInterval(
+      images,
+      low,
+      Math.min(high, movementStart - 1),
+      lowEndpoint.rowLock ? 0 : formulaRowOffset
+    );
+  }
+  images.push(...rowImagesForRectangularMove(
+    Math.max(low, movementStart),
+    Math.min(high, movementEnd),
+    context
+  ));
+  if (high > movementEnd) {
+    appendMappedRowInterval(
+      images,
+      Math.max(low, movementEnd + 1),
+      high,
+      highEndpoint.rowLock ? 0 : formulaRowOffset
+    );
+  }
+  if (images.some((image) => image.start < 0 || image.end < 0)) return "invalid";
+  return mergeRowImages(images, ascending);
+}
+
+export function rewriteRowIntervalForRectangularRowMove(
+  startRow: number,
+  endRow: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): { start: number; end: number } | null {
+  const ascending = startRow <= endRow;
+  const low = Math.min(startRow, endRow);
+  const high = Math.max(startRow, endRow);
+  return mergeRowImages(rowImagesForRectangularMove(low, high, context), ascending);
+}
+
+function rowImagesForRectangularMove(
+  low: number,
+  high: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): Array<{ start: number; end: number }> {
+  const movementStart = Math.min(context.sourceRow, context.targetRow);
+  const movementEnd = Math.max(context.sourceRow, context.targetRow);
+  const images: Array<{ start: number; end: number }> = [];
+  appendMappedRowInterval(images, low, Math.min(high, movementStart - 1), 0);
+  if (context.targetRow > context.sourceRow) {
+    if (low <= context.sourceRow && high >= context.sourceRow) {
+      images.push({ start: context.targetRow, end: context.targetRow });
+    }
+    appendMappedRowInterval(
+      images,
+      Math.max(low, context.sourceRow + 1),
+      Math.min(high, context.targetRow),
+      -1
+    );
+  } else {
+    appendMappedRowInterval(
+      images,
+      Math.max(low, context.targetRow),
+      Math.min(high, context.sourceRow - 1),
+      1
+    );
+    if (low <= context.sourceRow && high >= context.sourceRow) {
+      images.push({ start: context.targetRow, end: context.targetRow });
+    }
+  }
+  appendMappedRowInterval(images, Math.max(low, movementEnd + 1), high, 0);
+  return images;
+}
+
+function mergeRowImages(
+  images: Array<{ start: number; end: number }>,
+  ascending: boolean
+): { start: number; end: number } | null {
+  images.sort((left, right) => left.start - right.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const image of images) {
+    const previous = merged.at(-1);
+    if (previous && image.start <= previous.end + 1) {
+      previous.end = Math.max(previous.end, image.end);
+    } else {
+      merged.push({ ...image });
+    }
+  }
+  if (merged.length !== 1) return null;
+  return ascending
+    ? { start: merged[0].start, end: merged[0].end }
+    : { start: merged[0].end, end: merged[0].start };
+}
+
+function appendMappedRowInterval(
+  images: Array<{ start: number; end: number }>,
+  start: number,
+  end: number,
+  offset: number
+): void {
+  if (start > end) return;
+  images.push({ start: start + offset, end: end + offset });
+}
+
+function mapRectangularRowMove(
+  row: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): number {
+  if (row === context.sourceRow) return context.targetRow;
+  if (context.targetRow > context.sourceRow) {
+    return row > context.sourceRow && row <= context.targetRow ? row - 1 : row;
+  }
+  return row >= context.targetRow && row < context.sourceRow ? row + 1 : row;
+}
+
+function unsupportedRowMoveReference(): FormulaRewriteResult {
+  return {
+    ok: false,
+    issue: {
+      code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+      message: "Formula range cannot represent this rectangular row move"
+    }
+  };
 }
 
 function translateReferenceRowsWithinColumns(

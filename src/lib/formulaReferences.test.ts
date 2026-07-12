@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractFormulaReferences,
+  rewriteFormulaForRectangularRowMove,
   rewriteFormulaForRectangularRowEdit,
   rewriteFormulaForStructure,
   translateFormulaReferences,
@@ -50,6 +51,157 @@ describe("formulaReferences", () => {
       "=SUM($D3:A$3)",
       { rowOffset: 1, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
     )).toBe("=SUM($D3:A$3)");
+  });
+
+  it("maps totals-row moves down while preserving locks and unrelated references", () => {
+    expect(rewriteFormulaForRectangularRowMove(
+      "=$A$6+A$7+$B8+C6+Other!A6",
+      {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7
+      }
+    )).toEqual({
+      ok: true,
+      formula: "=$A$8+A$6+$B7+C6+Other!A6"
+    });
+  });
+
+  it("maps totals-row moves up on same- and cross-sheet dependents", () => {
+    const context = {
+      formulaSheetId: "Summary",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(
+      "=Data!$A$6+Data!A$4+Data!$B5+A6+Other!A6",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=Data!$A$4+Data!A$5+Data!$B6+A6+Other!A6"
+    });
+  });
+
+  it.each([
+    {
+      label: "up during growth",
+      formula: "=A9+$A9+A$9+$A$9+A6+$A$6+SUM(A9:B10)+SUM(A$9:B$10)",
+      context: {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7,
+        formulaCell: { row: 6, column: 0 }
+      },
+      expected: "=A8+$A8+A$9+$A$9+A8+$A$8+SUM(A8:B9)+SUM(A$9:B$10)"
+    },
+    {
+      label: "down during shrink",
+      formula: "=A2+$A2+A$2+$A$2+A6+$A$6+SUM(A1:B2)+SUM(A$1:B$2)",
+      context: {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 3,
+        formulaCell: { row: 3, column: 0 }
+      },
+      expected: "=A3+$A3+A$2+$A$2+A4+$A$4+SUM(A2:B3)+SUM(A$1:B$2)"
+    }
+  ])("uses the formula cell location when it moves $label", ({ formula, context, expected }) => {
+    expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
+      ok: true,
+      formula: expected
+    });
+  });
+
+  it("merges final range images after permutation and moved-formula translation", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B9)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7,
+      formulaCell: { row: 6, column: 0 }
+    })).toEqual({ ok: true, formula: "=SUM(A6:B8)" });
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A2:B4)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3,
+      formulaCell: { row: 3, column: 0 }
+    })).toEqual({ ok: true, formula: "=SUM(A3:B5)" });
+  });
+
+  it("rejects a final range image separated by a locked outside endpoint", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B$9)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7,
+      formulaCell: { row: 6, column: 0 }
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("keeps contiguous row-range images representable in both move directions", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B8)+SUM(A6:B8)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({
+      ok: true,
+      formula: "=SUM(A6:B7)+SUM(A6:B8)"
+    });
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM($A$4:B5)+SUM(A4:B6)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3
+    })).toEqual({
+      ok: true,
+      formula: "=SUM($A$5:B6)+SUM(A4:B6)"
+    });
+  });
+
+  it("rejects discontiguous and partial-column row-move images", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A6:B7)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A6:C7)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
   it("translates reversed ranges wholly inside the bounded columns while honoring row locks", () => {
