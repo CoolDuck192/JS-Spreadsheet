@@ -378,16 +378,18 @@ function DataTableSurface<TRow>({
     }
   }
 
-  function reorderColumn(sourceId: string, targetId: string) {
+  async function reorderColumn(sourceId: string, targetId: string) {
     const order = orderedColumns.map((column) => column.id);
     const sourceIndex = order.indexOf(sourceId);
     const targetIndex = order.indexOf(targetId);
     if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
     order.splice(sourceIndex, 1);
-    const insertionIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const insertionIndex = targetIndex;
     order.splice(insertionIndex, 0, sourceId);
-    void run({ type: "set-column-order", columnIds: order });
-    setAnnouncement(`${columnLabel(columnsById.get(sourceId)!)} moved to position ${insertionIndex + 1}`);
+    const result = await run({ type: "set-column-order", columnIds: order });
+    if (result.status === "committed" && result.changed) {
+      setAnnouncement(`${columnLabel(columnsById.get(sourceId)!)} moved to position ${insertionIndex + 1}`);
+    }
   }
 
   function updateInlineFilter(column: ColumnDef<TRow>, value: string) {
@@ -502,7 +504,7 @@ function DataTableSurface<TRow>({
         onColumnHeaderDragOver={(_column, event) => event.preventDefault()}
         onColumnHeaderDrop={(column, event) => {
           event.preventDefault();
-          if (draggedColumnId.current) reorderColumn(draggedColumnId.current, column.id);
+          if (draggedColumnId.current) void reorderColumn(draggedColumnId.current, column.id);
           draggedColumnId.current = null;
         }}
         retainedRowIds={editing ? [editing.rowId] : []}
@@ -551,7 +553,7 @@ function DataTableSurface<TRow>({
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                if (draggedColumnId.current) reorderColumn(draggedColumnId.current, column.id);
+                if (draggedColumnId.current) void reorderColumn(draggedColumnId.current, column.id);
                 draggedColumnId.current = null;
               }}
             >

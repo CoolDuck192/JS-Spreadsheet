@@ -735,16 +735,41 @@ describe("DataTable", () => {
     const session = createSession();
     render(<DataTable aria-label="Order employees" session={session} />);
     const nameHandle = screen.getByRole("button", { name: "Reorder Name" });
-    const salaryHeader = screen.getByRole("columnheader", { name: "Salary" });
+    const departmentHeader = screen.getByRole("columnheader", { name: "Department" });
     fireEvent.dragStart(nameHandle);
-    fireEvent.dragOver(salaryHeader);
-    fireEvent.drop(salaryHeader);
+    fireEvent.dragOver(departmentHeader);
+    fireEvent.drop(departmentHeader);
     await waitFor(() => expect(session.getSnapshot().state.columnOrder.indexOf("name")).toBeGreaterThan(0));
 
     await openColumnMenu(user, "Name");
     await user.click(screen.getByRole("button", { name: "Move Name left" }));
     expect(visibleHeaderNames()[0]).toBe("Name");
     expect(screen.getByRole("status")).toHaveTextContent("Name moved to position 1");
+    session.destroy();
+  });
+
+  it("drops a right-moving column after its target and reaches the final position", async () => {
+    const session = createSession();
+    render(<DataTable aria-label="Right drop employees" session={session} />);
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Reorder Name" }));
+    fireEvent.drop(screen.getByRole("columnheader", { name: "Department" }));
+    await waitFor(() => expect(visibleHeaderNames()).toEqual([
+      "Department",
+      "Name",
+      "Salary",
+      "Active"
+    ]));
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Reorder Name" }));
+    fireEvent.drop(screen.getByRole("columnheader", { name: "Active" }));
+    await waitFor(() => expect(visibleHeaderNames()).toEqual([
+      "Department",
+      "Salary",
+      "Active",
+      "Name"
+    ]));
+    expect(screen.getByRole("status")).toHaveTextContent("Name moved to position 4");
     session.destroy();
   });
 
