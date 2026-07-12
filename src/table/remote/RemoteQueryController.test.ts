@@ -124,6 +124,52 @@ describe("RemoteQueryController", () => {
     ]);
   });
 
+  it("keeps canonical rows published while an older refresh is in flight", async () => {
+    const refresh = createDeferred<QueryResult<Row>>();
+    const source = createTestRemoteSource<Row>({
+      compareRevisions: numericComparator,
+      query: vi.fn()
+        .mockResolvedValueOnce(result("1", [{ id: "1", name: "Ada" }]))
+        .mockReturnValueOnce(refresh.promise)
+    });
+    const controller = new RemoteQueryController(source);
+
+    await controller.load(queryWithFilter("Ada"), "initial");
+    const pending = controller.refresh("refresh");
+    controller.applyCanonicalRows([{ id: "1", name: "Ada Lovelace" }], "2");
+    refresh.resolve(result("1", [{ id: "1", name: "Ada" }]));
+    await pending;
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "ready",
+      revision: "2",
+      items: [{ kind: "data", id: "1", original: { id: "1", name: "Ada Lovelace" } }]
+    });
+  });
+
+  it("keeps canonical rows published when an in-flight refresh fails", async () => {
+    const refresh = createDeferred<QueryResult<Row>>();
+    const source = createTestRemoteSource<Row>({
+      compareRevisions: numericComparator,
+      query: vi.fn()
+        .mockResolvedValueOnce(result("1", [{ id: "1", name: "Ada" }]))
+        .mockReturnValueOnce(refresh.promise)
+    });
+    const controller = new RemoteQueryController(source);
+
+    await controller.load(queryWithFilter("Ada"), "initial");
+    const pending = controller.refresh("refresh");
+    controller.applyCanonicalRows([{ id: "1", name: "Ada Lovelace" }], "2");
+    refresh.reject(new Error("refresh failed"));
+    await pending;
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "error",
+      revision: "2",
+      items: [{ kind: "data", id: "1", original: { id: "1", name: "Ada Lovelace" } }]
+    });
+  });
+
   it("replaces offset pages but appends infinite pages in request order", async () => {
     const offsetResponses = [
       result("1", [{ id: "1", name: "Ada" }], 0),

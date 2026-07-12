@@ -83,13 +83,14 @@ export class RemoteQueryController<TRow> {
       if (this.currentRevision !== null) {
         const order = this.source.compareRevisions(result.revision, this.currentRevision);
         if (order === "older") {
-          this.publish({ ...before, status: before.revision === null ? "idle" : "ready", error: undefined });
+          const current = this.snapshot;
+          this.publish({ ...current, status: current.revision === null ? "idle" : "ready", error: undefined });
           return;
         }
         if (order === "unknown") {
           this.cache.clear();
           this.publish({
-            ...before,
+            ...this.snapshot,
             status: "error",
             items: [],
             error: {
@@ -119,7 +120,7 @@ export class RemoteQueryController<TRow> {
     } catch (error) {
       if (!this.isCurrent(generation, abortController)) return;
       if (error instanceof RemotePageCacheError) this.cache.clear();
-      this.publish({ ...before, status: "error", error: normalizeRemoteError(error) });
+      this.publish({ ...this.snapshot, status: "error", error: normalizeRemoteError(error) });
     }
   }
 
