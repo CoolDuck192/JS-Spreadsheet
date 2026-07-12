@@ -337,6 +337,47 @@ describe("RemoteQueryController", () => {
     expect(controller.getSnapshot().revision).toBe("10");
   });
 
+  it("preserves the original recovery depth when invalidated during a partial replay", async () => {
+    const interruptedPage = createDeferred<QueryResult<Row>>();
+    const pageRows = [rows(1, 50), rows(51, 50), rows(101, 50)];
+    const query = vi.fn()
+      .mockResolvedValueOnce(accumulatedResult("infinite", "1", pageRows[0], "page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "2", pageRows[1], "page-3"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "3", pageRows[2]))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "4", pageRows[0], "partial-page-2"))
+      .mockReturnValueOnce(interruptedPage.promise)
+      .mockResolvedValueOnce(accumulatedResult("infinite", "6", pageRows[0], "retry-page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "7", pageRows[1], "retry-page-3"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "8", pageRows[2]));
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      capabilities: accumulatedCapabilities("infinite"),
+      paginationMode: "infinite",
+      compareRevisions: numericComparator,
+      query
+    }));
+    await controller.load(accumulatedRequest("infinite"), "page-1");
+    await controller.load(accumulatedRequest("infinite", "page-2"), "page-2");
+    await controller.load(accumulatedRequest("infinite", "page-3"), "page-3");
+
+    controller.invalidate();
+    const interruptedRefresh = controller.refresh("interrupted-refresh");
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(5));
+    controller.invalidate();
+    interruptedPage.resolve(accumulatedResult("infinite", "5", pageRows[1], "partial-page-3"));
+    expect(await interruptedRefresh).toBe(false);
+
+    expect(await controller.refresh("retry-refresh")).toBe(true);
+
+    expect(query.mock.calls.slice(5).map(([request]) => request.pagination)).toEqual([
+      accumulatedRequest("infinite").pagination,
+      accumulatedRequest("infinite", "retry-page-2").pagination,
+      accumulatedRequest("infinite", "retry-page-3").pagination
+    ]);
+    expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(
+      Array.from({ length: 150 }, (_, index) => String(index + 1))
+    );
+  });
+
   it("recovers the logical accumulated depth after bounded pages were evicted", async () => {
     const pageRows = [rows(1, 1), rows(2, 1), rows(3, 1)];
     const responses = [

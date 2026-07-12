@@ -71,7 +71,11 @@ export class RemoteQueryController<TRow> {
     this.onCacheGap = options.onCacheGap;
   }
 
-  async load(query: QueryRequest, operationId: string): Promise<boolean> {
+  async load(
+    query: QueryRequest,
+    operationId: string,
+    preserveRecoveryWindow = false
+  ): Promise<boolean> {
     this.assertActive();
     if (query.pagination.kind !== this.source.paginationMode) {
       throw new RemoteTableError(
@@ -85,7 +89,7 @@ export class RemoteQueryController<TRow> {
       this.cache.clear();
       this.queryFamily = family;
     }
-    this.recoveryWindow = null;
+    if (!preserveRecoveryWindow) this.recoveryWindow = null;
     this.lastQuery = query;
     const generation = ++this.generation;
     this.abortController?.abort();
@@ -188,19 +192,24 @@ export class RemoteQueryController<TRow> {
   async refresh(operationId: string): Promise<boolean> {
     this.assertActive();
     if (!this.lastQuery) throw new RemoteTableError("NO_QUERY");
+    const recoveringInvalidation = this.snapshot.error?.code === "REMOTE_INVALIDATED";
     const recoveryWindow = this.recoveryWindow
       ?? (isAccumulatedQuery(this.lastQuery) ? this.cache.getRecoveryWindow() : null);
-    this.recoveryWindow = null;
+    this.recoveryWindow = recoveryWindow;
     if (recoveryWindow) {
       this.cache.clear();
       let recoveryQuery = recoveryWindow.headQuery;
       let accepted = false;
       for (let index = 0; index < recoveryWindow.pageCount; index += 1) {
         const generationBeforeLoad = this.generation;
-        accepted = await this.load(recoveryQuery, `${operationId}:${index + 1}`);
+        accepted = await this.load(recoveryQuery, `${operationId}:${index + 1}`, true);
         if (!accepted) {
           if (this.generation === generationBeforeLoad + 1) {
-            this.recoveryWindow = recoveryWindow;
+            this.recoveryWindow = mergeRecoveryWindows(this.recoveryWindow, recoveryWindow);
+            if (recoveringInvalidation) {
+              this.cache.clear();
+              this.publishInvalidated();
+            }
           }
           return false;
         }
@@ -208,6 +217,7 @@ export class RemoteQueryController<TRow> {
         if (!nextQuery) break;
         recoveryQuery = nextQuery;
       }
+      this.recoveryWindow = null;
       return accepted;
     }
     return this.load(this.lastQuery, operationId);
@@ -288,11 +298,16 @@ export class RemoteQueryController<TRow> {
     this.generation += 1;
     this.abortController?.abort();
     this.abortController = null;
-    this.recoveryWindow = this.lastQuery?.pagination.kind === "cursor"
+    const cachedRecoveryWindow = this.lastQuery?.pagination.kind === "cursor"
       || this.lastQuery?.pagination.kind === "infinite"
       ? this.cache.getRecoveryWindow()
       : null;
+    this.recoveryWindow = mergeRecoveryWindows(this.recoveryWindow, cachedRecoveryWindow);
     this.cache.clear();
+    this.publishInvalidated();
+  }
+
+  private publishInvalidated(): void {
     this.publish({
       ...emptySnapshot<TRow>(),
       status: "error",
@@ -404,6 +419,18 @@ function queryFamilyKey(query: QueryRequest): string {
 
 function isAccumulatedQuery(query: QueryRequest): boolean {
   return query.pagination.kind === "cursor" || query.pagination.kind === "infinite";
+}
+
+function mergeRecoveryWindows(
+  existing: RemotePageRecoveryWindow | null,
+  candidate: RemotePageRecoveryWindow | null
+): RemotePageRecoveryWindow | null {
+  if (!existing) return candidate;
+  if (!candidate) return existing;
+  return {
+    headQuery: existing.headQuery,
+    pageCount: Math.max(existing.pageCount, candidate.pageCount)
+  };
 }
 
 function nextAccumulatedQuery(

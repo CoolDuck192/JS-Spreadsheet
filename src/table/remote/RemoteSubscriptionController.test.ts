@@ -120,6 +120,60 @@ describe("RemoteSubscriptionController", () => {
     }
   });
 
+  it("retries the whole accumulated window when a later replay page is stale", async () => {
+    vi.useFakeTimers();
+    let subscription: RemoteSubscriptionController<Row> | undefined;
+    try {
+      const query = vi.fn()
+        .mockResolvedValueOnce(infiniteResult("1", [{ id: "1", salary: 100, group: "A" }], "page-2"))
+        .mockResolvedValueOnce(infiniteResult("2", [{ id: "2", salary: 90, group: "A" }]))
+        .mockResolvedValueOnce(infiniteResult("5", [{ id: "1", salary: 110, group: "A" }], "stale-page-2"))
+        .mockResolvedValueOnce(infiniteResult("4", [{ id: "2", salary: 90, group: "A" }]))
+        .mockResolvedValueOnce(infiniteResult("6", [{ id: "1", salary: 120, group: "A" }], "retry-page-2"))
+        .mockResolvedValueOnce(infiniteResult("7", [{ id: "2", salary: 95, group: "A" }]));
+      const complete = { executor: "server" as const, scope: "completeDataset" as const };
+      const source = createSource({
+        capabilities: { ...capabilities(), pagination: { ...complete, modes: ["infinite"] } },
+        paginationMode: "infinite",
+        query
+      });
+      const queryController = new RemoteQueryController(source);
+      await queryController.load(infiniteRequest(), "page-1");
+      await queryController.load(infiniteRequest("page-2"), "page-2");
+      const mutations = new RemoteMutationController({
+        source,
+        queryController,
+        overlays: new OptimisticOverlayStore(),
+        getActiveQuery: () => infiniteRequest("page-2"),
+        onChange: vi.fn()
+      });
+      let operation = 0;
+      subscription = new RemoteSubscriptionController({
+        source,
+        queryController,
+        mutationController: mutations,
+        getActiveQuery: () => infiniteRequest("page-2"),
+        createOperationId: () => `subscription-${++operation}`
+      });
+
+      subscription.accept({ kind: "invalidate", revision: "4" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(query).toHaveBeenCalledTimes(4);
+      expect(queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED" }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(query).toHaveBeenCalledTimes(6);
+      expect(queryController.getSnapshot()).toMatchObject({ status: "ready", revision: "7" });
+      expect(queryController.getSnapshot().items.map((item) => item.id)).toEqual(["1", "2"]);
+    } finally {
+      subscription?.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a pending attempt and creates an explicit subscription conflict", async () => {
     const acknowledgement = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const harness = await createHarness(undefined, async () => acknowledgement.promise);
@@ -379,6 +433,34 @@ function result(revision: string, rows: readonly Row[]): QueryResult<Row> {
     revision,
     completeness: "completeDataset",
     pageInfo: { kind: "none", total: { kind: "known", value: rows.length } }
+  };
+}
+
+function infiniteRequest(after?: string): QueryRequest {
+  return {
+    sorting: [],
+    filter: null,
+    grouping: [],
+    aggregates: [],
+    pagination: { kind: "infinite", ...(after === undefined ? {} : { after }), limit: 50 }
+  };
+}
+
+function infiniteResult(
+  revision: string,
+  rows: readonly Row[],
+  nextCursor?: string
+): QueryResult<Row> {
+  return {
+    items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "loadedRows",
+    pageInfo: {
+      kind: "infinite",
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      loadedCount: rows.length,
+      total: { kind: "unknown" }
+    }
   };
 }
 
