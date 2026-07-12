@@ -87,6 +87,14 @@ export function GridViewport({
   const getColumnKey = useCallback((index: number) => columns[index].id, [columns]);
   const getRowSize = useCallback((index: number) => rows[index].height, [rows]);
   const getColumnSize = useCallback((index: number) => columns[index].width, [columns]);
+  const pinnedTopInset = useMemo(
+    () => rows.reduce((total, row) => total + (row.pinned === "top" ? row.height : 0), 0),
+    [rows]
+  );
+  const pinnedLeftInset = useMemo(
+    () => columns.reduce((total, column) => total + (column.pinned === "left" ? column.width : 0), 0),
+    [columns]
+  );
   const virtualizer = useTwoAxisVirtualizer({
     scrollRef: rootRef,
     rowCount: rows.length,
@@ -99,6 +107,8 @@ export function GridViewport({
     columnOverscan,
     rowViewportInset: headerHeight,
     columnViewportInset: rowHeaderWidth,
+    rowViewportStartInset: pinnedTopInset,
+    columnViewportStartInset: pinnedLeftInset,
     scale,
     resetKey
   });

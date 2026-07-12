@@ -331,6 +331,38 @@ describe("GridViewport", () => {
     expect({ top: grid.scrollTop, left: grid.scrollLeft }).toEqual({ top: 240, left: 180 });
   });
 
+  it("scrolls upward targets below the pinned-row band", () => {
+    const pinnedRows: readonly GridViewportRow[] = Array.from({ length: 100 }, (_, index) => ({
+      id: `pinned-band-row-${index}`,
+      label: `Pinned band row ${index}`,
+      height: index === 0 ? 32 : 28,
+      kind: "data",
+      ariaRowIndex: index + 2,
+      ...(index === 0 ? { pinned: "top" as const } : {})
+    }));
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        ariaLabel="Pinned band grid"
+        viewportRows={pinnedRows}
+        onRegisterApi={(next) => { api = next; }}
+        initialSelection={null}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Pinned band grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 1_500 },
+      scrollLeft: { configurable: true, writable: true, value: 0 }
+    });
+
+    act(() => api?.ensureCellVisible("pinned-band-row-50", "salary"));
+
+    const targetStart = 32 + 49 * 28;
+    expect(grid.scrollTop).toBe(targetStart - 32);
+  });
+
   it("navigates by keyboard and keeps exactly one roving tab stop", () => {
     render(<StatefulViewport />);
     const grid = screen.getByRole("grid", { name: "People grid" });

@@ -30,6 +30,8 @@ export type TwoAxisVirtualizerOptions = {
   columnOverscan?: number;
   rowViewportInset?: number;
   columnViewportInset?: number;
+  rowViewportStartInset?: number;
+  columnViewportStartInset?: number;
   scale?: number;
   resetKey?: string | number;
 };
@@ -69,6 +71,8 @@ export function useTwoAxisVirtualizer({
   columnOverscan = 2,
   rowViewportInset = 0,
   columnViewportInset = 0,
+  rowViewportStartInset = 0,
+  columnViewportStartInset = 0,
   scale = 1,
   resetKey
 }: TwoAxisVirtualizerOptions): TwoAxisVirtualizer {
@@ -83,6 +87,8 @@ export function useTwoAxisVirtualizer({
   const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const safeRowInset = Math.max(0, rowViewportInset);
   const safeColumnInset = Math.max(0, columnViewportInset);
+  const safeRowStartInset = Math.max(0, rowViewportStartInset);
+  const safeColumnStartInset = Math.max(0, columnViewportStartInset);
 
   const rowMeasurements = useMemo(
     () => measureAxis(rowCount, getRowKey, getRowSize, isRowHidden),
@@ -101,12 +107,12 @@ export function useTwoAxisVirtualizer({
     [columnMeasurements]
   );
 
-  const rowViewportStart = viewport.scrollTop / safeScale;
+  const rowViewportStart = viewport.scrollTop / safeScale + safeRowStartInset;
   const rowViewportEnd = Math.max(
     rowViewportStart,
     (viewport.scrollTop + viewport.height) / safeScale - safeRowInset
   );
-  const columnViewportStart = viewport.scrollLeft / safeScale;
+  const columnViewportStart = viewport.scrollLeft / safeScale + safeColumnStartInset;
   const columnViewportEnd = Math.max(
     columnViewportStart,
     (viewport.scrollLeft + viewport.width) / safeScale - safeColumnInset
@@ -224,26 +230,35 @@ export function useTwoAxisVirtualizer({
       const column = columnsByIndex.get(columnIndex);
       if (row) {
         const height = element.clientHeight || DEFAULT_VIEWPORT_HEIGHT;
-        const viewTop = element.scrollTop / safeScale;
+        const viewTop = element.scrollTop / safeScale + safeRowStartInset;
         const viewBottom = (element.scrollTop + height) / safeScale - safeRowInset;
         if (row.start < viewTop) {
-          element.scrollTop = Math.max(0, row.start * safeScale);
+          element.scrollTop = Math.max(0, (row.start - safeRowStartInset) * safeScale);
         } else if (row.end > viewBottom) {
           element.scrollTop = Math.max(0, (row.end + safeRowInset) * safeScale - height);
         }
       }
       if (column) {
         const width = element.clientWidth || DEFAULT_VIEWPORT_WIDTH;
-        const viewLeft = element.scrollLeft / safeScale;
+        const viewLeft = element.scrollLeft / safeScale + safeColumnStartInset;
         const viewRight = (element.scrollLeft + width) / safeScale - safeColumnInset;
         if (column.start < viewLeft) {
-          element.scrollLeft = Math.max(0, column.start * safeScale);
+          element.scrollLeft = Math.max(0, (column.start - safeColumnStartInset) * safeScale);
         } else if (column.end > viewRight) {
           element.scrollLeft = Math.max(0, (column.end + safeColumnInset) * safeScale - width);
         }
       }
     },
-    [columnsByIndex, rowsByIndex, safeColumnInset, safeRowInset, safeScale, scrollRef]
+    [
+      columnsByIndex,
+      rowsByIndex,
+      safeColumnInset,
+      safeColumnStartInset,
+      safeRowInset,
+      safeRowStartInset,
+      safeScale,
+      scrollRef
+    ]
   );
 
   return {
