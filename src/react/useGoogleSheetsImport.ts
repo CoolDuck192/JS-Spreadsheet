@@ -192,6 +192,12 @@ export function useGoogleSheetsImport(options: Readonly<{
       }
     }
 
+    if (!open) {
+      return () => {
+        active = false;
+      };
+    }
+
     let preparation: GoogleTokenProviderPreparation;
     try {
       preparation = providerRuntime.resolve(authSource);
@@ -244,6 +250,7 @@ export function useGoogleSheetsImport(options: Readonly<{
     clientIdConfiguration.editingClientId,
     clientIdConfiguration.storageStatus,
     notifyError,
+    open,
     originAssessment,
     preparationAttempt,
     providerRuntime,

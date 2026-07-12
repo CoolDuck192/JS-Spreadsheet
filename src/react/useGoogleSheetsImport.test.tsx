@@ -189,6 +189,23 @@ describe("useGoogleSheetsImport", () => {
     expect(nestedProvider.prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("does not construct or prepare built-in Google auth until the dialog opens", async () => {
+    const builtInProvider = provider();
+    googleMocks.builtInFactory.mockReturnValue(builtInProvider);
+    const controller = renderController({
+      configuration: { clientId: CLIENT_ID }
+    });
+
+    await act(async () => Promise.resolve());
+    expect(controller.result.current.phase).toBe("closed");
+    expect(googleMocks.builtInFactory).not.toHaveBeenCalled();
+    expect(builtInProvider.prepare).not.toHaveBeenCalled();
+
+    await openReady(controller);
+    expect(googleMocks.builtInFactory).toHaveBeenCalledWith(CLIENT_ID);
+    expect(builtInProvider.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks only the built-in provider on a raw LAN IP", async () => {
     const controller = renderController({
       configuration: { clientId: CLIENT_ID },
@@ -978,7 +995,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
@@ -1008,7 +1025,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { tokenProviderFactory: factoryA },
@@ -1035,7 +1052,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: failingFactory },
