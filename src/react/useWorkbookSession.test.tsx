@@ -1,5 +1,5 @@
-import { StrictMode, useSyncExternalStore, type ReactNode } from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { Activity, StrictMode, useSyncExternalStore, type ReactNode } from "react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createFormulaEngine } from "../lib/formulaEngine";
 import { WORKBOOK_STORAGE_KEY } from "../lib/persistence";
@@ -459,6 +459,39 @@ describe("useWorkbookSession", () => {
     expect(result.current.dispatch({ type: "selection.set", selection: {
       start: { row: 2, column: 2 }, end: { row: 2, column: 2 }
     } }).status).toBe("rejected");
+  });
+
+  it("recreates a destroyed raw session when effects are restored", async () => {
+    const initial = withCell("initial");
+    let current!: {
+      session: ReturnType<typeof useWorkbookSession>;
+      workbook: WorkbookModel;
+    };
+    function Probe() {
+      const session = useWorkbookSession({ defaultWorkbook: initial, storage: false });
+      current = { session, workbook: useLiveWorkbook(session) };
+      return null;
+    }
+
+    const view = render(<Activity mode="visible"><Probe /></Activity>);
+    const facade = current.session;
+    view.rerender(<Activity mode="hidden"><Probe /></Activity>);
+    await act(async () => Promise.resolve());
+    view.rerender(<Activity mode="visible"><Probe /></Activity>);
+
+    let dispatchResult: ReturnType<typeof facade.dispatch> | undefined;
+    act(() => {
+      dispatchResult = current.session.dispatch({
+        type: "cell.set",
+        sheetId: initial.activeSheetId,
+        address: "A1",
+        input: "after reveal"
+      });
+    });
+
+    expect(current.session).toBe(facade);
+    expect(dispatchResult).toMatchObject({ status: "committed" });
+    expect(getCellContent(current.workbook, initial.activeSheetId, "A1")).toBe("after reveal");
   });
 
   it("does not publish a late save completion after unmount", async () => {

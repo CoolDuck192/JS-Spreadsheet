@@ -1,5 +1,5 @@
-import { StrictMode, type ReactNode } from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { Activity, StrictMode, type ReactNode } from "react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ColumnDef } from "./tableTypes";
 import * as localSessionModule from "../table/local/RecordTableSession";
@@ -70,6 +70,39 @@ describe("useTableSession", () => {
 
     unmount();
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
+  });
+
+  it("recreates a destroyed raw table session when effects are restored", async () => {
+    let current!: ReturnType<typeof useTableSession<Employee>>;
+    function Probe() {
+      current = useTableSession(options([{ id: "1", name: "Ada" }]));
+      useTableSnapshot(current);
+      return null;
+    }
+
+    const view = render(<Activity mode="visible"><Probe /></Activity>);
+    const facade = current;
+    view.rerender(<Activity mode="hidden"><Probe /></Activity>);
+    await act(async () => Promise.resolve());
+    view.rerender(<Activity mode="visible"><Probe /></Activity>);
+
+    let dispatchResult: Awaited<ReturnType<typeof facade.dispatch>> | undefined;
+    await act(async () => {
+      dispatchResult = await current.dispatch({
+        type: "set-selection",
+        selection: {
+          anchor: { rowId: "1", columnId: "name" },
+          focus: { rowId: "1", columnId: "name" }
+        }
+      });
+    });
+
+    expect(current).toBe(facade);
+    expect(dispatchResult).toMatchObject({ status: "committed" });
+    expect(current.getSnapshot().selection).toEqual({
+      anchor: { rowId: "1", columnId: "name" },
+      focus: { rowId: "1", columnId: "name" }
+    });
   });
 
   it("never destroys a supplied table session", async () => {

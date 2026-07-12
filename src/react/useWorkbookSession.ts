@@ -84,11 +84,15 @@ type OwnedSessionState = {
   saveInFlight: boolean;
   autosaveBlocked: boolean;
   destroyed: boolean;
+  revivable: boolean;
+  cleanupDestroy: boolean;
+  generation: number;
   cleanupToken?: object;
   controlledWorkbook?: WorkbookModel;
   beginHydration(callbacks: CallbackState): void;
   queueSave(snapshot: WorkbookSnapshot): void;
   flushLatest(): void;
+  revive(): void;
   destroy(): void;
 };
 
@@ -117,6 +121,7 @@ export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): Wor
   callbacks.current = createCallbackState(options, controlled, previousSource.generation);
 
   const [state] = useState(() => acquireOwnedSession(instanceId, options, callbacks));
+  if (state.destroyed && state.revivable) state.revive();
   const snapshot = useSyncExternalStore(
     state.facade.subscribe,
     state.facade.getSnapshot,
@@ -147,7 +152,6 @@ export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): Wor
   }, [controlled, options.workbook, snapshot.revision, state, callbacks]);
 
   useEffect(() => {
-    state.destroyed = false;
     state.cleanupToken = undefined;
     state.beginHydration(callbacks.current);
     const handleBeforeUnload = () => state.flushLatest();
@@ -158,7 +162,10 @@ export function useWorkbookSession(options: UseWorkbookSessionOptions = {}): Wor
       state.cleanupToken = token;
       queueMicrotask(() => {
         if (state.cleanupToken === token) {
+          state.cleanupToken = undefined;
+          state.cleanupDestroy = true;
           state.destroy();
+          state.cleanupDestroy = false;
         }
       });
     };
@@ -228,13 +235,16 @@ function createOwnedSessionState(
   }
 
   const createCommandId = options.services?.createCommandId ?? createReactCommandIdFactory();
-  const raw = createWorkbookSession({
-    workbook: initialWorkbook,
-    formulaEngineFactory: options.services?.formulaEngineFactory,
-    now: options.services?.now,
-    createCommandId,
-    createId: options.services?.createId
-  });
+  const createRaw = (workbook: WorkbookModel, selection?: WorkbookSnapshot["selection"]) =>
+    createWorkbookSession({
+      workbook,
+      ...(selection === undefined ? {} : { selection }),
+      formulaEngineFactory: options.services?.formulaEngineFactory,
+      now: options.services?.now,
+      createCommandId,
+      createId: options.services?.createId
+    });
+  const raw = createRaw(initialWorkbook);
 
   const state: OwnedSessionState = {
     raw,
@@ -248,6 +258,9 @@ function createOwnedSessionState(
     saveInFlight: false,
     autosaveBlocked: hydrationFailure !== undefined,
     destroyed: false,
+    revivable: false,
+    cleanupDestroy: false,
+    generation: 0,
     controlledWorkbook: options.workbook,
     beginHydration(currentCallbacks) {
       if (state.destroyed) {
@@ -263,6 +276,8 @@ function createOwnedSessionState(
         return;
       }
       state.hydrationStarted = true;
+      const raw = state.raw;
+      const generation = state.generation;
       const initialRevision = raw.getSnapshot().revision;
       const sourceGeneration = currentCallbacks.sourceGeneration;
       let loaded: ReturnType<WorkbookStorage["load"]>;
@@ -274,7 +289,7 @@ function createOwnedSessionState(
       }
       Promise.resolve(loaded).then(
         (workbook) => {
-          if (state.destroyed) {
+          if (state.destroyed || state.generation !== generation) {
             return;
           }
           const latestCallbacks = callbacks.current;
@@ -314,30 +329,52 @@ function createOwnedSessionState(
     },
     flushLatest() {
       if (state.destroyed) return;
-      stageSave(state, raw.getSnapshot());
+      stageSave(state, state.raw.getSnapshot());
       pumpSaveQueue(state, callbacks);
+    },
+    revive() {
+      if (!state.destroyed || !state.revivable) return;
+      const previous = state.raw.getSnapshot();
+      const nextRaw = createRaw(previous.workbook, previous.selection);
+      if (previous.persistence.status !== "idle") {
+        nextRaw.dispatch({
+          type: "persistence.status",
+          status: previous.persistence.status,
+          ...(previous.persistence.operation === undefined ? {} : { operation: previous.persistence.operation }),
+          ...(previous.persistence.message === undefined ? {} : { message: previous.persistence.message })
+        });
+      }
+      state.raw = nextRaw;
+      state.destroyed = false;
+      state.revivable = false;
+      state.cleanupToken = undefined;
+      state.generation += 1;
+      state.lastQueuedRevision = nextRaw.getSnapshot().revision;
+      state.lastQueuedWorkbook = nextRaw.getSnapshot().workbook;
+      if (!state.hydrated && state.storage) state.hydrationStarted = false;
     },
     destroy() {
       if (state.destroyed) return;
-      stageSave(state, raw.getSnapshot());
+      stageSave(state, state.raw.getSnapshot());
       state.destroyed = true;
-      raw.destroy();
+      state.revivable = state.cleanupDestroy;
+      state.raw.destroy();
       pumpSaveQueue(state, callbacks);
     }
   };
 
   state.facade = {
-    getSnapshot: raw.getSnapshot,
-    getCellEvaluation: raw.getCellEvaluation,
-    subscribe: raw.subscribe,
-    subscribeDiagnostics: raw.subscribeDiagnostics,
+    getSnapshot: () => state.raw.getSnapshot(),
+    getCellEvaluation: (sheetId, address) => state.raw.getCellEvaluation(sheetId, address),
+    subscribe: (listener) => state.raw.subscribe(listener),
+    subscribeDiagnostics: (listener) => state.raw.subscribeDiagnostics(listener),
     dispatch(commandOrEnvelope) {
       const envelope: CommandEnvelope<WorkbookCommand> = "intent" in commandOrEnvelope
         ? commandOrEnvelope
         : { id: createCommandId(), intent: commandOrEnvelope };
-      const previous = raw.getSnapshot();
-      const result = raw.dispatch(envelope);
-      const next = raw.getSnapshot();
+      const previous = state.raw.getSnapshot();
+      const result = state.raw.dispatch(envelope);
+      const next = state.raw.getSnapshot();
       invokeSafely(callbacks.current.onCommandResult, { command: envelope.intent, result });
       publishWorkbookChange(
         callbacks.current,
@@ -357,9 +394,9 @@ function createOwnedSessionState(
         history: replaceOptions?.history === "preserve" ? "commit" : "reset"
       };
       const envelope = { id: createCommandId(), intent: command };
-      const previous = raw.getSnapshot();
-      const result = raw.dispatch(envelope);
-      const next = raw.getSnapshot();
+      const previous = state.raw.getSnapshot();
+      const result = state.raw.dispatch(envelope);
+      const next = state.raw.getSnapshot();
       invokeSafely(callbacks.current.onCommandResult, { command, result });
       publishWorkbookChange(
         callbacks.current,
@@ -372,7 +409,7 @@ function createOwnedSessionState(
       );
       return result;
     },
-    table: raw.table,
+    table: (tableId) => state.raw.table(tableId),
     destroy: state.destroy
   };
 

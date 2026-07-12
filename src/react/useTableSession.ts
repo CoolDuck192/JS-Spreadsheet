@@ -19,8 +19,14 @@ type TableSessionOptions<TRow> =
   | LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>
   | RemoteTableSessionOptions<TRow, ColumnDef<TRow>>;
 
-type OwnershipState = {
-  cleanupTokens: WeakMap<object, object>;
+type OwnedTableSessionState<TRow> = {
+  kind: "local" | "remote";
+  raw: OwnedTableSession<TRow>;
+  facade: OwnedTableSession<TRow>;
+  cleanupToken?: object;
+  cleanupDestroy: boolean;
+  destroyed: boolean;
+  revivable: boolean;
 };
 
 export function useTableSession<TRow>(
@@ -32,52 +38,102 @@ export function useTableSession<TRow>(
 export function useTableSession<TRow>(
   options: TableSessionOptions<TRow>
 ): OwnedTableSession<TRow> {
-  const sessionRef = useRef<{
-    kind: "local" | "remote";
-    session: OwnedTableSession<TRow>;
-  } | null>(null);
-  const ownershipRef = useRef<OwnershipState>({ cleanupTokens: new WeakMap() });
+  const sessionRef = useRef<OwnedTableSessionState<TRow> | null>(null);
   const kind = options.source.kind;
 
   if (!sessionRef.current || sessionRef.current.kind !== kind) {
-    sessionRef.current = {
-      kind,
-      session: kind === "remote"
-        ? createRemoteTableSession(options as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>)
-        : createLocalRecordTableSession(options as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>)
-    };
-  } else if (kind === "remote") {
-    (sessionRef.current.session as RemoteTableSession<TRow, ColumnDef<TRow>>)
-      .updateOptions(options as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>);
+    sessionRef.current = createOwnedTableSession(options);
   } else {
-    (sessionRef.current.session as RecordTableSession<TRow, ColumnDef<TRow>>)
-      .updateOptions(options as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
+    const ownership = sessionRef.current;
+    if (ownership.destroyed && ownership.revivable) {
+      ownership.raw = createRawTableSession(options);
+      ownership.destroyed = false;
+      ownership.revivable = false;
+    } else if (kind === "remote") {
+      (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>)
+        .updateOptions(options as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>);
+    } else {
+      (ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>)
+        .updateOptions(options as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
+    }
   }
 
-  const session = sessionRef.current.session;
+  const ownership = sessionRef.current;
+  const session = ownership.facade;
 
   useEffect(() => {
-    const ownership = ownershipRef.current;
-    ownership.cleanupTokens.delete(session);
+    ownership.cleanupToken = undefined;
     if (isRemoteSession(session)) session.start();
     return () => {
       if (isRemoteSession(session)) session.stop();
       const token = {};
-      ownership.cleanupTokens.set(session, token);
+      ownership.cleanupToken = token;
       queueMicrotask(() => {
-        if (ownership.cleanupTokens.get(session) === token) {
-          ownership.cleanupTokens.delete(session);
+        if (ownership.cleanupToken === token) {
+          ownership.cleanupToken = undefined;
+          ownership.cleanupDestroy = true;
           session.destroy();
+          ownership.cleanupDestroy = false;
         }
       });
     };
-  }, [session]);
+  }, [ownership, session]);
 
   useEffect(() => {
     if (isRemoteSession(session)) session.start();
   });
 
   return session;
+}
+
+function createOwnedTableSession<TRow>(
+  options: TableSessionOptions<TRow>
+): OwnedTableSessionState<TRow> {
+  const ownership: OwnedTableSessionState<TRow> = {
+    kind: options.source.kind,
+    raw: createRawTableSession(options),
+    facade: undefined as unknown as OwnedTableSession<TRow>,
+    cleanupDestroy: false,
+    destroyed: false,
+    revivable: false
+  };
+  const common = {
+    getSnapshot: () => ownership.raw.getSnapshot(),
+    subscribe: (listener: () => void) => ownership.raw.subscribe(listener),
+    dispatch: (intent: Parameters<OwnedTableSession<TRow>["dispatch"]>[0]) => ownership.raw.dispatch(intent),
+    refresh: () => ownership.raw.refresh(),
+    undo: () => ownership.raw.undo(),
+    redo: () => ownership.raw.redo(),
+    export: (exportOptions: Parameters<OwnedTableSession<TRow>["export"]>[0]) => ownership.raw.export(exportOptions),
+    destroy: () => {
+      if (ownership.destroyed) return;
+      ownership.raw.destroy();
+      ownership.destroyed = true;
+      ownership.revivable = ownership.cleanupDestroy;
+    }
+  };
+  ownership.facade = ownership.kind === "remote"
+    ? {
+        ...common,
+        updateOptions: (next: RemoteTableSessionOptions<TRow, ColumnDef<TRow>>) =>
+          (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>).updateOptions(next),
+        start: () => (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>).start(),
+        stop: () => (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>).stop(),
+        getDiagnostics: () =>
+          (ownership.raw as RemoteTableSession<TRow, ColumnDef<TRow>>).getDiagnostics()
+      } as RemoteTableSession<TRow, ColumnDef<TRow>>
+    : {
+        ...common,
+        updateOptions: (next: LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>) =>
+          (ownership.raw as RecordTableSession<TRow, ColumnDef<TRow>>).updateOptions(next)
+      } as RecordTableSession<TRow, ColumnDef<TRow>>;
+  return ownership;
+}
+
+function createRawTableSession<TRow>(options: TableSessionOptions<TRow>): OwnedTableSession<TRow> {
+  return options.source.kind === "remote"
+    ? createRemoteTableSession(options as RemoteTableSessionOptions<TRow, ColumnDef<TRow>>)
+    : createLocalRecordTableSession(options as LocalRecordTableSessionOptions<TRow, ColumnDef<TRow>>);
 }
 
 function isRemoteSession<TRow>(
