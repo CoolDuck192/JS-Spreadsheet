@@ -1,7 +1,10 @@
 import type { TableIssue } from "../core/commands/types";
 import type { CellRange, StructuredTable, StructuredTableColumn } from "../types";
 import { columnIndexToName } from "./addressing";
-import { extractFormulaReferences } from "./formulaReferences";
+import {
+  extractFormulaReferences,
+  findSingleQuotedFormulaQualifierEnd
+} from "./formulaReferences";
 
 export type StructuredFormulaResult =
   | { ok: true; formula: string }
@@ -81,11 +84,20 @@ export function a1FormulaToStructured(
   let result = "";
   let cursor = 0;
   while (cursor < formula.length) {
-    if (formula[cursor] === '"') {
+    const character = formula[cursor];
+    if (character === '"') {
       const end = skipDoubleQuotedText(formula, cursor);
       result += formula.slice(cursor, end);
       cursor = end;
       continue;
+    }
+    if (character === "'") {
+      const end = findSingleQuotedFormulaQualifierEnd(formula, cursor);
+      if (end !== undefined) {
+        result += formula.slice(cursor, end);
+        cursor = end;
+        continue;
+      }
     }
 
     const reference = parseLocalA1ReferenceAt(formula, cursor);

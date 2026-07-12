@@ -261,6 +261,42 @@ describe("formulaReferences", () => {
     ]);
   });
 
+  it("ignores A1-shaped text inside single-quoted sheet qualifiers", () => {
+    expect(extractFormulaReferences("='A1'!B2+C2")).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
+        }
+      }
+    ]);
+    expect(extractFormulaReferences("='Sheet''s'!B2+C2")).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
+        }
+      }
+    ]);
+  });
+
+  it.each([
+    "=OtherTable[Net'#Amount]+C2",
+    "=OtherTable[Net''Amount]+C2"
+  ])("extracts references after structured-reference apostrophe escapes in %s", (formula) => {
+    expect(extractFormulaReferences(formula)).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
+        }
+      }
+    ]);
+  });
+
   it("rewrites absolute, mixed, and relative references for structural inserts", () => {
     expect(
       rewriteFormulaForStructure("=$A1+A$2+$A$3+B4", {

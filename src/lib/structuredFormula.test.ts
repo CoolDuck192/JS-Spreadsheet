@@ -117,6 +117,26 @@ describe("structuredFormula", () => {
     );
   });
 
+  it.each([
+    ["an A1-shaped sheet name", "='A1'!B2+C2", "='A1'!B2+SalesTable[@Region]"],
+    ["an escaped apostrophe in a sheet name", "='Sheet''s'!B2+C2", "='Sheet''s'!B2+SalesTable[@Region]"]
+  ])("preserves %s while exporting local A1 references", (_label, formula, expected) => {
+    expect(expectFormula(a1FormulaToStructured(formula, salesTable, 1))).toBe(expected);
+  });
+
+  it("skips a quoted A1 qualifier when the same local range key is recognized", () => {
+    expect(expectFormula(a1FormulaToStructured("='A1'!B2+A1", salesTable, 1))).toBe(
+      "='A1'!B2+SalesTable[[#Headers],[Order ID]]"
+    );
+  });
+
+  it.each([
+    ["=OtherTable[Net'#Amount]+C2", "=OtherTable[Net'#Amount]+SalesTable[@Region]"],
+    ["=OtherTable[Net''Amount]+C2", "=OtherTable[Net''Amount]+SalesTable[@Region]"]
+  ])("preserves structured-reference apostrophe escapes in %s", (formula, expected) => {
+    expect(expectFormula(a1FormulaToStructured(formula, salesTable, 1))).toBe(expected);
+  });
+
   it("round-trips an equivalent structured formula from the first body row", () => {
     const source = "=SalesTable[@Units]*SalesTable[@[Unit Price]]";
     const a1 = structuredFormulaToA1(source, salesTable, 1);

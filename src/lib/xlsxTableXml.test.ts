@@ -8,7 +8,7 @@ import {
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { makeDenseWorksheetPackage } from "../test/xlsxSecurityFixtures";
-import type { StructuredTable } from "../types";
+import type { StructuredTable, WorkbookModel } from "../types";
 import { validateXlsxArchive } from "./xlsxSecurity";
 import {
   patchNativeTableXml,
@@ -276,6 +276,67 @@ describe("xlsxTableXml", () => {
     const sourceEntries = unzipSync(source);
     const patchedEntries = unzipSync(patched);
     expect(patchedEntries["xl/workbook.xml"]).toEqual(sourceEntries["xl/workbook.xml"]);
+  });
+
+  it("preserves quoted sheet qualifiers in calculated and custom totals formulas", async () => {
+    const source = await fixture();
+    const table: StructuredTable = {
+      ...salesTable,
+      columns: salesTable.columns.map((column) =>
+        column.name === "Amount"
+          ? { ...column, calculatedFormula: "='A1'!B2+C2" }
+          : column
+      )
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: table.sheetId,
+      sheets: [{
+        id: table.sheetId,
+        name: "Sales",
+        rowCount: 6,
+        columnCount: 6,
+        cells: { D6: "='Sheet''s'!B2+C2" },
+        formats: {},
+        columnWidths: {},
+        rowHeights: {},
+        comments: {},
+        hyperlinks: {},
+        validations: {},
+        conditionalFormats: [],
+        filters: [],
+        charts: [],
+        merges: [],
+        protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
+      }],
+      namedRanges: [],
+      tables: [table]
+    };
+
+    const patched = patchNativeTableXml(source, [table], workbook);
+    const document = parseXml(tableXml(patched));
+    const columns = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "tableColumn"
+    );
+    const amount = columns.find((node) => node.getAttribute("name") === "Amount")!;
+    const units = columns.find((node) => node.getAttribute("name") === "Units")!;
+
+    expect(firstByLocalName(amount, "calculatedColumnFormula")?.textContent).toBe(
+      "'A1'!B2+SalesTable[@Region]"
+    );
+    expect(units.getAttribute("totalsRowFunction")).toBe("custom");
+    expect(firstByLocalName(units, "totalsRowFormula")?.textContent).toBe(
+      "'Sheet''s'!B2+SalesTable[@Region]"
+    );
+    expect(readNativeTableXml(patched)[0]).toMatchObject({
+      calculatedColumns: { Amount: "='A1'!B2+SalesTable[@Region]" },
+      totals: {
+        Units: {
+          function: "custom",
+          formula: "='Sheet''s'!B2+SalesTable[@Region]"
+        }
+      }
+    });
   });
 
   it("writes custom filter comparisons and produces stable bytes", async () => {

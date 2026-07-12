@@ -226,11 +226,25 @@ function isInsideSingleQuotedFormulaSegment(segment: string, position: number): 
       cursor += 1;
       continue;
     }
-    const end = skipQuotedFormulaSegment(segment, cursor, "'");
+    const end = findSingleQuotedFormulaQualifierEnd(segment, cursor);
+    if (end === undefined) {
+      cursor += 1;
+      continue;
+    }
     if (position < end) return true;
     cursor = end;
   }
   return false;
+}
+
+export function findSingleQuotedFormulaQualifierEnd(
+  formula: string,
+  startIndex: number
+): number | undefined {
+  if (formula[startIndex] !== "'") return undefined;
+  const end = skipQuotedFormulaSegment(formula, startIndex, "'");
+  const nextCharacter = formula[end] ?? "";
+  return nextCharacter === "!" || nextCharacter === ":" ? end : undefined;
 }
 
 export function translateFormulaRowsWithinColumns(
@@ -264,6 +278,9 @@ export function extractFormulaReferences(content: string): ExtractedFormulaRefer
 
   transformUnquotedFormulaSegments(content, (segment) => {
     segment.replace(LOCAL_REFERENCE_PATTERN, (match, startReference: string, endReference: string | undefined, position: number) => {
+      if (isInsideSingleQuotedFormulaSegment(segment, position)) {
+        return match;
+      }
       const previousCharacter = segment[position - 1] ?? "";
       const nextCharacter = segment[position + match.length] ?? "";
       if (previousCharacter === "!" || nextCharacter === "!" || nextCharacter === "(" || nextCharacter === "[") {
