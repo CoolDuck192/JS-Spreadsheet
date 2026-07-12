@@ -158,6 +158,109 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it.each(["cursor", "infinite"] as const)(
+    "restarts %s pagination at the head when filter or sorting changes",
+    async (mode) => {
+      const query = vi.fn(async (request: QueryRequest) =>
+        resultForRequest(String(query.mock.calls.length), employees, request));
+      const source = createTestRemoteSource<Employee>({
+        capabilities: capabilitiesForPagination(mode),
+        paginationMode: mode,
+        compareRevisions: numericRevisionComparator,
+        query
+      });
+      const session = createRemoteTableSession({ source, columns });
+      session.start();
+      await waitUntilReady(session);
+
+      await session.dispatch({
+        type: "set-pagination",
+        pagination: mode === "cursor"
+          ? { kind: "cursor", cursor: "unfiltered-tail", limit: 25 }
+          : { kind: "infinite", after: "unfiltered-tail", limit: 25 }
+      });
+      await waitForCalls(query, 2);
+      await session.dispatch({
+        type: "set-filter",
+        filter: {
+          kind: "comparison",
+          columnId: "department",
+          operator: "eq",
+          value: { type: "string", value: "Finance" }
+        }
+      });
+      await waitForCalls(query, 3);
+      expect(query.mock.calls[2][0].pagination).toEqual({ kind: mode, limit: 25 });
+
+      await session.dispatch({
+        type: "set-pagination",
+        pagination: mode === "cursor"
+          ? { kind: "cursor", cursor: "filtered-tail", limit: 25 }
+          : { kind: "infinite", after: "filtered-tail", limit: 25 }
+      });
+      await waitForCalls(query, 4);
+      await session.dispatch({
+        type: "set-sorting",
+        sorting: [{ columnId: "salary", direction: "desc" }]
+      });
+      await waitForCalls(query, 5);
+      expect(query.mock.calls[4][0].pagination).toEqual({ kind: mode, limit: 25 });
+
+      session.destroy();
+    }
+  );
+
+  it.each(["cursor", "infinite"] as const)(
+    "waits for controlled %s pagination to commit the head before querying a new projection",
+    async (mode) => {
+      const tailPagination = mode === "cursor"
+        ? { kind: "cursor" as const, cursor: "tail", limit: 25 }
+        : { kind: "infinite" as const, after: "tail", limit: 25 };
+      const query = vi.fn(async (request: QueryRequest) =>
+        resultForRequest(String(query.mock.calls.length), employees, request));
+      const onStateChange = vi.fn();
+      const source = createTestRemoteSource<Employee>({
+        capabilities: capabilitiesForPagination(mode),
+        paginationMode: mode,
+        compareRevisions: numericRevisionComparator,
+        query
+      });
+      const session = createRemoteTableSession({
+        source,
+        columns,
+        state: { pagination: tailPagination },
+        onStateChange
+      });
+      session.start();
+      await waitUntilReady(session);
+
+      await session.dispatch({
+        type: "set-sorting",
+        sorting: [{ columnId: "salary", direction: "desc" }]
+      });
+
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(query).toHaveBeenCalledTimes(1);
+      const updater = onStateChange.mock.calls[0][0] as (state: TableViewState) => TableViewState;
+      const committed = updater(session.getSnapshot().state);
+      session.updateOptions({
+        source,
+        columns,
+        state: { pagination: committed.pagination },
+        onStateChange
+      });
+      session.start();
+      await waitForCalls(query, 2);
+
+      expect(query.mock.calls[1][0]).toMatchObject({
+        sorting: [{ columnId: "salary", direction: "desc" }],
+        pagination: { kind: mode, limit: 25 }
+      });
+      expect(query.mock.calls[1][0].pagination).not.toHaveProperty(mode === "cursor" ? "cursor" : "after");
+      session.destroy();
+    }
+  );
+
   it("applies cache maxPages changes to a live session", async () => {
     const secondEmployee = { ...employees[0], id: "employee-2", name: "Grace" };
     const responses = [

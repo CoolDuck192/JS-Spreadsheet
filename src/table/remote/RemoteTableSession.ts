@@ -546,6 +546,7 @@ class RemoteTableSessionImpl<
     const changedKeys = stateChangedKeys(before, candidate);
     const controlled = changedKeys.filter((key) => this.controlledStateKeys.has(key));
     const uncontrolled = changedKeys.filter((key) => !this.controlledStateKeys.has(key));
+    const awaitsControlledProjection = controlled.some(isQueryStateKey);
     if (controlled.length > 0) {
       const updater: TableStateUpdater = (hostState) => {
         let next = hostState;
@@ -565,7 +566,7 @@ class RemoteTableSessionImpl<
       this.localRevision += 1;
       this.snapshot = null;
       this.publish();
-      if (!queryStateEqual(before, next)) {
+      if (!queryStateEqual(before, next) && !awaitsControlledProjection) {
         this.needsQuery = true;
         this.start();
       }
@@ -1328,19 +1329,23 @@ function stateForIntent<TRow>(
         ? [...new Set([...state.expandedRowIds, intent.rowId])]
         : state.expandedRowIds.filter((id) => id !== intent.rowId)
     };
-    case "set-sorting": return { ...state, sorting: [...intent.sorting] };
-    case "set-filter": return { ...state, filter: intent.filter };
+    case "set-sorting": return {
+      ...state,
+      sorting: [...intent.sorting],
+      pagination: paginationAtHead(state.pagination, paginationMode)
+    };
+    case "set-filter": return {
+      ...state,
+      filter: intent.filter,
+      pagination: paginationAtHead(state.pagination, paginationMode)
+    };
     case "set-grouping": {
-      const clearingPaginatedGrouping = intent.grouping.length === 0
-        && state.pagination.kind !== paginationMode;
       return {
         ...state,
         grouping: [...intent.grouping],
         ...(intent.grouping.length > 0
           ? { pagination: { kind: "none" } as const }
-          : clearingPaginatedGrouping
-            ? { pagination: defaultPagination(paginationMode) }
-            : {})
+          : { pagination: paginationAtHead(state.pagination, paginationMode) })
       };
     }
     case "set-aggregates": return { ...state, aggregates: [...intent.aggregates] };
@@ -1358,6 +1363,19 @@ function stateForIntent<TRow>(
       columnVisibility: { ...state.columnVisibility, [intent.columnId]: intent.visible }
     };
     case "set-column-pinning": return pinColumn(state, intent.columnId, intent.pin);
+  }
+}
+
+function paginationAtHead(
+  pagination: TableViewState["pagination"],
+  paginationMode: RemoteTableSource<unknown>["paginationMode"]
+): TableViewState["pagination"] {
+  if (pagination.kind !== paginationMode) return defaultPagination(paginationMode);
+  switch (pagination.kind) {
+    case "none": return { kind: "none" };
+    case "offset": return { kind: "offset", offset: 0, limit: pagination.limit };
+    case "cursor": return { kind: "cursor", limit: pagination.limit };
+    case "infinite": return { kind: "infinite", limit: pagination.limit };
   }
 }
 
@@ -1460,6 +1478,14 @@ function stateChangedKeys(before: TableViewState, after: TableViewState): Array<
 
 function queryStateEqual(left: TableViewState, right: TableViewState): boolean {
   return stateEqual(queryFromState(left), queryFromState(right));
+}
+
+function isQueryStateKey(key: keyof TableViewState): boolean {
+  return key === "sorting"
+    || key === "filter"
+    || key === "grouping"
+    || key === "aggregates"
+    || key === "pagination";
 }
 
 function stateEqual(left: unknown, right: unknown): boolean {
