@@ -690,6 +690,48 @@ describe("createLocalRecordTableSession", () => {
     expect(session.getSnapshot()).toBe(before);
   });
 
+  it.each([
+    [
+      "default sorting on an unknown column",
+      { defaultState: { sorting: [{ columnId: "missing", direction: "asc" as const }] } }
+    ],
+    [
+      "controlled sorting on an unknown column",
+      {
+        state: { sorting: [{ columnId: "missing", direction: "asc" as const }] },
+        onStateChange: vi.fn()
+      }
+    ],
+    [
+      "cursor pagination",
+      { defaultState: { pagination: { kind: "cursor" as const, limit: 25 } } }
+    ],
+    [
+      "grouping with pagination",
+      {
+        defaultState: {
+          grouping: [{ columnId: "active" }],
+          pagination: { kind: "offset" as const, offset: 0, limit: 25 }
+        }
+      }
+    ]
+  ] as const)("surfaces invalid initial %s as a recoverable error snapshot", async (_label, overrides) => {
+    const session = createLocalRecordTableSession(deterministicOptions(overrides));
+
+    expect(() => session.getSnapshot()).not.toThrow();
+    expect(session.getSnapshot()).toMatchObject({
+      status: { phase: "error" },
+      issues: [expect.objectContaining({ code: expect.stringMatching(/^TABLE_/) })]
+    });
+
+    await expect(session.dispatch({
+      type: "set-sorting",
+      sorting: [{ columnId: "name", direction: "asc" }]
+    })).resolves.toMatchObject({ status: "committed" });
+    expect(session.getSnapshot().status.phase).toBe("ready");
+    expect(session.getSnapshot().state.sorting).toEqual([{ columnId: "name", direction: "asc" }]);
+  });
+
   it("prunes query state that references columns removed by updateOptions", () => {
     const source = { kind: "local" as const, rows: [employee()], getRowId: (row: Employee) => row.id };
     const initialColumns = createColumns();

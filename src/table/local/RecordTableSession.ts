@@ -178,7 +178,7 @@ export class RecordTableSession<
     this.validateHistoryLimit(options.historyLimit);
     this.history = createLocalHistory(options.historyLimit ?? 100);
     this.validateRows(this.rows);
-    this.handleInvalidControlledState();
+    this.handleInvalidInitialState();
   }
 
   updateOptions(options: LocalRecordTableSessionOptions<TRow, TColumn>): void {
@@ -352,10 +352,11 @@ export class RecordTableSession<
       ...resolveTableOperationStates(capabilities, this.options.features ?? {})
     };
     if (this.invalidControlledState) {
+      const invalidIssue = this.sessionIssues[0] ?? GROUPING_PAGINATION_ISSUE;
       operationStates.pagination = {
         enabled: false,
         scopeLabel: "Complete dataset",
-        reason: GROUPING_PAGINATION_ISSUE.message
+        reason: invalidIssue.message
       };
     }
     const allIssues = dedupeIssues([...this.sessionIssues, ...model.issues]);
@@ -371,7 +372,7 @@ export class RecordTableSession<
       state: this.state,
       selection: this.state.selection,
       status: this.invalidControlledState
-        ? { phase: "error", message: GROUPING_PAGINATION_ISSUE.message }
+        ? { phase: "error", message: (this.sessionIssues[0] ?? GROUPING_PAGINATION_ISSUE).message }
         : { phase: "ready" },
       issues: allIssues,
       capabilities,
@@ -783,9 +784,23 @@ export class RecordTableSession<
       const issue = this.validateViewState(candidate);
       if (issue) return this.reject("validation", [issue], commandId, intent.type, startedAt, 0, 0);
     }
-    if (stateEqual(candidate, this.state)) return this.finishNoChange(commandId, intent, startedAt);
+    const recoversInvalidState = this.invalidControlledState && isQueryStateIntent(intent);
+    if (stateEqual(candidate, this.state)) {
+      if (!recoversInvalidState) return this.finishNoChange(commandId, intent, startedAt);
+      this.invalidControlledState = false;
+      this.sessionIssues = [];
+      this.revision += 1;
+      this.invalidate();
+      this.publish();
+      this.emitDiagnostic(commandId, intent.type, startedAt, true, "command", 0, 0);
+      return { status: "committed", revision: String(this.revision), changed: true };
+    }
     const previous = this.state;
     this.state = candidate;
+    if (recoversInvalidState) {
+      this.invalidControlledState = false;
+      this.sessionIssues = [];
+    }
     this.revision += 1;
     this.invalidate();
     const context = this.context(commandId, intent.type);
@@ -1050,12 +1065,22 @@ export class RecordTableSession<
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) throw new Error("historyLimit must be an integer from 1 through 1000");
   }
 
-  private handleInvalidControlledState(): void {
-    if (!hasGroupingPaginationConflict(this.state)) return;
+  private handleInvalidInitialState(): void {
+    const issue = hasGroupingPaginationConflict(this.state)
+      ? GROUPING_PAGINATION_ISSUE
+      : this.validateViewState(this.state);
+    if (!issue) return;
     this.invalidControlledState = true;
-    this.sessionIssues = [GROUPING_PAGINATION_ISSUE];
-    this.state = { ...this.state, pagination: { kind: "none" } };
-    this.requestControlledStateCorrection(this.state);
+    this.sessionIssues = [issue];
+    const sanitized = sanitizeLocalViewState(
+      this.state,
+      this.columns,
+      this.options.source.getSubRows !== undefined
+    );
+    this.state = hasGroupingPaginationConflict(sanitized)
+      ? { ...sanitized, pagination: { kind: "none" } }
+      : sanitized;
+    this.requestControlledStateReplacement(this.state);
   }
 
   private requestControlledStateCorrection(candidate: TableViewState): void {
