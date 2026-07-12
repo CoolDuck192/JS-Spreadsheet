@@ -285,6 +285,26 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveAttribute("tabindex", "0");
   });
 
+  it("numbers grouped data rows sequentially across group boundaries", async () => {
+    const ref = createRef<DataTableHandle>();
+    renderTable({ ref });
+
+    await dispatch(ref, { type: "set-grouping", grouping: [{ columnId: "department" }] });
+
+    const dataRows = screen.getAllByRole("row")
+      .filter((row) => row.getAttribute("data-row-kind") === "data");
+    expect(dataRows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Row 1",
+      "Row 2",
+      "Row 3"
+    ]);
+    expect(dataRows.map((row) => within(row).getByRole("rowheader").getAttribute("aria-label"))).toEqual([
+      "Row 1",
+      "Row 2",
+      "Row 3"
+    ]);
+  });
+
   it("copies and atomically pastes a tab/newline matrix", async () => {
     const user = userEvent.setup();
     renderTable();

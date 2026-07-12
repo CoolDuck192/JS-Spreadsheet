@@ -702,14 +702,16 @@ function createViewportRows<TRow>(
   let dataPosition = 0;
   let aggregatePosition = 0;
   return snapshot.rows.map((row, index) => {
-    const number = offset + dataPosition + 1;
+    const currentDataPosition = dataPosition;
+    if (row.kind === "data") dataPosition += 1;
+    const number = offset + currentDataPosition + 1;
     const ariaRowIndex = snapshot.state.grouping.length > 0
       ? index + 2
       : row.kind === "data"
-        ? offset + dataPosition++ + 2
-      : row.kind === "aggregate" && snapshot.totalRowCount.kind === "known"
-        ? snapshot.totalRowCount.value + aggregatePosition++ + 2
-        : index + 2;
+        ? offset + currentDataPosition + 2
+        : row.kind === "aggregate" && snapshot.totalRowCount.kind === "known"
+          ? snapshot.totalRowCount.value + aggregatePosition++ + 2
+          : index + 2;
     const label = row.kind === "data"
       ? String(number)
       : row.kind === "group"
