@@ -8,6 +8,15 @@ import { downloadTableExport } from "./exportArtifact";
 import { columnLabel } from "./DataTableCell";
 import type { ColumnDef } from "./tableTypes";
 
+type QuickToolField =
+  | "numberFormat"
+  | "bold"
+  | "fillColor"
+  | "validationList"
+  | "comment"
+  | "formula"
+  | "readOnly";
+
 export function DataTableToolbar<TRow>({
   session,
   snapshot,
@@ -29,6 +38,7 @@ export function DataTableToolbar<TRow>({
   const [comment, setComment] = useState("");
   const [formula, setFormula] = useState("");
   const [readOnly, setReadOnly] = useState(false);
+  const [touched, setTouched] = useState<Partial<Record<QuickToolField, true>>>({});
   const formulaState = snapshot.operationStates.formula;
   const metadataState = snapshot.operationStates.metadata;
   const validationState = snapshot.operationStates.validation;
@@ -66,23 +76,40 @@ export function DataTableToolbar<TRow>({
   async function applyQuickTools() {
     if (selectedCells.length === 0 || !metadataState.enabled || permissionDenied) return;
     const values = validationList.split(",").map((value) => value.trim()).filter(Boolean);
+    const hasFormatUpdate = touched.numberFormat
+      || touched.bold
+      || Boolean(touched.fillColor && fillColor);
     await run({
       type: "update-cell-metadata",
-      updates: selectedCells.map((cell) => ({
-        ...cell,
-        patch: {
-          format: {
-            numberFormat: numberFormat as "general" | "number" | "currency" | "percent" | "date" | "datetime",
-            bold,
-            ...(fillColor ? { backgroundColor: fillColor } : {})
-          },
-          ...(validationState.enabled && values.length > 0 ? { validation: { kind: "list" as const, values } } : {}),
-          ...(comment ? { comment } : {}),
-          ...(formulaState.enabled && formula ? { formula } : {}),
-          readOnly
-        }
-      }))
+      updates: selectedCells.map((cell) => {
+        const currentFormat = snapshot.getCell(cell.rowId, cell.columnId).metadata.format;
+        return {
+          ...cell,
+          patch: {
+            ...(hasFormatUpdate ? {
+              format: {
+                ...currentFormat,
+                ...(touched.numberFormat ? {
+                  numberFormat: numberFormat as "general" | "number" | "currency" | "percent" | "date" | "datetime"
+                } : {}),
+                ...(touched.bold ? { bold } : {}),
+                ...(touched.fillColor && fillColor ? { backgroundColor: fillColor } : {})
+              }
+            } : {}),
+            ...(touched.validationList && validationState.enabled && values.length > 0
+              ? { validation: { kind: "list" as const, values } }
+              : {}),
+            ...(touched.comment && comment ? { comment } : {}),
+            ...(touched.formula && formulaState.enabled && formula ? { formula } : {}),
+            ...(touched.readOnly ? { readOnly } : {})
+          }
+        };
+      })
     });
+  }
+
+  function markTouched(field: QuickToolField) {
+    setTouched((current) => current[field] ? current : { ...current, [field]: true });
   }
 
   async function download(format: "csv" | "xlsx") {
@@ -206,16 +233,19 @@ export function DataTableToolbar<TRow>({
         <div id={quickToolsId} className="js-spreadsheet-data-table__quick-tools" aria-label="Quick tools drawer">
           <label>
             Number format
-            <select aria-label="Number format" value={numberFormat} onChange={(event) => setNumberFormat(event.currentTarget.value)}>
+            <select aria-label="Number format" value={numberFormat} onChange={(event) => {
+              markTouched("numberFormat");
+              setNumberFormat(event.currentTarget.value);
+            }}>
               {(["general", "number", "currency", "percent", "date", "datetime"] as const).map((value) => (
                 <option key={value} value={value}>{value}</option>
               ))}
             </select>
           </label>
-          <label><input type="checkbox" aria-label="Bold" checked={bold} onChange={(event) => setBold(event.currentTarget.checked)} /> Bold</label>
-          <label>Fill color<input aria-label="Fill color" value={fillColor} onChange={(event) => setFillColor(event.currentTarget.value)} /></label>
-          <label>Validation list<input aria-label="Validation list" disabled={!metadataState.enabled || !validationState.enabled || permissionDenied} aria-describedby={!validationState.enabled ? validationReasonId : undefined} value={validationList} onChange={(event) => setValidationList(event.currentTarget.value)} /></label>
-          <label>Comment<input aria-label="Comment" value={comment} onChange={(event) => setComment(event.currentTarget.value)} /></label>
+          <label><input type="checkbox" aria-label="Bold" checked={bold} onChange={(event) => { markTouched("bold"); setBold(event.currentTarget.checked); }} /> Bold</label>
+          <label>Fill color<input aria-label="Fill color" value={fillColor} onChange={(event) => { markTouched("fillColor"); setFillColor(event.currentTarget.value); }} /></label>
+          <label>Validation list<input aria-label="Validation list" disabled={!metadataState.enabled || !validationState.enabled || permissionDenied} aria-describedby={!validationState.enabled ? validationReasonId : undefined} value={validationList} onChange={(event) => { markTouched("validationList"); setValidationList(event.currentTarget.value); }} /></label>
+          <label>Comment<input aria-label="Comment" value={comment} onChange={(event) => { markTouched("comment"); setComment(event.currentTarget.value); }} /></label>
           <label>
             Formula
             <input
@@ -223,14 +253,14 @@ export function DataTableToolbar<TRow>({
               value={formula}
               disabled={!metadataState.enabled || !formulaState.enabled}
               aria-describedby={!formulaState.enabled ? formulaReasonId : !metadataState.enabled ? metadataReasonId : undefined}
-              onChange={(event) => setFormula(event.currentTarget.value)}
+              onChange={(event) => { markTouched("formula"); setFormula(event.currentTarget.value); }}
             />
           </label>
           {!formulaState.enabled ? (
             <span id={formulaReasonId}>{formulaState.reason}</span>
           ) : null}
           {!validationState.enabled ? <span id={validationReasonId}>{validationState.reason}</span> : null}
-          <label><input type="checkbox" aria-label="Read only" checked={readOnly} onChange={(event) => setReadOnly(event.currentTarget.checked)} /> Read only</label>
+          <label><input type="checkbox" aria-label="Read only" checked={readOnly} onChange={(event) => { markTouched("readOnly"); setReadOnly(event.currentTarget.checked); }} /> Read only</label>
           {!metadataState.enabled ? <span id={metadataReasonId}>{metadataState.reason}</span> : null}
           {permissionDenied ? <span id={permissionReasonId}>Selection contains cells that do not permit metadata changes</span> : null}
           <button

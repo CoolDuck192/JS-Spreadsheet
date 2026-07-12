@@ -8,6 +8,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLocalRecordTableSession } from "../table/local/RecordTableSession";
+import { createTableMetadataKey } from "../table/local/tableMetadata";
 import type { ChangeContext, RowUpdater, TableDiagnosticEvent, TableViewState } from "../table/core/types";
 import { DataTable } from "./DataTable";
 import type {
@@ -324,6 +325,36 @@ describe("DataTable", () => {
       validation: { kind: "list", values: ["10", "42", "100"] },
       comment: "Reviewed",
       formula: "=salary",
+      readOnly: true
+    });
+    session.destroy();
+  });
+
+  it("does not overwrite untouched metadata when applying one quick tool", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      defaultDocument: {
+        version: 1,
+        cells: {
+          [createTableMetadataKey("e1", "salary")]: {
+            format: { numberFormat: "currency", bold: true, textColor: "red" },
+            readOnly: true
+          }
+        },
+        calculatedColumns: [],
+        namedStyles: []
+      }
+    });
+    render(<DataTable aria-label="Protected metadata employees" session={session} />);
+    await user.click(screen.getByRole("gridcell", { name: "e1 Salary" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.type(screen.getByLabelText("Comment"), "Reviewed");
+
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(session.getSnapshot().getCell("e1", "salary").metadata).toEqual({
+      format: { numberFormat: "currency", bold: true, textColor: "red" },
+      comment: "Reviewed",
       readOnly: true
     });
     session.destroy();
