@@ -11,6 +11,7 @@ const TABLE_RELATIONSHIP_TYPE =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 
 let denseWorksheetPackage: Uint8Array | undefined;
+let cachedFormulaWorksheetPackage: Uint8Array | undefined;
 
 function makeDenseWorksheetXml(includeNumericType: boolean): Uint8Array {
   const rows = new Array<string>(DENSE_ROW_COUNT);
@@ -90,4 +91,30 @@ export function makeLargeDenseWorksheetPackage(
   worksheetContentType: string | null = WORKSHEET_CONTENT_TYPE
 ): Uint8Array {
   return packageWorksheet(makeDenseWorksheetXml(true), worksheetContentType);
+}
+
+export function makeCachedFormulaWorksheetPackage(): Uint8Array {
+  if (cachedFormulaWorksheetPackage) return cachedFormulaWorksheetPackage;
+
+  const cell = "<c><f>1</f><v>1</v></c>";
+  const row = `<row>${cell.repeat(16)}</row>`;
+  const worksheetXml = strToU8(
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<dimension ref="A1:P100000"/><sheetData>' +
+      row.repeat(DENSE_ROW_COUNT) +
+      "</sheetData></worksheet>"
+  );
+  const stored = { level: 0 as const, mtime: FIXED_ZIP_DATE };
+  cachedFormulaWorksheetPackage = zipSync({
+    "[Content_Types].xml": [
+      strToU8(
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+          `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="${WORKSHEET_CONTENT_TYPE}"/>` +
+          "</Types>"
+      ),
+      stored
+    ],
+    "xl/worksheets/sheet1.xml": [worksheetXml, stored]
+  });
+  return cachedFormulaWorksheetPackage;
 }

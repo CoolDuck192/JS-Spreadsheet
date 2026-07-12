@@ -3,6 +3,7 @@ import { zipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  makeCachedFormulaWorksheetPackage,
   makeDenseWorksheetPackage,
   makeLargeDenseWorksheetPackage
 } from "../test/xlsxSecurityFixtures";
@@ -206,6 +207,7 @@ function forgeDeclaredUncompressedSize(
 
 type SecurityIssueCode =
   | "XLSX_ARCHIVE_LIMIT"
+  | "XLSX_SHEET_TOO_LARGE"
   | "XLSX_XML_UNSAFE"
   | "XLSX_RELATIONSHIP_INVALID";
 
@@ -353,6 +355,14 @@ describe("validateXlsxArchive bounded XML validation", () => {
     expect(validateXlsxArchive(makeDenseWorksheetPackage())).toEqual({ ok: true });
   });
 
+  it(
+    "accepts cached formula values across a dense A1:P100000 worksheet",
+    { timeout: 30_000 },
+    () => {
+      expect(validateXlsxArchive(makeCachedFormulaWorksheetPackage())).toEqual({ ok: true });
+    }
+  );
+
   it("allows a dense worksheet entry above 32 MiB by default but honors an explicit low byte limit", () => {
     const data = makeLargeDenseWorksheetPackage();
 
@@ -460,18 +470,20 @@ describe("validateXlsxArchive bounded XML validation", () => {
     );
   });
 
-  it("clamps a hostile full-sheet dimension to the immutable element cap", () => {
-    expectRejectedBeforeLoad(
-      makePackage({
-        contentTypesXml: worksheetContentTypes(),
-        worksheetXml:
-          '<worksheet><dimension ref="A1:XFD1048576"/><sheetData>' +
-          "<c/>".repeat(4_000_000) +
-          "</sheetData></worksheet>"
-      }),
-      "XLSX_XML_UNSAFE",
-      { maxXmlElements: 4_000_001 }
-    );
+  it("rejects a worksheet dimension beyond the supported dense envelope clearly", () => {
+    const validation = validateXlsxArchive(makePackage({
+      contentTypesXml: worksheetContentTypes(),
+      worksheetXml:
+        '<worksheet><dimension ref="A1:XFD1048576"/><sheetData/></worksheet>'
+    }));
+
+    expect(validation).toMatchObject({
+      ok: false,
+      issue: {
+        code: "XLSX_SHEET_TOO_LARGE",
+        message: expect.stringMatching(/worksheet.*too large/i)
+      }
+    });
   });
 
   it("scales sharedStrings from safe root counts above the fixed element limit", () => {

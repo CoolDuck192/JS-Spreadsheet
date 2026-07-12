@@ -33,6 +33,7 @@ export const DEFAULT_XLSX_SECURITY_LIMITS: Readonly<XlsxSecurityLimits> = {
 
 type SecurityIssueCode =
   | "XLSX_ARCHIVE_LIMIT"
+  | "XLSX_SHEET_TOO_LARGE"
   | "XLSX_XML_UNSAFE"
   | "XLSX_RELATIONSHIP_INVALID";
 
@@ -88,8 +89,14 @@ const LARGE_XML_ENTRY_BYTES = 64 * 1024 * 1024;
 const MAX_WORKSHEET_ROWS = 1_048_576;
 const MAX_WORKSHEET_COLUMNS = 16_384;
 const XML_BUDGET_BASE = 1_024;
-const MAX_PART_XML_ELEMENTS = 4_000_000;
-const MAX_PART_XML_ATTRIBUTES = 8_000_000;
+// Dimension-derived scaling is deliberately limited to two million populated
+// cells per worksheet. This covers the supported dense import envelope without
+// allowing a sparse full-grid dimension to mint an effectively unbounded grant.
+const MAX_DENSE_WORKSHEET_CELLS = 2_000_000;
+const MAX_PART_XML_ELEMENTS =
+  XML_BUDGET_BASE + MAX_WORKSHEET_ROWS + MAX_DENSE_WORKSHEET_CELLS * 3;
+const MAX_PART_XML_ATTRIBUTES =
+  XML_BUDGET_BASE + MAX_WORKSHEET_ROWS * 4 + MAX_DENSE_WORKSHEET_CELLS * 4;
 const SPREADSHEETML_NAMESPACES = new Set([
   "",
   "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -715,6 +722,12 @@ function worksheetDimensionBudget(value: string): XmlCounts | null {
   const columns = endColumn - startColumn + 1;
   const cells = checkedMultiply(rows, columns);
   if (cells === null) return null;
+  if (cells > MAX_DENSE_WORKSHEET_CELLS) {
+    reject(
+      "XLSX_SHEET_TOO_LARGE",
+      `Worksheet dimension ${value} is too large to import safely.`
+    );
+  }
 
   const cellElements = checkedMultiply(cells, 3);
   const rowAttributes = checkedMultiply(rows, 4);
