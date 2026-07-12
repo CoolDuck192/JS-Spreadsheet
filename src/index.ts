@@ -62,6 +62,7 @@ export type {
   ExportArtifact,
   ExportOptions,
   TableIntent,
+  TablePageGap,
   TableSelection,
   TableSession,
   TableViewSnapshot,

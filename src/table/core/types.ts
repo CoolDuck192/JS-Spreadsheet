@@ -235,6 +235,13 @@ export type TableCellSnapshot = {
 
 export type TableRowSnapshot<TRow> = QueryRow<TRow>;
 
+export type TablePageGap = {
+  kind: "evicted-pages";
+  at: number;
+  omittedPages: number;
+  omittedItems: number;
+};
+
 export interface TableViewSnapshot<TRow, TColumn = ColumnDef<TRow>> {
   revision: string;
   rows: readonly TableRowSnapshot<TRow>[];
@@ -253,6 +260,7 @@ export interface TableViewSnapshot<TRow, TColumn = ColumnDef<TRow>> {
   canUndo: boolean;
   canRedo: boolean;
   pageInfo: QueryResult<TRow>["pageInfo"];
+  pageGaps?: readonly TablePageGap[];
   getCell(rowId: string, columnId: string): TableCellSnapshot;
   getRowIndex(rowId: string): number;
   getColumnIndex(columnId: string): number;

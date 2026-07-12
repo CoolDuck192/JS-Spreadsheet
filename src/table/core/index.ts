@@ -53,6 +53,7 @@ export type {
   TableIntent,
   TableMetadataDocument,
   TableMetadataUpdater,
+  TablePageGap,
   TablePendingOperation,
   TableRowSnapshot,
   TableRowView,

@@ -299,6 +299,105 @@ describe("RemoteQueryController", () => {
     expect(controller.getSnapshot().revision).toBe("10");
   });
 
+  it("recovers the logical accumulated depth after bounded pages were evicted", async () => {
+    const pageRows = [rows(1, 1), rows(2, 1), rows(3, 1)];
+    const responses = [
+      accumulatedResult("infinite", "1", pageRows[0], "page-2"),
+      accumulatedResult("infinite", "2", pageRows[1], "page-3"),
+      accumulatedResult("infinite", "3", pageRows[2]),
+      accumulatedResult("infinite", "4", pageRows[0], "fresh-page-2"),
+      accumulatedResult("infinite", "5", pageRows[1], "fresh-page-3"),
+      accumulatedResult("infinite", "6", pageRows[2])
+    ];
+    const query = vi.fn(async (_request: QueryRequest) => responses.shift()!);
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      capabilities: accumulatedCapabilities("infinite"),
+      paginationMode: "infinite",
+      compareRevisions: numericComparator,
+      query
+    }), { maxCachedPages: 2 });
+    await controller.load(accumulatedRequest("infinite"), "page-1");
+    await controller.load(accumulatedRequest("infinite", "page-2"), "page-2");
+    await controller.load(accumulatedRequest("infinite", "page-3"), "page-3");
+    expect(controller.getDiagnostics()).toMatchObject({
+      cachedPages: 2,
+      cachedGapPages: 1,
+      cachedGapItems: 1
+    });
+
+    controller.invalidate();
+    await controller.refresh("refresh");
+
+    expect(query.mock.calls.slice(3).map(([request]) => request.pagination)).toEqual([
+      accumulatedRequest("infinite").pagination,
+      accumulatedRequest("infinite", "fresh-page-2").pagination,
+      accumulatedRequest("infinite", "fresh-page-3").pagination
+    ]);
+    expect(controller.getSnapshot().pageGaps).toEqual([{
+      kind: "evicted-pages", at: 0, omittedPages: 1, omittedItems: 1
+    }]);
+    expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(["2", "3"]);
+  });
+
+  it("clears a partial replay before retrying with fresh cursor keys", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce(accumulatedResult("infinite", "1", rows(1, 1), "page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "2", rows(2, 1), "page-3"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "3", rows(3, 1)))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "4", rows(1, 1), "first-page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "5", rows(2, 1), "first-page-3"))
+      .mockRejectedValueOnce(new Error("replica unavailable"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "7", rows(1, 1), "retry-page-2"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "8", rows(2, 1), "retry-page-3"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "9", rows(3, 1)));
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      capabilities: accumulatedCapabilities("infinite"),
+      paginationMode: "infinite",
+      compareRevisions: numericComparator,
+      query
+    }));
+    await controller.load(accumulatedRequest("infinite"), "page-1");
+    await controller.load(accumulatedRequest("infinite", "page-2"), "page-2");
+    await controller.load(accumulatedRequest("infinite", "page-3"), "page-3");
+    controller.invalidate();
+
+    expect(await controller.refresh("first-refresh")).toBe(false);
+    expect(await controller.refresh("retry-refresh")).toBe(true);
+
+    expect(query.mock.calls.slice(6).map(([request]) => request.pagination)).toEqual([
+      accumulatedRequest("infinite").pagination,
+      accumulatedRequest("infinite", "retry-page-2").pagination,
+      accumulatedRequest("infinite", "retry-page-3").pagination
+    ]);
+    expect(controller.getSnapshot()).toMatchObject({ status: "ready", revision: "9" });
+    expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("recovers a window anchored at an initial supplied cursor", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce(accumulatedResult("infinite", "1", rows(10, 1), "next"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "2", rows(11, 1)))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "3", rows(10, 1), "fresh-next"))
+      .mockResolvedValueOnce(accumulatedResult("infinite", "4", rows(11, 1)));
+    const controller = new RemoteQueryController(createTestRemoteSource<Row>({
+      capabilities: accumulatedCapabilities("infinite"),
+      paginationMode: "infinite",
+      compareRevisions: numericComparator,
+      query
+    }));
+    await controller.load(accumulatedRequest("infinite", "anchor"), "anchored-page");
+    await controller.load(accumulatedRequest("infinite", "next"), "next-page");
+
+    controller.invalidate();
+    await controller.refresh("refresh");
+
+    expect(query.mock.calls.slice(2).map(([request]) => request.pagination)).toEqual([
+      accumulatedRequest("infinite", "anchor").pagination,
+      accumulatedRequest("infinite", "fresh-next").pagination
+    ]);
+    expect(controller.getSnapshot().items.map((item) => item.id)).toEqual(["10", "11"]);
+  });
+
   it("rejects refresh before load and stops all work after destroy", async () => {
     const query = vi.fn(async () => result("r1", []));
     const controller = new RemoteQueryController(createTestRemoteSource<Row>({ query }));

@@ -76,6 +76,132 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("bounds accumulated pages, exposes the gap, and emits one sanitized warning", async () => {
+    const secondEmployee = { ...employees[0], id: "employee-2", name: "Grace" };
+    const thirdEmployee = { ...employees[0], id: "employee-3", name: "Linus" };
+    const responses = [
+      infiniteResult("1", employees, "next"),
+      infiniteResult("2", [secondEmployee], "last"),
+      infiniteResult("3", [thirdEmployee])
+    ];
+    const query = vi.fn(async () => responses.shift()!);
+    const onDiagnostic = vi.fn();
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: {
+        executor: "server" as const,
+        scope: "completeDataset" as const,
+        modes: ["infinite" as const]
+      },
+      subscription: false
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "infinite",
+      compareRevisions: numericRevisionComparator,
+      query
+    });
+    const session = createRemoteTableSession({
+      source,
+      columns,
+      cache: { maxPages: 1 },
+      commandIdFactory: (() => {
+        let command = 0;
+        return () => `command-${++command}`;
+      })(),
+      onDiagnostic
+    });
+    session.start();
+    await waitUntilReady(session);
+
+    await session.dispatch({
+      type: "set-pagination",
+      pagination: { kind: "infinite", after: "next", limit: 50 }
+    });
+    await vi.waitFor(() => expect(session.getSnapshot().revision).toContain("2:"));
+    await session.dispatch({
+      type: "set-pagination",
+      pagination: { kind: "infinite", after: "last", limit: 50 }
+    });
+    await vi.waitFor(() => expect(session.getSnapshot().revision).toContain("3:"));
+
+    expect(session.getSnapshot().rows.map((row) => row.id)).toEqual(["employee-3"]);
+    expect(session.getSnapshot().pageGaps).toEqual([{
+      kind: "evicted-pages", at: 0, omittedPages: 2, omittedItems: 2
+    }]);
+    expect(session.getDiagnostics()).toMatchObject({
+      cachedPages: 1,
+      cachedGapPages: 2,
+      cachedGapItems: 2,
+      hasPageGaps: true
+    });
+    const warnings = onDiagnostic.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.metadata.code === "REMOTE_CACHE_WINDOW_GAP");
+    expect(warnings).toEqual([expect.objectContaining({
+      category: "remote",
+      commandId: "command-3",
+      metadata: {
+        code: "REMOTE_CACHE_WINDOW_GAP",
+        outcome: "warning",
+        mode: "infinite",
+        maxPages: 1,
+        cachedPages: 1,
+        omittedPages: 1,
+        omittedItems: 1
+      }
+    })]);
+    expect(JSON.stringify(warnings)).not.toContain("employee-");
+    expect(JSON.stringify(warnings)).not.toContain("next");
+    expect(JSON.stringify(warnings)).not.toContain("last");
+
+    session.destroy();
+  });
+
+  it("applies cache maxPages changes to a live session", async () => {
+    const secondEmployee = { ...employees[0], id: "employee-2", name: "Grace" };
+    const responses = [
+      infiniteResult("1", employees, "next"),
+      infiniteResult("2", employees, "next"),
+      infiniteResult("3", [secondEmployee])
+    ];
+    const query = vi.fn(async () => responses.shift()!);
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: {
+        executor: "server" as const,
+        scope: "completeDataset" as const,
+        modes: ["infinite" as const]
+      },
+      subscription: false
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "infinite",
+      compareRevisions: numericRevisionComparator,
+      query
+    });
+    const session = createRemoteTableSession({ source, columns, cache: { maxPages: 2 } });
+    session.start();
+    await waitUntilReady(session);
+
+    session.updateOptions({ source, columns, cache: { maxPages: 1 } });
+    session.start();
+    await waitForCalls(query, 2);
+    await vi.waitFor(() => expect(session.getSnapshot().revision).toContain("2:"));
+    await session.dispatch({
+      type: "set-pagination",
+      pagination: { kind: "infinite", after: "next", limit: 50 }
+    });
+    await vi.waitFor(() => expect(session.getSnapshot().revision).toContain("3:"));
+
+    expect(session.getSnapshot().rows.map((row) => row.id)).toEqual(["employee-2"]);
+    expect(session.getSnapshot().pageGaps).toEqual([{
+      kind: "evicted-pages", at: 0, omittedPages: 1, omittedItems: 1
+    }]);
+    session.destroy();
+  });
+
   it("gates loaded-row capabilities when complete-dataset scope is required", () => {
     const capabilities = { ...loadedRowCapabilities(), formula: "loadedRows" as const };
     const source = createTestRemoteSource<Employee>({ capabilities, undoMode: "none" });
@@ -1444,6 +1570,24 @@ function unpaginatedResult(
     revision,
     completeness: "completeDataset",
     pageInfo: { kind: "none", total: { kind: "known", value: rows.length } }
+  };
+}
+
+function infiniteResult(
+  revision: string,
+  rows: readonly Employee[],
+  nextCursor?: string
+): QueryResult<Employee> {
+  return {
+    items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "loadedRows",
+    pageInfo: {
+      kind: "infinite",
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      loadedCount: rows.length,
+      total: { kind: "unknown" }
+    }
   };
 }
 

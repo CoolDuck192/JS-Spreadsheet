@@ -67,6 +67,9 @@ export type RemoteTableDiagnostics = {
   queryGeneration: number;
   cachedPages: number;
   cachedItems: number;
+  cachedGapPages: number;
+  cachedGapItems: number;
+  hasPageGaps: boolean;
   pendingMutations: number;
   conflicts: number;
   journalEntries: number;
@@ -163,6 +166,11 @@ class RemoteTableSessionImpl<
       this.needsQuery = true;
       projectionChanged = true;
     }
+    if (options.cache?.maxPages !== this.options.cache?.maxPages) {
+      this.sourceChanged = true;
+      this.needsQuery = true;
+      projectionChanged = true;
+    }
 
     const candidate = mergeControlledState<TRow, TColumn>(this.state, options.state, this.columns);
     const invalid = hasGroupingPaginationConflict(candidate);
@@ -204,7 +212,20 @@ class RemoteTableSessionImpl<
       this.teardownController();
       const source = this.options.source;
       const controller = new RemoteQueryController(source, {
-        maxCachedPages: this.options.cache?.maxPages
+        maxCachedPages: this.options.cache?.maxPages,
+        onCacheGap: (warning) => this.safeDiagnostic({
+          category: "remote",
+          commandId: warning.operationId,
+          metadata: {
+            code: "REMOTE_CACHE_WINDOW_GAP",
+            outcome: "warning",
+            mode: warning.mode,
+            maxPages: warning.maxPages,
+            cachedPages: warning.cachedPages,
+            omittedPages: warning.omittedPages,
+            omittedItems: warning.omittedItems
+          }
+        })
       });
       this.controller = controller;
       this.controllerSource = source;
@@ -322,6 +343,7 @@ class RemoteTableSessionImpl<
         && this.operationJournal.canUndo,
       canRedo: false,
       pageInfo: query.pageInfo,
+      pageGaps: query.pageGaps,
       getCell: (rowId, columnId) => this.readCell(rows, rowId, columnId),
       getRowIndex: (rowId) => rows.findIndex((row) => row.id === rowId),
       getColumnIndex: (columnId) => this.state.columnOrder.indexOf(columnId)
@@ -429,6 +451,9 @@ class RemoteTableSessionImpl<
       queryGeneration: query?.generation ?? 0,
       cachedPages: query?.cachedPages ?? 0,
       cachedItems: query?.cachedItems ?? 0,
+      cachedGapPages: query?.cachedGapPages ?? 0,
+      cachedGapItems: query?.cachedGapItems ?? 0,
+      hasPageGaps: query?.hasPageGaps ?? false,
       pendingMutations: this.mutationController?.getDiagnostics().pendingOperations ?? 0,
       conflicts: this.mutationController?.getDiagnostics().conflicts ?? 0,
       journalEntries: this.operationJournal.size,
@@ -1541,6 +1566,7 @@ function errorCode(error: unknown): string {
 function idleQuerySnapshot<TRow>(): RemoteQuerySnapshot<TRow> {
   return {
     status: "idle", items: [], revision: null, completeness: "loadedRows",
-    pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+    pageInfo: { kind: "none", total: { kind: "known", value: 0 } },
+    pageGaps: []
   };
 }

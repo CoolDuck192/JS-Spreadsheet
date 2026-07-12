@@ -693,7 +693,10 @@ function createViewportRows<TRow>(
   rowHeight: number | "auto",
   measured: Readonly<Record<string, number>>
 ): GridViewportRow[] {
-  const offset = snapshot.pageInfo.kind === "offset" ? snapshot.pageInfo.offset : 0;
+  const gapOffset = snapshot.pageGaps
+    ?.filter((gap) => gap.at === 0)
+    .reduce((count, gap) => count + gap.omittedItems, 0) ?? 0;
+  const offset = snapshot.pageInfo.kind === "offset" ? snapshot.pageInfo.offset : gapOffset;
   let dataPosition = 0;
   let aggregatePosition = 0;
   return snapshot.rows.map((row, index) => {
