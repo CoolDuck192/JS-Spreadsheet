@@ -7,6 +7,7 @@ import {
 } from "../core/capabilities";
 import { createCommandIdFactory, type CommandIdFactory } from "../core/commandId";
 import { normalizeColumns } from "../core/columnHelper";
+import { coalesceTableCellMetadataUpdates } from "../core/metadata";
 import type { QueryRequest, QueryRow, TotalCount } from "../core/query";
 import { safeInvokeTableExtension } from "../core/safeInvoke";
 import type {
@@ -695,11 +696,7 @@ class RemoteTableSessionImpl<
     }
     const prepared: PreparedRemoteMutation[] = [];
     const journalChanges: RemoteOperationJournalChange[] = [];
-    const seen = new Set<string>();
-    for (const update of intent.updates) {
-      const key = `${update.rowId.length}:${update.rowId}${update.columnId}`;
-      if (seen.has(key)) return validationResult("TABLE_CELL_DUPLICATE", "A metadata batch may update each cell once");
-      seen.add(key);
+    for (const update of coalesceTableCellMetadataUpdates(intent.updates)) {
       const row = this.controller.getCanonicalRow(update.rowId);
       if (!row) return validationResult("TABLE_ROW_NOT_FOUND", "Row not found", update.rowId, update.columnId);
       if (!this.columnsById.has(update.columnId)) {

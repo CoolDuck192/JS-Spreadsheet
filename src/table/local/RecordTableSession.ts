@@ -5,6 +5,7 @@ import { parseCellInput } from "../../core/values/parseCellInput";
 import { createLocalTableCapabilities, resolveTableOperationStates, type TableFeatureConfiguration } from "../core/capabilities";
 import { createCommandIdFactory, type CommandIdFactory } from "../core/commandId";
 import { normalizeColumns } from "../core/columnHelper";
+import { coalesceTableCellMetadataUpdates } from "../core/metadata";
 import type { PaginationRequest, QueryRequest, QueryRow, TableAggregateRequest } from "../core/query";
 import { safeInvokeTableExtension } from "../core/safeInvoke";
 import type {
@@ -641,7 +642,7 @@ export class RecordTableSession<
     startedAt: number
   ): Promise<CommandResult> {
     let candidate = this.document;
-    for (const update of updates) {
+    for (const update of coalesceTableCellMetadataUpdates(updates)) {
       if (findRowIndex(this.rows, update.rowId, this.options.source.getRowId) < 0 || !this.columnsById.has(update.columnId)) {
         return this.reject("validation", [{ code: "TABLE_CELL_NOT_FOUND", message: "Cell not found", rowId: update.rowId, columnId: update.columnId }], commandId, "update-cell-metadata", startedAt, updates.length, updates.length);
       }

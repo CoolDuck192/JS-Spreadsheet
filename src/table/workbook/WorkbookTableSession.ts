@@ -20,6 +20,7 @@ import {
   type TableCapabilities
 } from "../core/capabilities";
 import type { QueryRow } from "../core/query";
+import { coalesceTableCellMetadataUpdates } from "../core/metadata";
 import type {
   ColumnDef,
   ExportArtifact,
@@ -469,15 +470,9 @@ export function createWorkbookTableSession(
     const metadataCommands: WorkbookCommand[] = [];
     const lockCommands: WorkbookCommand[] = [];
     const formulaEdits: Array<{ rowId: string; columnId: string; rawText: string }> = [];
-    const targets = new Set<string>();
-    for (const update of updates) {
+    for (const update of coalesceTableCellMetadataUpdates(updates)) {
       const coord = resolveCell(table, update);
       if (!coord) return rejected("validation", "TABLE_CELL_NOT_FOUND", "Metadata target does not exist");
-      const target = `${update.rowId.length}:${update.rowId}${update.columnId}`;
-      if (targets.has(target)) {
-        return rejected("validation", "TABLE_CELL_DUPLICATE", "Metadata batch targets must be unique");
-      }
-      targets.add(target);
       const range = { start: coord, end: coord };
       if (update.patch.readOnly === false) {
         unlockCommands.push({

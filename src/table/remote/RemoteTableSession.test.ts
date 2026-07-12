@@ -661,6 +661,80 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("coalesces repeated metadata targets with deterministic last-write-wins semantics", async () => {
+    const acknowledgement = createDeferredMutation<Employee>();
+    const mutate = vi.fn(async (_batch: readonly RemoteMutation[]) => acknowledgement.promise);
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      pagination: false,
+      subscription: false,
+      undo: false
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({
+      capabilities,
+      paginationMode: "none",
+      undoMode: "none",
+      query: async () => unpaginatedResult("1", employees),
+      readCell(row, columnId) {
+        const value = row[columnId as keyof Employee];
+        return {
+          storedValue: value,
+          evaluatedValue: value,
+          metadata: { readOnly: false },
+          rowVersion: "row-1"
+        };
+      },
+      mutate,
+      compareRevisions: numericRevisionComparator
+    });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(await session.dispatch({
+      type: "update-cell-metadata",
+      updates: [
+        {
+          rowId: "employee-1", columnId: "name",
+          patch: { comment: "first", format: { bold: true } }
+        },
+        {
+          rowId: "employee-1", columnId: "name",
+          patch: { comment: "last", validation: { kind: "textLength", min: 1 } }
+        },
+        {
+          rowId: "employee-1", columnId: "name",
+          patch: { format: { italic: true }, formula: "=A1", readOnly: true }
+        }
+      ]
+    })).toMatchObject({ status: "pending" });
+
+    const batch = mutate.mock.calls[0][0];
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toMatchObject({
+      kind: "cell-metadata",
+      rowId: "employee-1",
+      columnId: "name",
+      rowVersion: "row-1",
+      metadata: {
+        readOnly: true,
+        comment: "last",
+        format: { italic: true },
+        validation: { kind: "textLength", min: 1 },
+        formula: "=A1"
+      }
+    });
+    acknowledgement.resolve([{
+      clientMutationId: batch[0].clientMutationId,
+      status: "committed",
+      revision: "2",
+      row: employees[0],
+      rowVersion: "row-2"
+    }]);
+    await vi.waitFor(() => expect(session.getSnapshot().pendingOperations).toHaveLength(0));
+    session.destroy();
+  });
+
   it("reconciles an uncertain refresh and never lets it mask a later committed edit", async () => {
     let serverRow = { ...employees[0] };
     let revision = "1";

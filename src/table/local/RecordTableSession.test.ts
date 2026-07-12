@@ -357,6 +357,36 @@ describe("createLocalRecordTableSession", () => {
     expect(session.getSnapshot().getCell("e1", "name").metadata.comment).toBe("note");
   });
 
+  it("applies repeated metadata targets with deterministic last-write-wins semantics", async () => {
+    const session = createLocalRecordTableSession(deterministicOptions());
+
+    await expect(session.dispatch({
+      type: "update-cell-metadata",
+      updates: [
+        {
+          rowId: "e1", columnId: "name",
+          patch: { comment: "first", format: { bold: true } }
+        },
+        {
+          rowId: "e1", columnId: "name",
+          patch: { comment: "last", validation: { kind: "textLength", min: 1 } }
+        },
+        {
+          rowId: "e1", columnId: "name",
+          patch: { format: { italic: true }, formula: "=A1", readOnly: true }
+        }
+      ]
+    })).resolves.toMatchObject({ status: "committed", changed: true });
+
+    expect(session.getSnapshot().getCell("e1", "name").metadata).toEqual({
+      comment: "last",
+      format: { italic: true },
+      validation: { kind: "textLength", min: 1 },
+      formula: "=A1",
+      readOnly: true
+    });
+  });
+
   it("recalculates a computed column after an accessor edit", async () => {
     const helper = createColumnHelper<Employee>();
     const session = createLocalRecordTableSession(deterministicOptions({

@@ -25,6 +25,7 @@ export {
 export { createColumnHelper, normalizeColumns, type ColumnHelper } from "./columnHelper";
 export { createCommandIdFactory, type CommandIdFactory } from "./commandId";
 export { safeInvokeTableExtension, type TableExtensionKind } from "./safeInvoke";
+export { coalesceTableCellMetadataUpdates } from "./metadata";
 export type {
   CalculatedColumnDefinition,
   ChangeContext,

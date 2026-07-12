@@ -290,6 +290,43 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("applies repeated metadata targets with deterministic last-write-wins semantics", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    let publications = 0;
+    parent.subscribe(() => { publications += 1; });
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { comment: "first", format: { bold: true } }
+        },
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { comment: "last", validation: { kind: "textLength", min: 1 } }
+        },
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { format: { italic: true }, formula: "=B2", readOnly: true }
+        }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+
+    const workbook = parent.getSnapshot().workbook;
+    expect(publications).toBe(1);
+    expect(getCellComment(workbook, "sheet-1", "A2")).toBe("last");
+    expect(getCellFormat(workbook, "sheet-1", "A2")).toMatchObject({ italic: true });
+    expect(getCellFormat(workbook, "sheet-1", "A2").bold).not.toBe(true);
+    expect(getCellValidation(workbook, "sheet-1", "A2")).toMatchObject({
+      type: "textLength", min: 1
+    });
+    expect(getCellContent(workbook, "sheet-1", "A2")).toBe("=B2");
+    expect(getCellReadOnly(workbook, "sheet-1", "A2")).toBe(true);
+    parent.destroy();
+  });
+
   it("routes selection, clearing, resizing, visibility, and replacement through stable IDs", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
