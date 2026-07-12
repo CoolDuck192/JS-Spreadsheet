@@ -63,6 +63,24 @@ describe("RemotePageCache", () => {
     expect(cache.get(offsetRequest(0))).toBeUndefined();
   });
 
+  it.each(["cursor", "infinite"] as const)(
+    "pins accumulated %s pages so combine never drops the list head",
+    (kind) => {
+      const cache = new RemotePageCache<Row>(1);
+      cache.put(
+        accumulatedRequest(kind),
+        accumulatedResult(kind, "r1", [{ id: "1", name: "Ada" }], "next")
+      );
+      cache.put(
+        accumulatedRequest(kind, "next"),
+        accumulatedResult(kind, "r2", [{ id: "2", name: "Grace" }])
+      );
+
+      expect(cache.size).toBe(2);
+      expect(cache.combine()?.items.map((item) => item.id)).toEqual(["1", "2"]);
+    }
+  );
+
   it("invalidates the complete query cache when combined pages duplicate an ID", () => {
     const cache = new RemotePageCache<Row>();
     cache.put(offsetRequest(0), offsetResult("r1", 0, [{ id: "same", name: "Ada" }]));
@@ -99,5 +117,35 @@ function offsetResult(
       total: { kind: "known", value: 100 },
       hasMore: offset + rows.length < 100
     }
+  };
+}
+
+function accumulatedRequest(kind: "cursor" | "infinite", token?: string): QueryRequest {
+  return {
+    sorting: [], filter: null, grouping: [], aggregates: [],
+    pagination: kind === "cursor"
+      ? { kind, ...(token === undefined ? {} : { cursor: token }), limit: 10 }
+      : { kind, ...(token === undefined ? {} : { after: token }), limit: 10 }
+  };
+}
+
+function accumulatedResult(
+  kind: "cursor" | "infinite",
+  revision: string,
+  rows: readonly Row[],
+  nextCursor?: string
+): QueryResult<Row> {
+  return {
+    items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "loadedRows",
+    pageInfo: kind === "cursor"
+      ? { kind, ...(nextCursor === undefined ? {} : { nextCursor }), total: { kind: "unknown" } }
+      : {
+          kind,
+          ...(nextCursor === undefined ? {} : { nextCursor }),
+          loadedCount: rows.length,
+          total: { kind: "unknown" }
+        }
   };
 }

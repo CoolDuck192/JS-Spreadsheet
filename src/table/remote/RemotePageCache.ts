@@ -53,11 +53,15 @@ export class RemotePageCache<TRow> {
     };
     this.entries.set(key, candidate);
 
-    while (this.entries.size > this.maxPages) {
-      const oldest = [...this.entries.values()].reduce((left, right) =>
-        left.lastUsed <= right.lastUsed ? left : right
-      );
-      this.entries.delete(oldest.key);
+    const accumulatesVisiblePages = request.pagination.kind === "cursor"
+      || request.pagination.kind === "infinite";
+    if (!accumulatesVisiblePages) {
+      while (this.entries.size > this.maxPages) {
+        const oldest = [...this.entries.values()].reduce((left, right) =>
+          left.lastUsed <= right.lastUsed ? left : right
+        );
+        this.entries.delete(oldest.key);
+      }
     }
 
     try {
