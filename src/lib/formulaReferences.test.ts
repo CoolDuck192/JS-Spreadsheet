@@ -99,10 +99,9 @@ describe("formulaReferences", () => {
         tableColumnStart: 0,
         tableColumnEnd: 1,
         sourceRow: 5,
-        targetRow: 7,
-        formulaCell: { row: 6, column: 0 }
+        targetRow: 7
       },
-      expected: "=A8+$A8+A$9+$A$9+A8+$A$8+SUM(A8:B9)+SUM(A$9:B$10)"
+      expected: "=A9+$A9+A$9+$A$9+A8+$A$8+SUM(A9:B10)+SUM(A$9:B$10)"
     },
     {
       label: "down during shrink",
@@ -113,12 +112,11 @@ describe("formulaReferences", () => {
         tableColumnStart: 0,
         tableColumnEnd: 1,
         sourceRow: 5,
-        targetRow: 3,
-        formulaCell: { row: 3, column: 0 }
+        targetRow: 3
       },
-      expected: "=A3+$A3+A$2+$A$2+A4+$A$4+SUM(A2:B3)+SUM(A$1:B$2)"
+      expected: "=A2+$A2+A$2+$A$2+A4+$A$4+SUM(A1:B2)+SUM(A$1:B$2)"
     }
-  ])("uses the formula cell location when it moves $label", ({ formula, context, expected }) => {
+  ])("keeps outside-band targets while the formula cell moves $label", ({ formula, context, expected }) => {
     expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
       ok: true,
       formula: expected
@@ -137,8 +135,7 @@ describe("formulaReferences", () => {
       tableColumnStart: 0,
       tableColumnEnd: 1,
       sourceRow: 5,
-      targetRow: 7,
-      formulaCell: { row: 6, column: 0 }
+      targetRow: 7
     };
 
     expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
@@ -276,16 +273,18 @@ describe("formulaReferences", () => {
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
-  it("merges final range images after permutation and moved-formula translation", () => {
+  it("rejects discontiguous range images instead of merging in formula-copy offsets", () => {
     expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B9)", {
       formulaSheetId: "Data",
       editedSheetId: "Data",
       tableColumnStart: 0,
       tableColumnEnd: 1,
       sourceRow: 5,
-      targetRow: 7,
-      formulaCell: { row: 6, column: 0 }
-    })).toEqual({ ok: true, formula: "=SUM(A6:B8)" });
+      targetRow: 7
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
 
     expect(rewriteFormulaForRectangularRowMove("=SUM(A2:B4)", {
       formulaSheetId: "Data",
@@ -293,9 +292,11 @@ describe("formulaReferences", () => {
       tableColumnStart: 0,
       tableColumnEnd: 1,
       sourceRow: 5,
-      targetRow: 3,
-      formulaCell: { row: 3, column: 0 }
-    })).toEqual({ ok: true, formula: "=SUM(A3:B5)" });
+      targetRow: 3
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
   });
 
   it("rejects a final range image separated by a locked outside endpoint", () => {
@@ -305,8 +306,7 @@ describe("formulaReferences", () => {
       tableColumnStart: 0,
       tableColumnEnd: 1,
       sourceRow: 5,
-      targetRow: 7,
-      formulaCell: { row: 6, column: 0 }
+      targetRow: 7
     })).toMatchObject({
       ok: false,
       issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }

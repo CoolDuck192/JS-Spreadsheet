@@ -7,7 +7,7 @@ import type {
 import type { TableSort } from "../../table/core/query";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { compareDeterministicText } from "../../lib/filters";
-import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
+import { formatCellAddress } from "../../lib/addressing";
 import { structuredFormulaToA1 } from "../../lib/structuredFormula";
 import {
   rewriteFormulaForRectangularRowMove,
@@ -351,8 +351,7 @@ export function rewriteWorkbookForRowMove(
         tableColumnStart: move.columnStart,
         tableColumnEnd: move.columnEnd,
         sourceRow: move.sourceRow,
-        targetRow: move.targetRow,
-        ...(address ? { formulaCell: parseCellAddress(address) } : {})
+        targetRow: move.targetRow
       });
     },
     rewriteNamedRange(namedRange) {

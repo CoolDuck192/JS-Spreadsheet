@@ -214,9 +214,9 @@ describe("structured table metadata", () => {
     expect(resized.tables[0].columns[1].calculatedFormula).toBe("=B8*2");
   });
 
-  it("translates relative outside-band references when a formula moves up during growth", () => {
+  it("keeps outside-band targets when a formula moves up during growth", () => {
     const workbook = totalsResizeFixture({
-      A7: "=A9+$A9+A$9+$A$9+A6+$A$6+Sheet1!B9"
+      A7: "=A9+$A9+A$9+$A$9+A6+$A$6+Sheet1!B9+A1+SUM(A1:B2)"
     });
 
     const resized = commit(workbook, {
@@ -226,7 +226,7 @@ describe("structured table metadata", () => {
     }, deterministicServices());
 
     expect(getCellContent(resized, "sheet-1", "A6")).toBe(
-      "=A8+$A8+A$9+$A$9+A8+$A$8+Sheet1!B8"
+      "=A9+$A9+A$9+$A$9+A8+$A$8+Sheet1!B9+A1+SUM(A1:B2)"
     );
   });
 
@@ -287,16 +287,14 @@ describe("structured table metadata", () => {
     }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
   });
 
-  it("merges permutation and copy images for a moved range during growth", () => {
+  it("rejects a discontiguous moved range during growth", () => {
     const workbook = totalsResizeFixture({ A7: "=SUM(A7:B9)" });
 
-    const resized = commit(workbook, {
+    expectRejectedUnchanged(workbook, {
       type: "table.resize",
       tableId: "table-totals",
       range: range(0, 0, 7, 1)
-    }, deterministicServices());
-
-    expect(getCellContent(resized, "sheet-1", "A6")).toBe("=SUM(A6:B8)");
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
   });
 
   it("rewrites moved and external formulas when a totals row moves up during resize", () => {
@@ -315,9 +313,9 @@ describe("structured table metadata", () => {
     expect(getCellContent(resized, "sheet-1", "A5")).toBe("=A5*2");
   });
 
-  it("translates relative outside-band references when a formula moves down during shrink", () => {
+  it("keeps outside-band targets when a formula moves down during shrink", () => {
     const workbook = totalsResizeFixture({
-      A4: "=A2+$A2+A$2+$A$2+A6+$A$6+Sheet1!B2"
+      A4: "=A2+$A2+A$2+$A$2+A6+$A$6+Sheet1!B2+A1+SUM(A1:B2)"
     });
 
     const resized = commit(workbook, {
@@ -327,20 +325,18 @@ describe("structured table metadata", () => {
     }, deterministicServices());
 
     expect(getCellContent(resized, "sheet-1", "A5")).toBe(
-      "=A3+$A3+A$2+$A$2+A4+$A$4+Sheet1!B3"
+      "=A2+$A2+A$2+$A$2+A4+$A$4+Sheet1!B2+A1+SUM(A1:B2)"
     );
   });
 
-  it("merges permutation and copy images for a moved range during shrink", () => {
+  it("rejects a discontiguous moved range during shrink", () => {
     const workbook = totalsResizeFixture({ A4: "=SUM(A2:B4)" });
 
-    const resized = commit(workbook, {
+    expectRejectedUnchanged(workbook, {
       type: "table.resize",
       tableId: "table-totals",
       range: range(0, 0, 3, 1)
-    }, deterministicServices());
-
-    expect(getCellContent(resized, "sheet-1", "A5")).toBe("=SUM(A3:B5)");
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
   });
 
   it("rejects a moved range whose locked outside endpoint leaves a gap", () => {
