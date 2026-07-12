@@ -222,6 +222,11 @@ export class RecordTableSession<
 
     const nextStateKeys = new Set(Object.keys(options.state ?? {}) as (keyof TableViewState)[]);
     const controlledCandidate = mergeControlledState(this.state, options.state);
+    const safeCandidate = sanitizeLocalViewState(
+      controlledCandidate,
+      nextColumns,
+      options.source.getSubRows !== undefined
+    );
     this.options = options;
     this.controlledRows = nextControlledRows;
     this.controlledDocument = nextControlledDocument;
@@ -238,9 +243,12 @@ export class RecordTableSession<
     } else {
       this.invalidControlledState = false;
       this.sessionIssues = [];
-      if (!stateEqual(this.state, controlledCandidate)) {
-        this.state = controlledCandidate;
+      if (!stateEqual(this.state, safeCandidate)) {
+        this.state = safeCandidate;
         externalChanged = true;
+      }
+      if ([...nextStateKeys].some((key) => !stateSliceEqual(controlledCandidate[key], safeCandidate[key]))) {
+        this.requestControlledStateReplacement(safeCandidate);
       }
     }
 
@@ -732,6 +740,10 @@ export class RecordTableSession<
       case "set-column-visibility": candidate = { ...candidate, columnVisibility: { ...candidate.columnVisibility, [intent.columnId]: intent.visible } }; break;
       case "set-column-pinning": candidate = pinColumn(candidate, intent.columnId, intent.pin); break;
     }
+    if (isQueryStateIntent(intent)) {
+      const issue = this.validateViewState(candidate);
+      if (issue) return this.reject("validation", [issue], commandId, intent.type, startedAt, 0, 0);
+    }
     if (stateEqual(candidate, this.state)) return this.finishNoChange(commandId, intent, startedAt);
     const previous = this.state;
     this.state = candidate;
@@ -949,6 +961,25 @@ export class RecordTableSession<
     buildLocalRowModel(rows, this.columns, queryFromState(DEFAULT_TABLE_VIEW_STATE), this.options.source.getRowId, undefined, this.options.source.getSubRows);
   }
 
+  private validateViewState(candidate: TableViewState): TableCellIssue | null {
+    try {
+      buildLocalRowModel(
+        this.rows,
+        this.columns,
+        queryFromState(candidate),
+        this.options.source.getRowId,
+        undefined,
+        this.options.source.getSubRows
+      );
+      return null;
+    } catch (error) {
+      return {
+        code: "TABLE_VIEW_STATE_INVALID",
+        message: error instanceof Error ? error.message : "Table view state is invalid"
+      };
+    }
+  }
+
   private safeRowIds(rows: readonly TRow[]):
     | { ok: true; value: string[] }
     | { ok: false; issue: TableCellIssue } {
@@ -980,8 +1011,12 @@ export class RecordTableSession<
   }
 
   private requestControlledStateCorrection(candidate: TableViewState): void {
-    if (!this.options.onStateChange) return;
     const corrected = { ...candidate, pagination: { kind: "none" } as const };
+    this.requestControlledStateReplacement(corrected);
+  }
+
+  private requestControlledStateReplacement(corrected: TableViewState): void {
+    if (!this.options.onStateChange) return;
     this.safeHostCallback(() => this.options.onStateChange?.(() => corrected, this.context(this.commandIdFactory(), "set-pagination")));
   }
 
@@ -1165,6 +1200,49 @@ function queryFromState(state: TableViewState): QueryRequest {
     pagination: state.pagination,
     tree: { expandedRowIds: state.expandedRowIds }
   };
+}
+
+function sanitizeLocalViewState<TRow>(
+  state: TableViewState,
+  columns: readonly ColumnDef<TRow, any>[],
+  treeSource: boolean
+): TableViewState {
+  const columnIds = new Set(columns.map((column) => column.id));
+  const pagination = state.pagination.kind === "cursor"
+    || state.pagination.kind === "infinite"
+    || (treeSource && state.pagination.kind !== "none")
+    ? { kind: "none" } as const
+    : state.pagination;
+  return {
+    ...state,
+    sorting: state.sorting.filter((sort) => columnIds.has(sort.columnId)),
+    filter: filterUsesKnownColumns(state.filter, columnIds) ? state.filter : null,
+    grouping: treeSource
+      ? []
+      : state.grouping.filter((grouping) => columnIds.has(grouping.columnId)),
+    aggregates: state.aggregates.filter((aggregate) => columnIds.has(aggregate.columnId)),
+    pagination
+  };
+}
+
+function filterUsesKnownColumns(
+  filter: QueryRequest["filter"],
+  columnIds: ReadonlySet<string>
+): boolean {
+  if (!filter) return true;
+  if (filter.kind === "logical") {
+    return filter.operands.every((operand) => filterUsesKnownColumns(operand, columnIds));
+  }
+  if (filter.kind === "not") return filterUsesKnownColumns(filter.operand, columnIds);
+  return columnIds.has(filter.columnId);
+}
+
+function isQueryStateIntent<TRow>(intent: TableIntent<TRow>): boolean {
+  return intent.type === "set-sorting"
+    || intent.type === "set-filter"
+    || intent.type === "set-grouping"
+    || intent.type === "set-aggregates"
+    || intent.type === "set-pagination";
 }
 
 function intentFeature<TRow>(intent: TableIntent<TRow>) {

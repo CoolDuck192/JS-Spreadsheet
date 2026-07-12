@@ -589,6 +589,95 @@ describe("createLocalRecordTableSession", () => {
     });
   });
 
+  it.each([
+    [
+      "cursor pagination",
+      deterministicOptions(),
+      { type: "set-pagination", pagination: { kind: "cursor", limit: 25 } }
+    ],
+    [
+      "infinite pagination",
+      deterministicOptions(),
+      { type: "set-pagination", pagination: { kind: "infinite", limit: 25 } }
+    ],
+    [
+      "tree grouping",
+      deterministicOptions({ source: {
+        kind: "local", rows: [employee()], getRowId: (row) => row.id, getSubRows: () => []
+      } }),
+      { type: "set-grouping", grouping: [{ columnId: "name" }] }
+    ],
+    [
+      "tree pagination",
+      deterministicOptions({ source: {
+        kind: "local", rows: [employee()], getRowId: (row) => row.id, getSubRows: () => []
+      } }),
+      { type: "set-pagination", pagination: { kind: "offset", offset: 0, limit: 25 } }
+    ],
+    [
+      "sorting by an unknown column",
+      deterministicOptions(),
+      { type: "set-sorting", sorting: [{ columnId: "missing", direction: "asc" }] }
+    ],
+    [
+      "filtering by an unknown column",
+      deterministicOptions(),
+      {
+        type: "set-filter",
+        filter: {
+          kind: "comparison", columnId: "missing", operator: "eq",
+          value: { type: "string", value: "Ada" }
+        }
+      }
+    ],
+    [
+      "grouping by an unknown column",
+      deterministicOptions(),
+      { type: "set-grouping", grouping: [{ columnId: "missing" }] }
+    ],
+    [
+      "aggregating an unknown column",
+      deterministicOptions(),
+      { type: "set-aggregates", aggregates: [{ id: "missing", columnId: "missing", function: "count" }] }
+    ]
+  ] as const)("rejects %s before it can brick the local session", async (_label, options, intent) => {
+    const session = createLocalRecordTableSession(options);
+    const before = session.getSnapshot();
+
+    const result = await session.dispatch(intent);
+
+    expect(result).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(session.getSnapshot()).toBe(before);
+  });
+
+  it("prunes query state that references columns removed by updateOptions", () => {
+    const source = { kind: "local" as const, rows: [employee()], getRowId: (row: Employee) => row.id };
+    const initialColumns = createColumns();
+    const session = createLocalRecordTableSession({
+      source,
+      columns: initialColumns,
+      defaultState: {
+        sorting: [{ columnId: "name", direction: "asc" }],
+        filter: {
+          kind: "comparison", columnId: "name", operator: "eq",
+          value: { type: "string", value: "Ada" }
+        },
+        grouping: [{ columnId: "name" }],
+        aggregates: [{ id: "name-count", columnId: "name", function: "count" }]
+      }
+    });
+
+    session.getSnapshot();
+    session.updateOptions({ source, columns: [initialColumns[1], initialColumns[2]] });
+
+    expect(session.getSnapshot().state).toMatchObject({
+      sorting: [],
+      filter: null,
+      grouping: [],
+      aggregates: []
+    });
+  });
+
   it("renders aggregate values under their source column when aggregate ids differ", async () => {
     const session = createLocalRecordTableSession(deterministicOptions({
       source: {
