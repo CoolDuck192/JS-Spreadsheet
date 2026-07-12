@@ -7,7 +7,10 @@ import {
 } from "@xmldom/xmldom";
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { makeDenseWorksheetPackage } from "../test/xlsxSecurityFixtures";
+import {
+  makeDenseWorksheetPackage,
+  makeMultipleDenseWorksheetsPackage
+} from "../test/xlsxSecurityFixtures";
 import type { StructuredTable, WorkbookModel } from "../types";
 import { validateXlsxArchive } from "./xlsxSecurity";
 import {
@@ -161,6 +164,15 @@ describe("xlsxTableXml", () => {
       .toContain('dimension ref="A1:J100000"');
     expect(validateXlsxArchive(patched)).toEqual({ ok: true });
   });
+
+  it(
+    "patches and revalidates three dense worksheets within scaled package totals",
+    { timeout: 30_000 },
+    () => {
+      expect(patchNativeTableXml(makeMultipleDenseWorksheetsPackage(), []))
+        .toBeInstanceOf(Uint8Array);
+    }
+  );
 
   it("reads native table XML from the validated archive view when a ZIP comment resembles an EOCD", async () => {
     const source = await fixture();

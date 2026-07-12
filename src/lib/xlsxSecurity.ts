@@ -97,6 +97,10 @@ const MAX_PART_XML_ELEMENTS =
   XML_BUDGET_BASE + MAX_WORKSHEET_ROWS + MAX_DENSE_WORKSHEET_CELLS * 3;
 const MAX_PART_XML_ATTRIBUTES =
   XML_BUDGET_BASE + MAX_WORKSHEET_ROWS * 4 + MAX_DENSE_WORKSHEET_CELLS * 4;
+// The 256 MiB uncompressed package ceiling can contain at most four 64 MiB
+// scaled XML parts, so aggregate scaling never exceeds four dense envelopes.
+const MAX_PACKAGE_XML_ELEMENTS = MAX_PART_XML_ELEMENTS * 4;
+const MAX_PACKAGE_XML_ATTRIBUTES = MAX_PART_XML_ATTRIBUTES * 4;
 const SPREADSHEETML_NAMESPACES = new Set([
   "",
   "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -674,6 +678,12 @@ function decodeXml(bytes: Uint8Array, name: string): string {
 }
 
 type XmlCounts = { elements: number; attributes: number };
+type XmlPackageBudget = {
+  counts: XmlCounts;
+  scaledGrants: XmlCounts;
+  scaledGrantsByPart: Map<string, XmlCounts>;
+  pendingScaledParts: number;
+};
 type XmlPartKind = "generic" | "worksheet" | "shared-strings";
 
 function checkedMultiply(left: number, right: number): number | null {
@@ -684,6 +694,46 @@ function checkedMultiply(left: number, right: number): number | null {
 function checkedBudgetAdd(left: number, right: number): number | null {
   const result = left + right;
   return Number.isSafeInteger(result) ? result : null;
+}
+
+function effectiveTotalXmlLimit(
+  configuredLimit: number,
+  absoluteLimit: number,
+  scaledGrant: number,
+  explicit: boolean,
+  pendingScaledParts: number
+): number {
+  const fixedLimit = Math.min(configuredLimit, absoluteLimit);
+  if (explicit) return fixedLimit;
+  if (pendingScaledParts > 0) return absoluteLimit;
+  return Math.min(absoluteLimit, Math.max(fixedLimit, scaledGrant));
+}
+
+function enforcePackageCounts(
+  packageBudget: XmlPackageBudget,
+  limits: XlsxSecurityLimits,
+  limitOverrides: Partial<XlsxSecurityLimits> | undefined
+): void {
+  const elementLimit = effectiveTotalXmlLimit(
+    limits.maxTotalXmlElements,
+    MAX_PACKAGE_XML_ELEMENTS,
+    packageBudget.scaledGrants.elements,
+    hasExplicitLimit(limitOverrides, "maxTotalXmlElements"),
+    packageBudget.pendingScaledParts
+  );
+  const attributeLimit = effectiveTotalXmlLimit(
+    limits.maxTotalXmlAttributes,
+    MAX_PACKAGE_XML_ATTRIBUTES,
+    packageBudget.scaledGrants.attributes,
+    hasExplicitLimit(limitOverrides, "maxTotalXmlAttributes"),
+    packageBudget.pendingScaledParts
+  );
+  if (packageBudget.counts.elements > elementLimit) {
+    reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML element limit.");
+  }
+  if (packageBudget.counts.attributes > attributeLimit) {
+    reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML attribute limit.");
+  }
 }
 
 function worksheetColumnNumber(value: string): number | null {
@@ -794,7 +844,7 @@ function scanSafeXml(
   name: string,
   partKind: XmlPartKind,
   limits: XlsxSecurityLimits,
-  totalCounts: XmlCounts,
+  packageBudget: XmlPackageBudget,
   limitOverrides: Partial<XlsxSecurityLimits> | undefined
 ): XmlPartSummary {
   if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)) {
@@ -820,6 +870,30 @@ function scanSafeXml(
   let partAttributeLimit = fixedAttributeLimit;
   let worksheetDimensionCount = 0;
   let worksheetSheetDataSeen = false;
+  const replaceScaledGrant = (grant: XmlCounts): void => {
+    const previous = packageBudget.scaledGrantsByPart.get(name) ?? {
+      elements: 0,
+      attributes: 0
+    };
+    const elements = checkedBudgetAdd(
+      packageBudget.scaledGrants.elements - previous.elements,
+      grant.elements
+    );
+    const attributes = checkedBudgetAdd(
+      packageBudget.scaledGrants.attributes - previous.attributes,
+      grant.attributes
+    );
+    if (elements === null || attributes === null) {
+      reject("XLSX_ARCHIVE_LIMIT", "The XLSX package XML budget is too large.");
+    }
+    packageBudget.scaledGrants = { elements, attributes };
+    if (grant.elements === 0 && grant.attributes === 0) {
+      packageBudget.scaledGrantsByPart.delete(name);
+    } else {
+      packageBudget.scaledGrantsByPart.set(name, grant);
+    }
+    enforcePackageCounts(packageBudget, limits, limitOverrides);
+  };
 
   const enforcePartCounts = (): void => {
     if (partCounts.elements > partElementLimit) {
@@ -847,6 +921,16 @@ function scanSafeXml(
         );
       }
     }
+    replaceScaledGrant({
+      elements:
+        budget !== null && !hasExplicitLimit(limitOverrides, "maxXmlElements")
+          ? partElementLimit
+          : 0,
+      attributes:
+        budget !== null && !hasExplicitLimit(limitOverrides, "maxXmlAttributes")
+          ? partAttributeLimit
+          : 0
+    });
     enforcePartCounts();
   };
 
@@ -862,22 +946,18 @@ function scanSafeXml(
     parser.on("opentagstart", () => {
       depth += 1;
       partCounts.elements += 1;
-      totalCounts.elements += 1;
+      packageBudget.counts.elements += 1;
       if (depth > limits.maxXmlDepth) {
         reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the depth limit.`);
       }
       enforcePartCounts();
-      if (totalCounts.elements > limits.maxTotalXmlElements) {
-        reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML element limit.");
-      }
+      enforcePackageCounts(packageBudget, limits, limitOverrides);
     });
     parser.on("attribute", () => {
       partCounts.attributes += 1;
-      totalCounts.attributes += 1;
+      packageBudget.counts.attributes += 1;
       enforcePartCounts();
-      if (totalCounts.attributes > limits.maxTotalXmlAttributes) {
-        reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML attribute limit.");
-      }
+      enforcePackageCounts(packageBudget, limits, limitOverrides);
     });
     parser.on("opentag", (tag) => {
       if (depth === 1) {
@@ -1243,7 +1323,12 @@ function inspectXlsxArchive(
     const bytes = data.slice();
     const archive = parseArchive(bytes, limits, limitOverrides);
     const extractedEntries = new Map<string, Uint8Array>();
-    const totalXmlCounts: XmlCounts = { elements: 0, attributes: 0 };
+    const packageXmlBudget: XmlPackageBudget = {
+      counts: { elements: 0, attributes: 0 },
+      scaledGrants: { elements: 0, attributes: 0 },
+      scaledGrantsByPart: new Map(),
+      pendingScaledParts: 0
+    };
     const contentTypesEntry = archive.entriesByName.get("[Content_Types].xml");
     let contentTypes: XmlPartSummary | undefined;
     if (contentTypesEntry) {
@@ -1254,7 +1339,7 @@ function inspectXlsxArchive(
         contentTypesEntry.name,
         "generic",
         limits,
-        totalXmlCounts,
+        packageXmlBudget,
         limitOverrides
       );
     }
@@ -1265,6 +1350,9 @@ function inspectXlsxArchive(
       enforceValidatedEntryByteLimit(entry, partKind, limits, limitOverrides);
       partKinds.set(entry.name, partKind);
     }
+    packageXmlBudget.pendingScaledParts = [...partKinds.values()].filter(
+      (partKind) => partKind === "worksheet" || partKind === "shared-strings"
+    ).length;
 
     for (const entry of archive.entries) {
       if (entry.name === contentTypesEntry?.name) continue;
@@ -1272,16 +1360,21 @@ function inspectXlsxArchive(
       const xmlBytes = inflateEntry(archive, entry);
       if (extractAllEntries) extractedEntries.set(entry.name, xmlBytes);
       if (!isXmlPart(entry.name)) continue;
+      const partKind = partKinds.get(entry.name) ?? "generic";
       const summary = scanSafeXml(
         decodeXml(xmlBytes, entry.name),
         entry.name,
-        partKinds.get(entry.name) ?? "generic",
+        partKind,
         limits,
-        totalXmlCounts,
+        packageXmlBudget,
         limitOverrides
       );
       if (summary.kind === "relationships") {
         validateRelationships(archive, entry.name, summary, contentTypeFor);
+      }
+      if (partKind === "worksheet" || partKind === "shared-strings") {
+        packageXmlBudget.pendingScaledParts -= 1;
+        enforcePackageCounts(packageXmlBudget, limits, limitOverrides);
       }
     }
 

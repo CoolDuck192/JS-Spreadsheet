@@ -12,6 +12,7 @@ const TABLE_RELATIONSHIP_TYPE =
 
 let denseWorksheetPackage: Uint8Array | undefined;
 let cachedFormulaWorksheetPackage: Uint8Array | undefined;
+let multipleDenseWorksheetsPackage: Uint8Array | undefined;
 
 function makeDenseWorksheetXml(includeNumericType: boolean): Uint8Array {
   const rows = new Array<string>(DENSE_ROW_COUNT);
@@ -117,4 +118,37 @@ export function makeCachedFormulaWorksheetPackage(): Uint8Array {
     "xl/worksheets/sheet1.xml": [worksheetXml, stored]
   });
   return cachedFormulaWorksheetPackage;
+}
+
+export function makeMultipleDenseWorksheetsPackage(): Uint8Array {
+  if (multipleDenseWorksheetsPackage) return multipleDenseWorksheetsPackage;
+
+  const cells = "<c><v>1</v></c>".repeat(16);
+  const rows = new Array<string>(DENSE_ROW_COUNT);
+  for (let row = 1; row <= DENSE_ROW_COUNT; row += 1) {
+    rows[row - 1] = `<row r="${row}">${cells}</row>`;
+  }
+  const worksheetXml = strToU8(
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<dimension ref="A1:P100000"/><sheetData>' +
+      rows.join("") +
+      "</sheetData></worksheet>"
+  );
+  const deflated = { level: 1 as const, mtime: FIXED_ZIP_DATE };
+  multipleDenseWorksheetsPackage = zipSync({
+    "[Content_Types].xml": [
+      strToU8(
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+          [1, 2, 3].map((index) =>
+            `<Override PartName="/xl/worksheets/sheet${index}.xml" ContentType="${WORKSHEET_CONTENT_TYPE}"/>`
+          ).join("") +
+          "</Types>"
+      ),
+      deflated
+    ],
+    "xl/worksheets/sheet1.xml": [worksheetXml, deflated],
+    "xl/worksheets/sheet2.xml": [worksheetXml, deflated],
+    "xl/worksheets/sheet3.xml": [worksheetXml, deflated]
+  });
+  return multipleDenseWorksheetsPackage;
 }

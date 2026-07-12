@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   makeCachedFormulaWorksheetPackage,
   makeDenseWorksheetPackage,
-  makeLargeDenseWorksheetPackage
+  makeLargeDenseWorksheetPackage,
+  makeMultipleDenseWorksheetsPackage
 } from "../test/xlsxSecurityFixtures";
 
 import {
@@ -101,6 +102,26 @@ function makePackage(options: PackageOptions = {}): Uint8Array {
     entries[name] = typeof value === "string" ? encoder.encode(value) : value;
   }
 
+  return zipSync(entries, { level: 0 });
+}
+
+function makePackageWithGenericXmlBeforeGrantedWorksheets(): Uint8Array {
+  const entries: Record<string, Uint8Array> = {
+    "[Content_Types].xml": encoder.encode(contentTypes(TABLE_CONTENT_TYPE, [
+      ["/xl/worksheets/sheet1.xml", WORKSHEET_CONTENT_TYPE],
+      ["/xl/worksheets/sheet2.xml", WORKSHEET_CONTENT_TYPE]
+    ]))
+  };
+  const genericXml = encoder.encode(`<root>${"<value/>".repeat(900_000)}</root>`);
+  for (let index = 1; index <= 9; index += 1) {
+    entries[`custom/before-${index}.xml`] = genericXml;
+  }
+  const worksheet = encoder.encode(
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<dimension ref="A1:T100000"/><sheetData/></worksheet>'
+  );
+  entries["xl/worksheets/sheet1.xml"] = worksheet;
+  entries["xl/worksheets/sheet2.xml"] = worksheet;
   return zipSync(entries, { level: 0 });
 }
 
@@ -360,6 +381,23 @@ describe("validateXlsxArchive bounded XML validation", () => {
     { timeout: 30_000 },
     () => {
       expect(validateXlsxArchive(makeCachedFormulaWorksheetPackage())).toEqual({ ok: true });
+    }
+  );
+
+  it(
+    "scales package totals across three valid dense A1:P100000 worksheets",
+    { timeout: 30_000 },
+    () => {
+      expect(validateXlsxArchive(makeMultipleDenseWorksheetsPackage())).toEqual({ ok: true });
+    }
+  );
+
+  it(
+    "applies validated worksheet grants independently of ZIP entry order",
+    { timeout: 30_000 },
+    () => {
+      expect(validateXlsxArchive(makePackageWithGenericXmlBeforeGrantedWorksheets()))
+        .toEqual({ ok: true });
     }
   );
 
