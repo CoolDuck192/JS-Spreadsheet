@@ -2,6 +2,9 @@ import { strToU8, zipSync } from "fflate";
 
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const DENSE_ROW_COUNT = 100_000;
+// Five wrapper nodes plus 47,620 rows and 20 cell/value nodes per row
+// produce 1,000,025 elements, just above the former fixed one-million cap.
+const ABOVE_FLOOR_ROW_COUNT = 47_620;
 const DENSE_COLUMNS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"] as const;
 const WORKSHEET_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
@@ -13,6 +16,7 @@ const TABLE_RELATIONSHIP_TYPE =
 let denseWorksheetPackage: Uint8Array | undefined;
 let cachedFormulaWorksheetPackage: Uint8Array | undefined;
 let multipleDenseWorksheetsPackage: Uint8Array | undefined;
+let aboveFloorWorksheetPackage: Uint8Array | undefined;
 
 function makeDenseWorksheetXml(includeNumericType: boolean): Uint8Array {
   const rows = new Array<string>(DENSE_ROW_COUNT);
@@ -35,7 +39,8 @@ function makeDenseWorksheetXml(includeNumericType: boolean): Uint8Array {
 
 function packageWorksheet(
   worksheetXml: Uint8Array,
-  worksheetContentType: string | null
+  worksheetContentType: string | null,
+  rowCount = DENSE_ROW_COUNT
 ): Uint8Array {
   const stored = { level: 0 as const, mtime: FIXED_ZIP_DATE };
   return zipSync({
@@ -62,8 +67,8 @@ function packageWorksheet(
     "xl/tables/table1.xml": [
       strToU8(
         '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
-          'id="1" name="DenseTable" displayName="DenseTable" ref="A1:J100000">' +
-          '<autoFilter ref="A1:J100000"/><tableColumns count="10">' +
+          `id="1" name="DenseTable" displayName="DenseTable" ref="A1:J${rowCount}">` +
+          `<autoFilter ref="A1:J${rowCount}"/><tableColumns count="10">` +
           DENSE_COLUMNS.map((_, index) =>
             `<tableColumn id="${index + 1}" name="Column${index + 1}"/>`
           ).join("") +
@@ -151,4 +156,27 @@ export function makeMultipleDenseWorksheetsPackage(): Uint8Array {
     "xl/worksheets/sheet3.xml": [worksheetXml, deflated]
   });
   return multipleDenseWorksheetsPackage;
+}
+
+export function makeAboveFloorWorksheetPackage(): Uint8Array {
+  if (aboveFloorWorksheetPackage) return aboveFloorWorksheetPackage;
+
+  const cells = "<c><v>1</v></c>".repeat(10);
+  const rows = new Array<string>(ABOVE_FLOOR_ROW_COUNT);
+  for (let row = 1; row <= ABOVE_FLOOR_ROW_COUNT; row += 1) {
+    rows[row - 1] = `<row r="${row}">${cells}</row>`;
+  }
+  const worksheetXml = strToU8(
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      `<dimension ref="A1:J${ABOVE_FLOOR_ROW_COUNT}"/><sheetData>` +
+      rows.join("") +
+      '</sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>'
+  );
+  aboveFloorWorksheetPackage = packageWorksheet(
+    worksheetXml,
+    WORKSHEET_CONTENT_TYPE,
+    ABOVE_FLOOR_ROW_COUNT
+  );
+  return aboveFloorWorksheetPackage;
 }
