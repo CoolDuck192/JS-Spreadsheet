@@ -583,7 +583,11 @@ function EditorOverlay({
   return (
     <div
       data-grid-editor-overlay="true"
-      className={mergeClassNames("cell", "editing-cell", cell.className)}
+      className={mergeClassNames(
+        "js-spreadsheet-grid__cell",
+        "js-spreadsheet-grid__editing-cell",
+        cell.className
+      )}
       style={{
         ...cell.style,
         position: "absolute",

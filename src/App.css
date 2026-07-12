@@ -2711,7 +2711,8 @@
   background: #fff;
 }
 
-.editing-cell {
+.editing-cell,
+.js-spreadsheet-grid__editing-cell {
   overflow: visible;
   z-index: 8;
 }
