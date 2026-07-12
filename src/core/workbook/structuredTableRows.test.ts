@@ -167,9 +167,25 @@ describe("structured table rows", () => {
     }
   });
 
+  it("moves an external-only body formula byte-identically through insert and delete", () => {
+    const formula = "='[Book.xlsx]Data'!D3";
+    const workbook = rowFixture({ B3: formula });
+
+    const inserted = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+    expect(inserted.status).toBe("committed");
+    expect(getCellContent(inserted.workbook, "sheet-1", "B4")).toBe(formula);
+
+    const deleted = deleteStructuredTableRows(workbook, "table-1", ["row-1"], servicesFor(workbook));
+    expect(deleted.status).toBe("committed");
+    expect(getCellContent(deleted.workbook, "sheet-1", "B2")).toBe(formula);
+  });
+
   it.each([
     ["mixed-column range", "=SUM(A3:C3)"],
-    ["external workbook reference", "='[Book.xlsx]Data'!D3"]
+    ["mixed external and affected local reference", "='[Book.xlsx]Data'!D3+A3"]
   ])("rejects row insertion atomically for an unsupported body formula with a %s", (_label, formula) => {
     const workbook = rowFixture({ B3: formula });
 

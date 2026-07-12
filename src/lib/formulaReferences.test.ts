@@ -125,6 +125,30 @@ describe("formulaReferences", () => {
     });
   });
 
+  it.each([
+    ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
+    ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
+    ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
+    ["quoted 3-D", "=SUM('Jan''A':'Mar''B'!B2)"]
+  ])("keeps a physically moved %s formula byte-identical when no local reference changes", (_label, formula) => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7,
+      formulaCell: { row: 6, column: 0 }
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
+      ok: true,
+      formula
+    });
+    expect(rewriteFormulaForRectangularRowMove(`${formula}+A7`, context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
   it("merges final range images after permutation and moved-formula translation", () => {
     expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B9)", {
       formulaSheetId: "Data",
@@ -577,7 +601,12 @@ describe("formulaReferences", () => {
     });
   });
 
-  it("rejects external and 3-D references with a typed issue", () => {
+  it.each([
+    ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
+    ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
+    ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
+    ["quoted 3-D", "=SUM('Jan''A':'Mar''B'!B2)"]
+  ])("keeps a %s formula byte-identical unless an affected local reference is also present", (_label, formula) => {
     const context = {
       formulaSheetId: "Data",
       editedSheetId: "Data",
@@ -589,13 +618,12 @@ describe("formulaReferences", () => {
       operation: "insert" as const,
       sheetBounds: { rowCount: 100, columnCount: 26 }
     };
-    expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=[Book.xlsx]Data!B2", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=SUM(Jan:Mar!B2)", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=SUM('Jan''A':'Mar''B'!B2)", context))
+
+    expect(rewriteFormulaForRectangularRowEdit(formula, context)).toEqual({
+      ok: true,
+      formula
+    });
+    expect(rewriteFormulaForRectangularRowEdit(`${formula}+B2`, context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 });

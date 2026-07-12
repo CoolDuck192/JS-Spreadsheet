@@ -230,6 +230,27 @@ describe("structured table metadata", () => {
     );
   });
 
+  it("keeps a physically moved external-only body formula and rejects an affected mixed formula atomically", () => {
+    const formula = "='[Book.xlsx]Data'!D3";
+    const workbook = totalsResizeFixture({ A7: formula });
+    const command: StructuredTableCommand = {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    };
+
+    const resized = commit(workbook, command, deterministicServices());
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe(formula);
+
+    const mixed = totalsResizeFixture({ A7: `${formula}+A7` });
+    expectRejectedUnchanged(
+      mixed,
+      command,
+      deterministicServices(),
+      "TABLE_FORMULA_REFERENCE_UNSUPPORTED"
+    );
+  });
+
   it("merges permutation and copy images for a moved range during growth", () => {
     const workbook = totalsResizeFixture({ A7: "=SUM(A7:B9)" });
 

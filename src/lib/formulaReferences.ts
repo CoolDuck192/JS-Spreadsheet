@@ -107,28 +107,14 @@ export function rewriteFormulaForRectangularRowEdit(
   context: RectangularRowEditContext
 ): FormulaRewriteResult {
   if (!formula.startsWith("=") || context.count <= 0) return { ok: true, formula };
-  if (containsUnsupportedRectangularReference(formula)) {
-    return {
-      ok: false,
-      issue: {
-        code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
-        message: "External and 3-D references cannot be rewritten for a table row edit"
-      }
-    };
-  }
-
   const tokens = tokenizeFormulaReferences(formula);
-  const rewritten: string[] = [];
-  for (const token of tokens) {
-    if (token.kind === "raw" || !rectangularReferenceTargetsEditedSheet(token, context)) {
-      rewritten.push(token.raw);
-      continue;
-    }
-    const result = rewriteRectangularReferenceToken(token, context);
-    if (!result.ok) return result;
-    rewritten.push(result.formula);
-  }
-  return { ok: true, formula: rewritten.join("") };
+  return rewriteRelevantRectangularFormulaReferences(
+    formula,
+    tokens,
+    (token) => rectangularReferenceTargetsEditedSheet(token, context),
+    (token) => rewriteRectangularReferenceToken(token, context),
+    "External and 3-D references cannot be rewritten for a table row edit"
+  );
 }
 
 export function rewriteFormulaForRectangularRowMove(
@@ -138,28 +124,59 @@ export function rewriteFormulaForRectangularRowMove(
   if (!formula.startsWith("=") || context.sourceRow === context.targetRow) {
     return { ok: true, formula };
   }
-  if (containsUnsupportedRectangularReference(formula)) {
-    return {
-      ok: false,
-      issue: {
-        code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
-        message: "External and 3-D references cannot be rewritten for a table row move"
-      }
-    };
-  }
-
+  const tokens = tokenizeFormulaReferences(formula);
   const formulaRowOffset = rectangularFormulaCellRowOffset(context);
+  return rewriteRelevantRectangularFormulaReferences(
+    formula,
+    tokens,
+    (token) => rectangularReferenceTargetsEditedSheet(token, context),
+    (token) => rewriteRectangularRowMoveReferenceToken(token, context, formulaRowOffset),
+    "External and 3-D references cannot be rewritten for a table row move"
+  );
+}
+
+function rewriteRelevantRectangularFormulaReferences(
+  formula: string,
+  tokens: readonly FormulaToken[],
+  targetsEditedRectangle: (token: FormulaReferenceToken) => boolean,
+  rewriteReference: (token: FormulaReferenceToken) => FormulaRewriteResult,
+  unsupportedMessage: string
+): FormulaRewriteResult {
   const rewritten: string[] = [];
-  for (const token of tokenizeFormulaReferences(formula)) {
-    if (token.kind === "raw" || !rectangularReferenceTargetsEditedSheet(token, context)) {
+  let localReferenceChanged = false;
+  for (const [index, token] of tokens.entries()) {
+    if (
+      token.kind === "raw"
+      || isExternalWorkbookReferenceToken(tokens, index, token)
+      || !targetsEditedRectangle(token)
+    ) {
       rewritten.push(token.raw);
       continue;
     }
-    const result = rewriteRectangularRowMoveReferenceToken(token, context, formulaRowOffset);
-    if (!result.ok) return result;
+    const result = rewriteReference(token);
+    if (!result.ok) {
+      return containsUnsupportedRectangularReference(formula)
+        ? unsupportedRectangularReference(unsupportedMessage)
+        : result;
+    }
+    localReferenceChanged ||= result.formula !== token.raw;
     rewritten.push(result.formula);
   }
+  if (!localReferenceChanged) return { ok: true, formula };
+  if (containsUnsupportedRectangularReference(formula)) {
+    return unsupportedRectangularReference(unsupportedMessage);
+  }
   return { ok: true, formula: rewritten.join("") };
+}
+
+function unsupportedRectangularReference(message: string): FormulaRewriteResult {
+  return {
+    ok: false,
+    issue: {
+      code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+      message
+    }
+  };
 }
 
 function containsUnsupportedRectangularReference(formula: string): boolean {
@@ -597,6 +614,15 @@ function hasExternalWorkbookPrefix(
   if (!token.sheetPrefix) return false;
   const previous = tokens[index - 1];
   return previous?.kind === "raw" && /\[[^\]\r\n]+\]$/u.test(previous.raw);
+}
+
+function isExternalWorkbookReferenceToken(
+  tokens: readonly FormulaToken[],
+  index: number,
+  token: FormulaReferenceToken
+): boolean {
+  return /\[[^\]\r\n]+\]/u.test(token.sheetName ?? "")
+    || hasExternalWorkbookPrefix(tokens, index, token);
 }
 
 function shiftReferenceToken(token: FormulaReferenceToken, context: FormulaStructureContext): string {
