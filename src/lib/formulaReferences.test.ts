@@ -129,7 +129,7 @@ describe("formulaReferences", () => {
     ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
     ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
     ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
-    ["quoted 3-D", "=SUM('Jan''A':'Mar''B'!B2)"]
+    ["quoted 3-D", "=SUM('Jan''A:Mar''B'!B2)"]
   ])("keeps a physically moved %s formula byte-identical when no local reference changes", (_label, formula) => {
     const context = {
       formulaSheetId: "Data",
@@ -146,6 +146,133 @@ describe("formulaReferences", () => {
       formula
     });
     expect(rewriteFormulaForRectangularRowMove(`${formula}+A7`, context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
+  it.each([
+    "=SUM(Data:Other!B6)",
+    "=SUM(Other:Data!B6)"
+  ])("rejects an affected 3-D row-move reference before any local token changes: %s", (formula) => {
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("keeps a 3-D span that excludes the edited sheet even across the move band", () => {
+    const formula = "=SUM(Jan:Mar!B6)";
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Jan", "Mar", "Data"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({ ok: true, formula });
+  });
+
+  it.each(["Jan:Mar", "Mar:Jan"])(
+    "uses sheet order to reject an edited sheet inside the %s 3-D span",
+    (sheetSpan) => {
+      expect(rewriteFormulaForRectangularRowMove(`=SUM(${sheetSpan}!B6)`, {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        sheetOrder: ["Jan", "Data", "Mar"],
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7
+      })).toMatchObject({
+        ok: false,
+        issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+      });
+    }
+  );
+
+  it("keeps an included 3-D span whose cells do not intersect the move band", () => {
+    const formula = "=SUM(Jan:Mar!B2)";
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Jan", "Data", "Mar"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({ ok: true, formula });
+  });
+
+  it("parses a quoted 3-D span with spaced sheet names", () => {
+    const context = {
+      formulaSheetId: "Data Set",
+      editedSheetId: "Data Set",
+      sheetOrder: ["Data Set", "Other Set"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(
+      "=SUM('Data Set:Other Set'!B6)",
+      context
+    )).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("does not treat 3-D-shaped structured reference text as a sheet span", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Data", "Other"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+    for (const structuredReference of [
+      "Table[[Data:Other!B6]]",
+      "Table[Foo'] X Data:Other!B6]",
+      "Table[Foo'[ X Data:Other!B6]"
+    ]) {
+      expect(rewriteFormulaForRectangularRowMove(
+        `=SUM(${structuredReference})`,
+        context
+      )).toEqual({ ok: true, formula: `=SUM(${structuredReference})` });
+      expect(rewriteFormulaForRectangularRowMove(
+        `=SUM(${structuredReference})+A6`,
+        context
+      )).toEqual({ ok: true, formula: `=SUM(${structuredReference})+A8` });
+    }
+  });
+
+  it("keeps an external 3-D reference byte-identical unless a local reference changes", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Data", "Other"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+    const externalReference = "=SUM([Book.xlsx]Data:Other!B6)";
+
+    expect(rewriteFormulaForRectangularRowMove(externalReference, context)).toEqual({
+      ok: true,
+      formula: externalReference
+    });
+    expect(rewriteFormulaForRectangularRowMove(`${externalReference}+A6`, context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
@@ -641,7 +768,7 @@ describe("formulaReferences", () => {
     ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
     ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
     ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
-    ["quoted 3-D", "=SUM('Jan''A':'Mar''B'!B2)"]
+    ["quoted 3-D", "=SUM('Jan''A:Mar''B'!B2)"]
   ])("keeps a %s formula byte-identical unless an affected local reference is also present", (_label, formula) => {
     const context = {
       formulaSheetId: "Data",
@@ -661,5 +788,25 @@ describe("formulaReferences", () => {
     });
     expect(rewriteFormulaForRectangularRowEdit(`${formula}+B2`, context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
+  it.each([
+    "=SUM(Data:Other!B6)",
+    "=SUM(Other:Data!B6)"
+  ])("rejects an affected 3-D row-edit reference before any local token changes: %s", (formula) => {
+    expect(rewriteFormulaForRectangularRowEdit(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      tableRowEnd: 5,
+      row: 2,
+      count: 1,
+      operation: "insert",
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
   });
 });

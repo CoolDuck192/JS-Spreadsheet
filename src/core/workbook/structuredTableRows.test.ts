@@ -202,6 +202,52 @@ describe("structured table rows", () => {
     expect(getCellContent(result.workbook, "sheet-1", "B3")).toBe(formula);
   });
 
+  it.each(["Data:Other", "Other:Data"])(
+    "rejects row insertion atomically when the edited sheet is in the %s 3-D span",
+    (sheetSpan) => {
+      const base = rowFixture({ D1: `=SUM(${sheetSpan}!B3)` });
+      const workbook: WorkbookModel = {
+        ...base,
+        sheets: [{ ...base.sheets[0], name: "Data" }]
+      };
+
+      const result = insertStructuredTableRows(workbook, "table-1", {
+        beforeRowId: "row-2",
+        count: 1
+      }, servicesFor(workbook));
+
+      expect(result.status).toBe("rejected");
+      expect(result.workbook).toBe(workbook);
+      expect(result).toMatchObject({
+        issues: [{ code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }]
+      });
+    }
+  );
+
+  it("rejects row insertion when the edited sheet is inside a 3-D span", () => {
+    const base = rowFixture({ D1: "=SUM(Jan:Mar!B3)" });
+    const dataSheet = { ...base.sheets[0], name: "Data" };
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [
+        { ...dataSheet, id: "sheet-jan", name: "Jan", cells: {} },
+        dataSheet,
+        { ...dataSheet, id: "sheet-mar", name: "Mar", cells: {} }
+      ]
+    };
+
+    const result = insertStructuredTableRows(workbook, "table-1", {
+      beforeRowId: "row-2",
+      count: 1
+    }, servicesFor(workbook));
+
+    expect(result.status).toBe("rejected");
+    expect(result.workbook).toBe(workbook);
+    expect(result).toMatchObject({
+      issues: [{ code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }]
+    });
+  });
+
   it("rejects unknown or duplicate anchors and row IDs without partial movement", () => {
     const workbook = rowFixture();
     for (const result of [

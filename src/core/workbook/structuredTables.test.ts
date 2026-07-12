@@ -251,6 +251,42 @@ describe("structured table metadata", () => {
     );
   });
 
+  it.each(["Data:Other", "Other:Data"])(
+    "rejects a totals move atomically when the edited sheet is in the %s 3-D span",
+    (sheetSpan) => {
+      const base = totalsResizeFixture({ D1: `=SUM(${sheetSpan}!B6)` });
+      const workbook: WorkbookModel = {
+        ...base,
+        sheets: [{ ...base.sheets[0], name: "Data" }]
+      };
+
+      expectRejectedUnchanged(workbook, {
+        type: "table.resize",
+        tableId: "table-totals",
+        range: range(0, 0, 7, 1)
+      }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+    }
+  );
+
+  it("rejects a totals move when the edited sheet is inside a 3-D span", () => {
+    const base = totalsResizeFixture({ D1: "=SUM(Jan:Mar!B6)" });
+    const dataSheet = { ...base.sheets[0], name: "Data" };
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [
+        { ...dataSheet, id: "sheet-jan", name: "Jan", cells: {} },
+        dataSheet,
+        { ...dataSheet, id: "sheet-mar", name: "Mar", cells: {} }
+      ]
+    };
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
   it("merges permutation and copy images for a moved range during growth", () => {
     const workbook = totalsResizeFixture({ A7: "=SUM(A7:B9)" });
 

@@ -295,12 +295,14 @@ export function rewriteWorkbookForRowEdits(
   let candidate = workbook;
   let tableRowEnd = table.range.end.row;
   const editedSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId)!;
+  const sheetOrder = workbook.sheets.map((sheet) => sheet.name);
   for (const edit of edits) {
     const rewritten = rewriteWorkbookFormulaReferences(candidate, {
       rewriteFormula(value, formulaSheet) {
         return rewriteFormulaForRectangularRowEdit(value, {
           formulaSheetId: formulaSheet.name,
           editedSheetId: editedSheet.name,
+          sheetOrder,
           tableColumnStart: table.range.start.column,
           tableColumnEnd: table.range.end.column,
           tableRowEnd,
@@ -333,6 +335,7 @@ export function rewriteWorkbookForRowMove(
   options: RewriteWorkbookForRowEditsOptions = {}
 ): RewriteOutcome {
   const editedSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId)!;
+  const sheetOrder = workbook.sheets.map((sheet) => sheet.name);
   const generatedTotals = new Set(table.columns
     .filter((column) => column.totalsFunction && column.totalsFunction !== "none")
     .map((column) => formatCellAddress({ row: move.sourceRow, column: column.sheetColumn })));
@@ -344,6 +347,7 @@ export function rewriteWorkbookForRowMove(
       return rewriteFormulaForRectangularRowMove(value, {
         formulaSheetId: formulaSheet.name,
         editedSheetId: editedSheet.name,
+        sheetOrder,
         tableColumnStart: move.columnStart,
         tableColumnEnd: move.columnEnd,
         sourceRow: move.sourceRow,
