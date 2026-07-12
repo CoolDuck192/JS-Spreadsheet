@@ -116,6 +116,8 @@ describe("useGoogleSheetsImport", () => {
 
   it("lets a direct provider bypass built-in client and LAN-origin setup", async () => {
     const direct = provider();
+    const invalidateAccessToken = vi.fn();
+    Object.assign(direct, { invalidateAccessToken });
     const clientIdStorage = storage();
     googleMocks.importWorkbook.mockResolvedValue(result());
     const onImported = vi.fn();
@@ -138,6 +140,12 @@ describe("useGoogleSheetsImport", () => {
       expect.objectContaining({ getAccessToken: expect.any(Function) })
     );
     expect(googleMocks.importWorkbook.mock.calls[0][1]).not.toBe(direct);
+    const trackedProvider = googleMocks.importWorkbook.mock.calls[0][1] as TokenProvider & {
+      invalidateAccessToken?(scopes: readonly string[]): void | Promise<void>;
+    };
+    expect(trackedProvider.invalidateAccessToken).toBeTypeOf("function");
+    await trackedProvider.invalidateAccessToken?.(["scope"]);
+    expect(invalidateAccessToken).toHaveBeenCalledWith(["scope"]);
     await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
   });
 

@@ -1,12 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GoogleSheetsError, toGoogleSheetsError } from "./googleErrors";
 import { importWorkbookFromGoogleSheets, parseSpreadsheetId } from "./googleSheets";
-import type { TokenProvider } from "./googleAuth";
+import { SHEETS_READONLY_SCOPE, type TokenProvider } from "./googleAuth";
 
 const SPREADSHEET_ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms";
 
 const getAccessToken = vi.fn<(scopes: readonly string[]) => Promise<string>>();
-const stubTokenProvider: TokenProvider = { getAccessToken };
+const invalidateAccessToken = vi.fn<(scopes: readonly string[]) => void | Promise<void>>();
+const stubTokenProvider = {
+  getAccessToken,
+  invalidateAccessToken
+} as TokenProvider & {
+  invalidateAccessToken(scopes: readonly string[]): void | Promise<void>;
+};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -37,6 +43,7 @@ describe("importWorkbookFromGoogleSheets", () => {
   beforeEach(() => {
     getAccessToken.mockReset();
     getAccessToken.mockResolvedValue("test-token");
+    invalidateAccessToken.mockReset();
   });
 
   it("imports sheets, values, and formulas into a workbook model", async () => {
@@ -96,6 +103,20 @@ describe("importWorkbookFromGoogleSheets", () => {
     expect(error.code).toBe("access_denied");
     expect(error.message).not.toContain("private response body");
     expect(error.message).not.toContain("test-token");
+    expect(invalidateAccessToken).toHaveBeenCalledWith([SHEETS_READONLY_SCOPE]);
+  });
+
+  it("keeps the access-denied error when token invalidation fails", async () => {
+    invalidateAccessToken.mockRejectedValueOnce(new Error("private invalidation failure"));
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 401));
+
+    const error = await captureGoogleError(
+      importWorkbookFromGoogleSheets(SPREADSHEET_ID, stubTokenProvider, fetchImpl as typeof fetch)
+    );
+
+    expect(invalidateAccessToken).toHaveBeenCalledWith([SHEETS_READONLY_SCOPE]);
+    expect(error).toMatchObject({ code: "access_denied", recoverable: true });
+    expect(error.message).not.toContain("private invalidation failure");
   });
 
   it("distinguishes a disabled Sheets API from ordinary HTTP 403", async () => {
@@ -119,6 +140,7 @@ describe("importWorkbookFromGoogleSheets", () => {
     expect(error.code).toBe("api_not_enabled");
     expect(error.message).not.toContain("private API response body");
     expect(error.message).not.toContain("test-token");
+    expect(invalidateAccessToken).not.toHaveBeenCalled();
   });
 
   it("recognizes modern SERVICE_DISABLED details without exposing metadata or help URLs", async () => {

@@ -5,7 +5,7 @@ import { createBrowserTokenProvider, SHEETS_READONLY_SCOPE } from "./googleAuth"
 const CLIENT_ID = "123-abc.apps.googleusercontent.com";
 const GIS_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 
-type TokenResponse = { access_token?: string; error?: string };
+type TokenResponse = { access_token?: string; expires_in?: number; error?: string };
 type TokenFailure = { type?: string; message?: string };
 type TokenClientConfiguration = {
   callback: (response: TokenResponse) => void;
@@ -71,6 +71,41 @@ describe("createBrowserTokenProvider", () => {
 
     await expect(provider.getAccessToken([SHEETS_READONLY_SCOPE])).resolves.toBe("token");
     expect(requestAccessToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates a cached token for the requested scopes", async () => {
+    const { configurations, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID) as ReturnType<typeof createBrowserTokenProvider> & {
+      invalidateAccessToken?(scopes: readonly string[]): void | Promise<void>;
+    };
+    await provider.prepare();
+
+    const first = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    configurations[0]?.callback({ access_token: "first-token" });
+    await expect(first).resolves.toBe("first-token");
+
+    expect(provider.invalidateAccessToken).toBeTypeOf("function");
+    await provider.invalidateAccessToken?.([SHEETS_READONLY_SCOPE]);
+    const retry = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+
+    expect(requestAccessToken).toHaveBeenCalledTimes(2);
+    configurations[1]?.callback({ access_token: "retry-token" });
+    await expect(retry).resolves.toBe("retry-token");
+  });
+
+  it("does not reuse a token inside its reported expiry safety window", async () => {
+    const { configurations, requestAccessToken } = installGoogleIdentityServices();
+    const provider = createBrowserTokenProvider(CLIENT_ID);
+    await provider.prepare();
+
+    const first = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    configurations[0]?.callback({ access_token: "short-token", expires_in: 60 });
+    await expect(first).resolves.toBe("short-token");
+
+    const retry = provider.getAccessToken([SHEETS_READONLY_SCOPE]);
+    expect(requestAccessToken).toHaveBeenCalledTimes(2);
+    configurations[1]?.callback({ access_token: "fresh-token", expires_in: 3600 });
+    await expect(retry).resolves.toBe("fresh-token");
   });
 
   it("prepares lazily when a caller requests a token directly", async () => {

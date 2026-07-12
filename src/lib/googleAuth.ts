@@ -30,7 +30,11 @@ type GoogleIdentityServices = {
       initTokenClient: (config: {
         client_id: string;
         scope: string;
-        callback: (response: { access_token?: string; error?: string }) => void;
+        callback: (response: {
+          access_token?: string;
+          expires_in?: number;
+          error?: string;
+        }) => void;
         error_callback?: (error: { type?: string; message?: string }) => void;
       }) => GoogleTokenClient;
     };
@@ -100,11 +104,11 @@ export function createBrowserTokenProvider(clientId: string): BrowserTokenProvid
         if (inFlight) return inFlight;
 
         const request = requestToken(preparedGoogle, normalizedClientId, scopeKey).then(
-          (token) => {
+          ({ token, lifetimeMs }) => {
             cached = {
               token,
               scopeKey,
-              expiresAt: Date.now() + ASSUMED_TOKEN_LIFETIME_MS
+              expiresAt: Date.now() + lifetimeMs
             };
             pending.delete(scopeKey);
             return token;
@@ -119,6 +123,13 @@ export function createBrowserTokenProvider(clientId: string): BrowserTokenProvid
       }
 
       return provider.prepare().then(() => provider.getAccessToken(scopes));
+    },
+
+    invalidateAccessToken(scopes) {
+      const scopeKey = [...scopes].sort().join(" ");
+      if (cached?.scopeKey === scopeKey) {
+        cached = null;
+      }
     }
   };
 
@@ -129,15 +140,22 @@ function requestToken(
   google: GoogleIdentityServices,
   clientId: string,
   scopeKey: string
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+): Promise<{ token: string; lifetimeMs: number }> {
+  return new Promise((resolve, reject) => {
     try {
       const client = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: scopeKey,
         callback: (response) => {
           if (typeof response.access_token === "string" && response.access_token) {
-            resolve(response.access_token);
+            const expiresIn = response.expires_in;
+            resolve({
+              token: response.access_token,
+              lifetimeMs:
+                typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0
+                  ? expiresIn * 1000
+                  : ASSUMED_TOKEN_LIFETIME_MS
+            });
             return;
           }
           reject(oauthResponseError(response.error));

@@ -415,6 +415,9 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOperation({ phase: "authorizing" });
 
     const trackedProvider: TokenProvider = {
+      invalidateAccessToken(scopes) {
+        return provider.invalidateAccessToken?.(scopes);
+      },
       getAccessToken(scopes) {
         let pendingToken: Promise<string>;
         try {

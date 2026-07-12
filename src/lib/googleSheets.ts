@@ -59,7 +59,12 @@ export async function importWorkbookFromGoogleSheets(
   const metadata = await fetchJson<{
     properties?: { title?: string };
     sheets?: Array<{ properties?: { title?: string; hidden?: boolean } }>;
-  }>(`${SHEETS_API_BASE}/${spreadsheetId}?fields=properties.title,sheets.properties(title,hidden)`, authHeaders, fetchImpl);
+  }>(
+    `${SHEETS_API_BASE}/${spreadsheetId}?fields=properties.title,sheets.properties(title,hidden)`,
+    authHeaders,
+    fetchImpl,
+    () => invalidateAccessToken(tokenProvider)
+  );
 
   const sheetTitles = (metadata.sheets ?? [])
     .map((sheet) => sheet.properties?.title)
@@ -78,7 +83,8 @@ export async function importWorkbookFromGoogleSheets(
   }>(
     `${SHEETS_API_BASE}/${spreadsheetId}/values:batchGet?${rangesQuery}&valueRenderOption=FORMULA&dateTimeRenderOption=FORMATTED_STRING`,
     authHeaders,
-    fetchImpl
+    fetchImpl,
+    () => invalidateAccessToken(tokenProvider)
   );
 
   const hiddenByTitle = new Map(
@@ -104,7 +110,12 @@ export async function importWorkbookFromGoogleSheets(
   };
 }
 
-async function fetchJson<T>(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  headers: Record<string, string>,
+  fetchImpl: typeof fetch,
+  onAccessDenied?: () => void | Promise<void>
+): Promise<T> {
   let response: Response;
   try {
     response = await fetchImpl(url, { headers });
@@ -124,6 +135,12 @@ async function fetchJson<T>(url: string, headers: Record<string, string>, fetchI
       );
     }
     if (response.status === 401 || response.status === 403) {
+      try {
+        await onAccessDenied?.();
+      } catch {
+        // Keep the safe API error as the user-facing failure. Token-cache
+        // invalidation is best effort and must not expose provider details.
+      }
       throw new GoogleSheetsError(
         "access_denied",
         "Google Sheets access was denied. Sign in again or check the sheet sharing settings.",
@@ -159,6 +176,10 @@ async function fetchJson<T>(url: string, headers: Record<string, string>, fetchI
       true
     );
   }
+}
+
+function invalidateAccessToken(tokenProvider: TokenProvider): void | Promise<void> {
+  return tokenProvider.invalidateAccessToken?.([SHEETS_READONLY_SCOPE]);
 }
 
 const API_DISABLED_STATUSES = new Set(["SERVICE_DISABLED", "API_NOT_ENABLED"]);
