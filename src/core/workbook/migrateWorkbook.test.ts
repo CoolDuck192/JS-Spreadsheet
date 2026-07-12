@@ -10,16 +10,25 @@ describe("workbook model migration", () => {
         return originalToLocaleLowerCase.call(this, "tr");
       });
     let workbook = createBlankWorkbook();
+    let migratedDuplicateFixture: ReturnType<typeof migrateWorkbookModel>;
 
     try {
       workbook = defineNamedRange(workbook, workbook.activeSheetId, "ID", cellRange());
       workbook = defineNamedRange(workbook, workbook.activeSheetId, "id", cellRange());
+      const persisted = createBlankWorkbook();
+      migratedDuplicateFixture = migrateWorkbookModel({
+        ...persisted,
+        namedRanges: [
+          { name: "ID", sheetId: persisted.activeSheetId, range: cellRange() },
+          { name: "id", sheetId: persisted.activeSheetId, range: cellRange() }
+        ]
+      });
     } finally {
       localeLowerCase.mockRestore();
     }
 
     expect(workbook.namedRanges).toHaveLength(1);
-    expect(migrateWorkbookModel(JSON.parse(JSON.stringify(workbook)))).not.toBeNull();
+    expect(migratedDuplicateFixture!).toBeNull();
   });
 
   it("migrates a valid version 1 workbook to version 2", () => {
