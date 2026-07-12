@@ -366,7 +366,7 @@ function compareCategories(left: unknown, right: unknown, nulls?: "first" | "las
 }
 
 function valueCategory(value: unknown, nulls?: "first" | "last"): number {
-  if (value === null) return nulls === "first" ? 0 : 3;
+  if (value === null || value === undefined) return nulls === "first" ? 0 : 3;
   if (value === "") return 3;
   if (isEvaluationError(value)) return 2;
   return 1;
@@ -388,7 +388,7 @@ function isEvaluationError(value: unknown): value is { kind: "error"; code: stri
 
 function toQueryScalar<TRow>(value: unknown, column: AnyColumn<TRow>): QueryScalar {
   if (isEvaluationError(value)) return { type: "error", value: value.code };
-  if (value === null) return { type: "null" };
+  if (value === null || value === undefined) return { type: "null" };
   if (typeof value === "number") return { type: "number", value };
   if (typeof value === "boolean") return { type: "boolean", value };
   if (column.dataType === "date") return { type: "date", value: String(value) };

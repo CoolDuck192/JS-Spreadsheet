@@ -28,10 +28,10 @@ export function matchesFilter<TRow>(
 
   if (expression.kind === "blank") {
     const matched = expression.operator === "isNull" || expression.operator === "isNotNull"
-      ? value === null
+      ? value === null || value === undefined
       : expression.operator === "isEmpty" || expression.operator === "isNotEmpty"
         ? value === ""
-        : value === null || value === "";
+        : value === null || value === undefined || value === "";
     return expression.operator === "isNotNull"
       || expression.operator === "isNotEmpty"
       || expression.operator === "isNotBlank"
@@ -91,7 +91,7 @@ function compareToScalar<TRow>(
   column: ColumnDef<TRow, any>
 ): number | null {
   if (scalar.type === "null") {
-    return value === null ? 0 : null;
+    return value === null || value === undefined ? 0 : null;
   }
   if (scalar.type === "error") {
     return isEvaluationError(value) && value.code === scalar.value ? 0 : null;

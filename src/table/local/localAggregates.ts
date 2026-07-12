@@ -16,7 +16,7 @@ export function calculateLocalAggregates<TRow>(
     }
     const values = rows
       .map(({ row, rowId }) => getValue(row, rowId, request.columnId))
-      .filter((value) => value !== null && !isEvaluationError(value));
+      .filter((value) => value !== null && value !== undefined && !isEvaluationError(value));
     switch (request.function) {
       case "count":
         result[request.id] = values.length;

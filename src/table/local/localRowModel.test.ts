@@ -47,6 +47,40 @@ describe("buildLocalRowModel", () => {
     expect(inactive.items.map((row) => row.id)).toEqual(["1", "3"]);
   });
 
+  it("treats undefined accessor values as blanks in filters, aggregates, and groups", () => {
+    type OptionalRow = { id: string; bonus?: number };
+    const optionalHelper = createColumnHelper<OptionalRow>();
+    const optionalColumns = [
+      optionalHelper.accessor("bonus", { id: "bonus", header: "Bonus", dataType: "number" })
+    ];
+    const optionalRows: readonly OptionalRow[] = [
+      { id: "missing-1" },
+      { id: "paid", bonus: 10 },
+      { id: "missing-2" }
+    ];
+
+    const blank = buildLocalRowModel(optionalRows, optionalColumns, query({
+      filter: { kind: "blank", columnId: "bonus", operator: "isBlank" }
+    }), (row) => row.id);
+    const counted = buildLocalRowModel(optionalRows, optionalColumns, query({
+      aggregates: [{ id: "bonus-count", columnId: "bonus", function: "count" }]
+    }), (row) => row.id);
+    const grouped = buildLocalRowModel(optionalRows, optionalColumns, query({
+      grouping: [{ columnId: "bonus" }]
+    }), (row) => row.id);
+
+    expect(blank.items.map((row) => row.id)).toEqual(["missing-1", "missing-2"]);
+    expect(counted.items.at(-1)).toMatchObject({
+      kind: "aggregate",
+      aggregates: { "bonus-count": 1 }
+    });
+    expect(grouped.items).toContainEqual(expect.objectContaining({
+      kind: "group",
+      key: { type: "null" },
+      count: 2
+    }));
+  });
+
   it("sorts stably, groups, and aggregates the complete dataset", () => {
     const model = buildLocalRowModel(rows, columns, query({
       sorting: [{ columnId: "salary", direction: "desc", nulls: "last" }],
