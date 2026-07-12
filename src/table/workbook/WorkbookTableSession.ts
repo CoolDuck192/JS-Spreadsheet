@@ -127,8 +127,13 @@ export function createWorkbookTableSession(
           if (intent.selection === null) {
             return commitLocal(() => { localSelection = null; });
           }
-          localSelection = undefined;
-          return dispatchSelection(table, intent.selection);
+          {
+            const result = dispatchSelection(table, intent.selection);
+            if (result.status !== "committed" || localSelection === undefined) return result;
+            if (!result.changed) return commitLocal(() => { localSelection = undefined; });
+            localSelection = undefined;
+            return result;
+          }
         case "set-row-selection":
           if (intent.rowIds.some((rowId) => !table.rowIds.includes(rowId))) {
             return rejected("validation", "TABLE_ROW_NOT_FOUND", "Selected table row does not exist");

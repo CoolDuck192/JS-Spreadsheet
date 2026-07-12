@@ -335,6 +335,42 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("preserves a local null selection after a replacement selection is rejected", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    const worksheetSelection = {
+      anchor: { rowId: "row-ada", columnId: "column-name" },
+      focus: { rowId: "row-ada", columnId: "column-name" }
+    } as const;
+    expect(await table.dispatch({ type: "set-selection", selection: worksheetSelection }))
+      .toMatchObject({ status: "committed" });
+    expect(await table.dispatch({ type: "set-selection", selection: null }))
+      .toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({
+      type: "set-selection",
+      selection: {
+        anchor: { rowId: "missing", columnId: "column-name" },
+        focus: { rowId: "missing", columnId: "column-name" }
+      }
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(parent.dispatch({
+      type: "cell.set",
+      sheetId: "sheet-1",
+      address: "D1",
+      input: "unrelated"
+    })).toMatchObject({ status: "committed" });
+    expect(table.getSnapshot().selection).toBeNull();
+
+    let publications = 0;
+    table.subscribe(() => { publications += 1; });
+    expect(await table.dispatch({ type: "set-selection", selection: worksheetSelection }))
+      .toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(1);
+    expect(table.getSnapshot().selection).toEqual(worksheetSelection);
+    parent.destroy();
+  });
+
   it("keeps local view state local and exposes unsupported features honestly", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
