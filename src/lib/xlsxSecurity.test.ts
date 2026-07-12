@@ -3,6 +3,11 @@ import { zipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  makeDenseWorksheetPackage,
+  makeLargeDenseWorksheetPackage
+} from "../test/xlsxSecurityFixtures";
+
+import {
   validateXlsxArchive,
   type XlsxSecurityLimits
 } from "./xlsxSecurity";
@@ -11,6 +16,10 @@ const TABLE_RELATIONSHIP_TYPE =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 const TABLE_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+const WORKSHEET_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const SHARED_STRINGS_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 
 const encoder = new TextEncoder();
 
@@ -22,11 +31,31 @@ type PackageOptions = {
   extraEntries?: Readonly<Record<string, Uint8Array | string>>;
 };
 
-function contentTypes(contentType = TABLE_CONTENT_TYPE): string {
+function contentTypes(
+  contentType = TABLE_CONTENT_TYPE,
+  extraOverrides: ReadonlyArray<readonly [partName: string, contentType: string]> = []
+): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
     <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
       <Override PartName="/xl/tables/table1.xml" ContentType="${contentType}"/>
+      ${extraOverrides.map(([partName, type]) =>
+        `<Override PartName="${partName}" ContentType="${type}"/>`
+      ).join("")}
     </Types>`;
+}
+
+function worksheetContentTypes(): string {
+  return contentTypes(TABLE_CONTENT_TYPE, [[
+    "/xl/worksheets/sheet1.xml",
+    WORKSHEET_CONTENT_TYPE
+  ]]);
+}
+
+function sharedStringsContentTypes(): string {
+  return contentTypes(TABLE_CONTENT_TYPE, [[
+    "/xl/sharedStrings.xml",
+    SHARED_STRINGS_CONTENT_TYPE
+  ]]);
 }
 
 function relationships(
@@ -72,6 +101,27 @@ function makePackage(options: PackageOptions = {}): Uint8Array {
   }
 
   return zipSync(entries, { level: 0 });
+}
+
+let overFloorRows: string | undefined;
+let overFloorSharedStringItems: string | undefined;
+
+function worksheetRowsAboveFixedElementLimit(): string {
+  overFloorRows ??= `<row>${"<c><v/></c>".repeat(10)}</row>`.repeat(47_620);
+  return overFloorRows;
+}
+
+function sharedStringItemsAboveFixedElementLimit(): string {
+  overFloorSharedStringItems ??= "<si><r><t>x</t></r></si>".repeat(333_334);
+  return overFloorSharedStringItems;
+}
+
+function worksheetWithDimension(
+  beforeSheetData: string,
+  afterSheetData = "",
+  rootAttributes = ""
+): string {
+  return `<worksheet${rootAttributes}>${beforeSheetData}<sheetData>${worksheetRowsAboveFixedElementLimit()}</sheetData>${afterSheetData}</worksheet>`;
 }
 
 function readU16(bytes: Uint8Array, offset: number): number {
@@ -299,6 +349,242 @@ describe("validateXlsxArchive ZIP preflight", () => {
 });
 
 describe("validateXlsxArchive bounded XML validation", () => {
+  it("accepts a dense A1:J100000 worksheet at the import security seam", () => {
+    expect(validateXlsxArchive(makeDenseWorksheetPackage())).toEqual({ ok: true });
+  });
+
+  it("allows a dense worksheet entry above 32 MiB by default but honors an explicit low byte limit", () => {
+    const data = makeLargeDenseWorksheetPackage();
+
+    expect(validateXlsxArchive(data)).toEqual({ ok: true });
+    expectRejectedBeforeLoad(data, "XLSX_ARCHIVE_LIMIT", {
+      maxEntryBytes: 32 * 1024 * 1024
+    });
+  });
+
+  it.each([
+    ["missing", null],
+    ["wrong", "application/xml"]
+  ])("does not grant worksheet node scaling for a %s content type", (
+    _label,
+    worksheetContentType
+  ) => {
+    expectRejectedBeforeLoad(
+      makeDenseWorksheetPackage(worksheetContentType),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
+  it.each([
+    ["missing", null],
+    ["wrong", "application/xml"]
+  ])("does not grant the worksheet 64 MiB limit for a %s content type", (
+    _label,
+    worksheetContentType
+  ) => {
+    expectRejectedBeforeLoad(
+      makeLargeDenseWorksheetPackage(worksheetContentType),
+      "XLSX_ARCHIVE_LIMIT"
+    );
+  });
+
+  it("keeps explicit low XML limits authoritative over a valid worksheet dimension", () => {
+    expectRejectedBeforeLoad(
+      makeDenseWorksheetPackage(),
+      "XLSX_XML_UNSAFE",
+      { maxXmlElements: 1_000_000 }
+    );
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: worksheetContentTypes(),
+        worksheetXml:
+          '<worksheet><dimension ref="A1:J100000"/><sheetData>' +
+          '<row r="1"><c r="A1" t="n"/></row></sheetData></worksheet>'
+      }),
+      "XLSX_XML_UNSAFE",
+      { maxXmlAttributes: 3 }
+    );
+  });
+
+  it.each([
+    ["missing", "", "", ""],
+    ["invalid", '<dimension ref="A0:J47620"/>', "", ""],
+    [
+      "duplicate",
+      '<dimension ref="A1:J47620"/><dimension ref="A1:J47620"/>',
+      "",
+      ""
+    ],
+    [
+      "namespace-prefixed",
+      '<evil:dimension ref="A1:J47620"/>',
+      "",
+      ' xmlns:evil="urn:example:evil"'
+    ],
+    ["out-of-bounds", '<dimension ref="A1:XFE47620"/>', "", ""],
+    [
+      "unsafe-integer",
+      '<dimension ref="A1:J9007199254740992"/>',
+      "",
+      ""
+    ]
+  ])("does not scale the parser for a %s worksheet dimension", (
+    _label,
+    beforeSheetData,
+    afterSheetData,
+    rootAttributes
+  ) => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: worksheetContentTypes(),
+        worksheetXml: worksheetWithDimension(
+          beforeSheetData,
+          afterSheetData,
+          rootAttributes
+        )
+      }),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
+  it("does not scale the parser for a dimension after sheetData", () => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: worksheetContentTypes(),
+        worksheetXml: worksheetWithDimension(
+          "",
+          '<dimension ref="A1:J47620"/>'
+        )
+      }),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
+  it("clamps a hostile full-sheet dimension to the immutable element cap", () => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: worksheetContentTypes(),
+        worksheetXml:
+          '<worksheet><dimension ref="A1:XFD1048576"/><sheetData>' +
+          "<c/>".repeat(4_000_000) +
+          "</sheetData></worksheet>"
+      }),
+      "XLSX_XML_UNSAFE",
+      { maxXmlElements: 4_000_001 }
+    );
+  });
+
+  it("scales sharedStrings from safe root counts above the fixed element limit", () => {
+    expect(validateXlsxArchive(makePackage({
+      contentTypesXml: sharedStringsContentTypes(),
+      extraEntries: {
+        "xl/sharedStrings.xml":
+          '<sst count="333334" uniqueCount="333334">' +
+          sharedStringItemsAboveFixedElementLimit() +
+          "</sst>"
+      }
+    }))).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["negative", 'count="-1" uniqueCount="-1"'],
+    ["unsafe integer", 'count="9007199254740992" uniqueCount="333334"'],
+    ["unique count above count", 'count="333333" uniqueCount="333334"'],
+    [
+      "namespace-prefixed",
+      'xmlns:evil="urn:example:evil" evil:count="333334" evil:uniqueCount="333334"'
+    ]
+  ])("does not scale sharedStrings for %s root counts", (_label, attributes) => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: sharedStringsContentTypes(),
+        extraEntries: {
+          "xl/sharedStrings.xml":
+            `<sst ${attributes}>` +
+            sharedStringItemsAboveFixedElementLimit() +
+            "</sst>"
+        }
+      }),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
+  it.each([
+    ["missing", null],
+    ["wrong", "application/xml"]
+  ])("does not grant sharedStrings node scaling for a %s content type", (
+    _label,
+    sharedStringsContentType
+  ) => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: contentTypes(
+          TABLE_CONTENT_TYPE,
+          sharedStringsContentType === null
+            ? []
+            : [["/xl/sharedStrings.xml", sharedStringsContentType]]
+        ),
+        extraEntries: {
+          "xl/sharedStrings.xml":
+            '<sst count="333334" uniqueCount="333334">' +
+            sharedStringItemsAboveFixedElementLimit() +
+            "</sst>"
+        }
+      }),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
+  it("allows sharedStrings above 32 MiB under its 64 MiB default", () => {
+    expect(validateXlsxArchive(makePackage({
+      contentTypesXml: sharedStringsContentTypes(),
+      extraEntries: {
+        "xl/sharedStrings.xml":
+          '<sst count="1" uniqueCount="1"><si><t>' +
+          "x".repeat(32 * 1024 * 1024) +
+          "</t></si></sst>"
+      }
+    }))).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["missing", null],
+    ["wrong", "application/xml"]
+  ])("does not grant the sharedStrings 64 MiB limit for a %s content type", (
+    _label,
+    sharedStringsContentType
+  ) => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        contentTypesXml: contentTypes(
+          TABLE_CONTENT_TYPE,
+          sharedStringsContentType === null
+            ? []
+            : [["/xl/sharedStrings.xml", sharedStringsContentType]]
+        ),
+        extraEntries: {
+          "xl/sharedStrings.xml":
+            '<sst count="1" uniqueCount="1"><si><t>' +
+            "x".repeat(32 * 1024 * 1024) +
+            "</t></si></sst>"
+        }
+      }),
+      "XLSX_ARCHIVE_LIMIT"
+    );
+  });
+
+  it("does not scale table XML from its body ref", () => {
+    expectRejectedBeforeLoad(
+      makePackage({
+        tableXml:
+          '<table name="Table1" ref="A1:J100000">' +
+          "<a/>".repeat(1_000_000) +
+          "</table>"
+      }),
+      "XLSX_XML_UNSAFE"
+    );
+  });
+
   it("accepts a legitimate worksheet above the former global element budget", () => {
     const cells = "<c/>".repeat(120_000);
 

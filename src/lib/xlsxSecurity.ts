@@ -84,6 +84,25 @@ const ZIP64_U32_SENTINEL = 0xffffffff;
 const DATA_DESCRIPTOR_FLAG = 0x0008;
 const ENCRYPTION_FLAGS = 0x0041;
 const UTF8_NAME_FLAG = 0x0800;
+const LARGE_XML_ENTRY_BYTES = 64 * 1024 * 1024;
+const MAX_WORKSHEET_ROWS = 1_048_576;
+const MAX_WORKSHEET_COLUMNS = 16_384;
+const XML_BUDGET_BASE = 1_024;
+const MAX_PART_XML_ELEMENTS = 4_000_000;
+const MAX_PART_XML_ATTRIBUTES = 8_000_000;
+const SPREADSHEETML_NAMESPACES = new Set([
+  "",
+  "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+  "http://purl.oclc.org/ooxml/spreadsheetml/main"
+]);
+const WORKSHEET_CONTENT_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+  "application/vnd.ms-excel.worksheet+xml"
+]);
+const SHARED_STRINGS_CONTENT_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
+  "application/vnd.ms-excel.sharedStrings+xml"
+]);
 const TABLE_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 const TABLE_RELATIONSHIP_TYPES = new Set([
@@ -230,9 +249,25 @@ function isTableXmlPath(name: string): boolean {
   return /^xl\/tables\/[^/]+\.xml$/i.test(name);
 }
 
+function isWorksheetXmlPath(name: string): boolean {
+  return /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
+}
+
+function isSharedStringsXmlPath(name: string): boolean {
+  return name.toLowerCase() === "xl/sharedstrings.xml";
+}
+
+function hasExplicitLimit(
+  overrides: Partial<XlsxSecurityLimits> | undefined,
+  name: keyof XlsxSecurityLimits
+): boolean {
+  return Object.prototype.hasOwnProperty.call(overrides ?? {}, name);
+}
+
 function parseArchive(
   bytes: Uint8Array,
-  limits: XlsxSecurityLimits
+  limits: XlsxSecurityLimits,
+  limitOverrides: Partial<XlsxSecurityLimits> | undefined
 ): ParsedArchive {
   const eocdOffset = findEndOfCentralDirectory(bytes);
   const diskNumber = readU16(bytes, eocdOffset + 4, "ZIP disk number");
@@ -353,7 +388,12 @@ function parseArchive(
       name
     );
 
-    if (uncompressedSize > limits.maxEntryBytes) {
+    const maxEntryBytes = hasExplicitLimit(limitOverrides, "maxEntryBytes")
+      ? limits.maxEntryBytes
+      : isWorksheetXmlPath(name) || isSharedStringsXmlPath(name)
+        ? LARGE_XML_ENTRY_BYTES
+        : limits.maxEntryBytes;
+    if (uncompressedSize > maxEntryBytes) {
       reject(
         "XLSX_ARCHIVE_LIMIT",
         `ZIP entry ${name} exceeds the per-entry size limit.`
@@ -627,6 +667,88 @@ function decodeXml(bytes: Uint8Array, name: string): string {
 }
 
 type XmlCounts = { elements: number; attributes: number };
+type XmlPartKind = "generic" | "worksheet" | "shared-strings";
+
+function checkedMultiply(left: number, right: number): number | null {
+  const result = left * right;
+  return Number.isSafeInteger(result) ? result : null;
+}
+
+function checkedBudgetAdd(left: number, right: number): number | null {
+  const result = left + right;
+  return Number.isSafeInteger(result) ? result : null;
+}
+
+function worksheetColumnNumber(value: string): number | null {
+  let column = 0;
+  for (const character of value) {
+    column = column * 26 + character.charCodeAt(0) - 64;
+    if (!Number.isSafeInteger(column) || column > MAX_WORKSHEET_COLUMNS) return null;
+  }
+  return column > 0 ? column : null;
+}
+
+function worksheetDimensionBudget(value: string): XmlCounts | null {
+  const match = /^([A-Z]{1,3})([1-9]\d*)(?::([A-Z]{1,3})([1-9]\d*))?$/.exec(
+    value
+  );
+  if (!match) return null;
+
+  const startColumn = worksheetColumnNumber(match[1]);
+  const endColumn = worksheetColumnNumber(match[3] ?? match[1]);
+  const startRow = Number(match[2]);
+  const endRow = Number(match[4] ?? match[2]);
+  if (
+    startColumn === null ||
+    endColumn === null ||
+    !Number.isSafeInteger(startRow) ||
+    !Number.isSafeInteger(endRow) ||
+    startRow < 1 ||
+    endRow < startRow ||
+    endRow > MAX_WORKSHEET_ROWS ||
+    endColumn < startColumn
+  ) {
+    return null;
+  }
+
+  const rows = endRow - startRow + 1;
+  const columns = endColumn - startColumn + 1;
+  const cells = checkedMultiply(rows, columns);
+  if (cells === null) return null;
+
+  const cellElements = checkedMultiply(cells, 3);
+  const rowAttributes = checkedMultiply(rows, 4);
+  const cellAttributes = checkedMultiply(cells, 4);
+  if (cellElements === null || rowAttributes === null || cellAttributes === null) {
+    return null;
+  }
+
+  const elementsWithRows = checkedBudgetAdd(XML_BUDGET_BASE, rows);
+  const attributesWithRows = checkedBudgetAdd(XML_BUDGET_BASE, rowAttributes);
+  if (elementsWithRows === null || attributesWithRows === null) return null;
+  const elements = checkedBudgetAdd(elementsWithRows, cellElements);
+  const attributes = checkedBudgetAdd(attributesWithRows, cellAttributes);
+  return elements === null || attributes === null ? null : { elements, attributes };
+}
+
+function safeNonNegativeInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function sharedStringsBudget(tag: SaxesTagNS): XmlCounts | null {
+  const count = safeNonNegativeInteger(saxAttribute(tag, "count"));
+  const uniqueCount = safeNonNegativeInteger(saxAttribute(tag, "uniqueCount"));
+  if (count === null || uniqueCount === null || uniqueCount > count) return null;
+
+  const stringElements = checkedMultiply(uniqueCount, 3);
+  const stringAttributes = checkedMultiply(uniqueCount, 4);
+  if (stringElements === null || stringAttributes === null) return null;
+  const elements = checkedBudgetAdd(XML_BUDGET_BASE, stringElements);
+  const attributes = checkedBudgetAdd(XML_BUDGET_BASE, stringAttributes);
+  return elements === null || attributes === null ? null : { elements, attributes };
+}
 
 type TableRelationshipSummary = {
   target: string;
@@ -657,8 +779,10 @@ function saxAttribute(tag: SaxesTagNS, wantedName: string): string {
 function scanSafeXml(
   xml: string,
   name: string,
+  partKind: XmlPartKind,
   limits: XlsxSecurityLimits,
-  totalCounts: XmlCounts
+  totalCounts: XmlCounts,
+  limitOverrides: Partial<XlsxSecurityLimits> | undefined
 ): XmlPartSummary {
   if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml)) {
     reject("XLSX_XML_UNSAFE", `XML declarations are unsafe in ${name}.`);
@@ -666,6 +790,8 @@ function scanSafeXml(
 
   const isContentTypes = name === "[Content_Types].xml";
   const isRelationships = name.toLowerCase().endsWith(".rels");
+  const isWorksheet = partKind === "worksheet";
+  const isSharedStrings = partKind === "shared-strings";
   const partCounts: XmlCounts = { elements: 0, attributes: 0 };
   const overrides = new Map<string, string>();
   const defaults = new Map<string, string>();
@@ -673,6 +799,43 @@ function scanSafeXml(
   const tableRelationships: TableRelationshipSummary[] = [];
   let depth = 0;
   let rootName = "";
+  let rootPrefix = "";
+  let rootUri = "";
+  const fixedElementLimit = Math.min(limits.maxXmlElements, MAX_PART_XML_ELEMENTS);
+  const fixedAttributeLimit = Math.min(limits.maxXmlAttributes, MAX_PART_XML_ATTRIBUTES);
+  let partElementLimit = fixedElementLimit;
+  let partAttributeLimit = fixedAttributeLimit;
+  let worksheetDimensionCount = 0;
+  let worksheetSheetDataSeen = false;
+
+  const enforcePartCounts = (): void => {
+    if (partCounts.elements > partElementLimit) {
+      reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML element limit.`);
+    }
+    if (partCounts.attributes > partAttributeLimit) {
+      reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML attribute limit.`);
+    }
+  };
+  const applyScaledBudget = (budget: XmlCounts | null): void => {
+    if (budget === null) {
+      partElementLimit = fixedElementLimit;
+      partAttributeLimit = fixedAttributeLimit;
+    } else {
+      if (!hasExplicitLimit(limitOverrides, "maxXmlElements")) {
+        partElementLimit = Math.min(
+          MAX_PART_XML_ELEMENTS,
+          Math.max(fixedElementLimit, budget.elements)
+        );
+      }
+      if (!hasExplicitLimit(limitOverrides, "maxXmlAttributes")) {
+        partAttributeLimit = Math.min(
+          MAX_PART_XML_ATTRIBUTES,
+          Math.max(fixedAttributeLimit, budget.attributes)
+        );
+      }
+    }
+    enforcePartCounts();
+  };
 
   try {
     const parser = new SaxesParser({
@@ -690,9 +853,7 @@ function scanSafeXml(
       if (depth > limits.maxXmlDepth) {
         reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the depth limit.`);
       }
-      if (partCounts.elements > limits.maxXmlElements) {
-        reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML element limit.`);
-      }
+      enforcePartCounts();
       if (totalCounts.elements > limits.maxTotalXmlElements) {
         reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML element limit.");
       }
@@ -700,15 +861,51 @@ function scanSafeXml(
     parser.on("attribute", () => {
       partCounts.attributes += 1;
       totalCounts.attributes += 1;
-      if (partCounts.attributes > limits.maxXmlAttributes) {
-        reject("XLSX_XML_UNSAFE", `XML part ${name} exceeds the XML attribute limit.`);
-      }
+      enforcePartCounts();
       if (totalCounts.attributes > limits.maxTotalXmlAttributes) {
         reject("XLSX_XML_UNSAFE", "The XLSX package exceeds the total XML attribute limit.");
       }
     });
     parser.on("opentag", (tag) => {
-      if (depth === 1) rootName = tag.local;
+      if (depth === 1) {
+        rootName = tag.local;
+        rootPrefix = tag.prefix;
+        rootUri = tag.uri;
+      }
+
+      if (isWorksheet && depth === 2 && tag.local === "dimension") {
+        worksheetDimensionCount += 1;
+        const budget =
+          worksheetDimensionCount === 1 &&
+          !worksheetSheetDataSeen &&
+          rootName === "worksheet" &&
+          rootPrefix === "" &&
+          SPREADSHEETML_NAMESPACES.has(rootUri) &&
+          tag.prefix === "" &&
+          tag.uri === rootUri
+            ? worksheetDimensionBudget(saxAttribute(tag, "ref"))
+            : null;
+        applyScaledBudget(budget);
+      } else if (
+        isWorksheet &&
+        depth === 2 &&
+        rootName === "worksheet" &&
+        rootPrefix === "" &&
+        SPREADSHEETML_NAMESPACES.has(rootUri) &&
+        tag.prefix === "" &&
+        tag.uri === rootUri &&
+        tag.local === "sheetData"
+      ) {
+        worksheetSheetDataSeen = true;
+      } else if (
+        isSharedStrings &&
+        depth === 1 &&
+        tag.prefix === "" &&
+        tag.local === "sst" &&
+        SPREADSHEETML_NAMESPACES.has(tag.uri)
+      ) {
+        applyScaledBudget(sharedStringsBudget(tag));
+      }
 
       if (isContentTypes && tag.local === "Override") {
         const partName = normalizeAbsolutePartName(saxAttribute(tag, "PartName"));
@@ -844,6 +1041,42 @@ function sourcePartForRelationships(name: string): string | null {
 
 type RelationshipPartSummary = Extract<XmlPartSummary, { kind: "relationships" }>;
 type ContentTypeResolver = (partName: string) => string | undefined;
+
+function validatedXmlPartKind(
+  name: string,
+  contentTypeFor: ContentTypeResolver
+): XmlPartKind {
+  const contentType = contentTypeFor(name);
+  if (isWorksheetXmlPath(name) && WORKSHEET_CONTENT_TYPES.has(contentType ?? "")) {
+    return "worksheet";
+  }
+  if (
+    isSharedStringsXmlPath(name) &&
+    SHARED_STRINGS_CONTENT_TYPES.has(contentType ?? "")
+  ) {
+    return "shared-strings";
+  }
+  return "generic";
+}
+
+function enforceValidatedEntryByteLimit(
+  entry: CentralDirectoryEntry,
+  partKind: XmlPartKind,
+  limits: XlsxSecurityLimits,
+  limitOverrides: Partial<XlsxSecurityLimits> | undefined
+): void {
+  const maxEntryBytes = hasExplicitLimit(limitOverrides, "maxEntryBytes")
+    ? limits.maxEntryBytes
+    : partKind === "worksheet" || partKind === "shared-strings"
+      ? LARGE_XML_ENTRY_BYTES
+      : limits.maxEntryBytes;
+  if (entry.uncompressedSize > maxEntryBytes) {
+    reject(
+      "XLSX_ARCHIVE_LIMIT",
+      `ZIP entry ${entry.name} exceeds the per-entry size limit.`
+    );
+  }
+}
 
 function validateContentTypes(
   archive: ParsedArchive,
@@ -995,7 +1228,7 @@ function inspectXlsxArchive(
     // Validation owns an immutable snapshot. Callers cannot mutate the supplied view
     // while central-directory and XML checks are in progress.
     const bytes = data.slice();
-    const archive = parseArchive(bytes, limits);
+    const archive = parseArchive(bytes, limits, limitOverrides);
     const extractedEntries = new Map<string, Uint8Array>();
     const totalXmlCounts: XmlCounts = { elements: 0, attributes: 0 };
     const contentTypesEntry = archive.entriesByName.get("[Content_Types].xml");
@@ -1006,11 +1239,19 @@ function inspectXlsxArchive(
       contentTypes = scanSafeXml(
         decodeXml(xmlBytes, contentTypesEntry.name),
         contentTypesEntry.name,
+        "generic",
         limits,
-        totalXmlCounts
+        totalXmlCounts,
+        limitOverrides
       );
     }
     const contentTypeFor = validateContentTypes(archive, contentTypes);
+    const partKinds = new Map<string, XmlPartKind>();
+    for (const entry of archive.entries) {
+      const partKind = validatedXmlPartKind(entry.name, contentTypeFor);
+      enforceValidatedEntryByteLimit(entry, partKind, limits, limitOverrides);
+      partKinds.set(entry.name, partKind);
+    }
 
     for (const entry of archive.entries) {
       if (entry.name === contentTypesEntry?.name) continue;
@@ -1021,8 +1262,10 @@ function inspectXlsxArchive(
       const summary = scanSafeXml(
         decodeXml(xmlBytes, entry.name),
         entry.name,
+        partKinds.get(entry.name) ?? "generic",
         limits,
-        totalXmlCounts
+        totalXmlCounts,
+        limitOverrides
       );
       if (summary.kind === "relationships") {
         validateRelationships(archive, entry.name, summary, contentTypeFor);
