@@ -274,6 +274,43 @@ describe("RemoteTableSession", () => {
     session.destroy();
   });
 
+  it("rejects grouping without wedging a paginated group-capable source", async () => {
+    const query = vi.fn(async (request: QueryRequest) => offsetResult("r1", employees, request));
+    const capabilities = {
+      ...defaultRemoteCapabilities(),
+      group: { executor: "server", scope: "completeDataset" }
+    } satisfies TableCapabilities;
+    const source = createTestRemoteSource<Employee>({ query, capabilities });
+    const session = createRemoteTableSession({ source, columns });
+    session.start();
+    await waitUntilReady(session);
+
+    expect(session.getSnapshot().operationStates.group).toMatchObject({ enabled: false });
+    expect(await session.dispatch({
+      type: "set-grouping",
+      grouping: [{ columnId: "department" }]
+    })).toMatchObject({ status: "rejected", reason: "unsupported" });
+    expect(session.getSnapshot()).toMatchObject({
+      status: { phase: "ready" },
+      state: {
+        grouping: [],
+        pagination: { kind: "offset", offset: 0, limit: 50 }
+      }
+    });
+
+    expect(await session.dispatch({
+      type: "set-pagination",
+      pagination: { kind: "offset", offset: 0, limit: 25 }
+    })).toMatchObject({ status: "committed" });
+    await waitForCalls(query, 2);
+    session.stop();
+    session.start();
+    await waitForCalls(query, 3);
+    expect(session.getSnapshot().status.phase).toBe("ready");
+
+    session.destroy();
+  });
+
   it("prevalidates a typed batch, publishes bounded overlays, and reconciles an authoritative row", async () => {
     let serverRow: Employee = employees[0];
     let serverRevision = "1";

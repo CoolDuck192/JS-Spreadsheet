@@ -279,6 +279,13 @@ class RemoteTableSessionImpl<
     const operationStates = {
       ...resolveTableOperationStates(this.options.source.capabilities, this.options.features ?? {})
     };
+    if (this.options.source.paginationMode !== "none" && operationStates.group.enabled) {
+      operationStates.group = {
+        ...operationStates.group,
+        enabled: false,
+        reason: "Grouping requires pagination mode none"
+      };
+    }
     if (this.invalidControlledState) {
       operationStates.pagination = {
         enabled: false,
