@@ -19,8 +19,7 @@ import { DEFAULT_ROW_HEIGHT } from "./sheetDimensions";
 import { validateXlsxArchive } from "./xlsxSecurity";
 import {
   patchNativeTableXml,
-  prepareNativeTableXmlForExcelJs,
-  readNativeTableXml
+  prepareXlsxImportForExcelJs
 } from "./xlsxTableXml";
 import {
   addStructuredTablesToWorksheet,
@@ -72,18 +71,25 @@ export async function importWorkbookFromXlsx(
   const bytes = copyToUint8Array(data);
   const validation = validateXlsxArchive(bytes);
   if (!validation.ok) throw issueError(validation.issue);
-  const xmlMetadata = readNativeTableXml(bytes);
-  const excelJsBytes = prepareNativeTableXmlForExcelJs(bytes);
+  const prepared = prepareXlsxImportForExcelJs(bytes);
+  const xmlMetadata = prepared.tableMetadata;
+  const nativeComments = prepared.comments;
+  const nativeCommentsBySheet = new Map(nativeComments.map((entry) => [entry.sheetName, entry.comments]));
   const ExcelJS = await loadExcelJs();
   const excelWorkbook = new ExcelJS.Workbook();
-  await excelWorkbook.xlsx.load(toArrayBuffer(excelJsBytes) as ExcelJS.Buffer);
+  await excelWorkbook.xlsx.load(toArrayBuffer(prepared.excelJsBytes) as ExcelJS.Buffer);
 
   const worksheets = excelWorkbook.worksheets.length > 0 ? excelWorkbook.worksheets : [excelWorkbook.addWorksheet("Sheet1")];
   const tablesByWorksheet = await Promise.all(worksheets.map((worksheet, index) =>
     importStructuredTablesFromWorksheet(worksheet, `sheet-${index + 1}`, xmlMetadata, options)
   ));
   const sheets = worksheets.map((worksheet, index) =>
-    worksheetToSheet(worksheet, index, tablesByWorksheet[index])
+    worksheetToSheet(
+      worksheet,
+      index,
+      tablesByWorksheet[index],
+      nativeCommentsBySheet.get(worksheet.name)
+    )
   );
   const tables = tablesByWorksheet.flat();
   assertUniqueImportedTableNames(tables);
@@ -242,7 +248,8 @@ async function sheetToWorksheet(sheet: SheetModel, worksheet: ExcelJS.Worksheet)
 function worksheetToSheet(
   worksheet: ExcelJS.Worksheet,
   index: number,
-  tables: readonly StructuredTable[] = []
+  tables: readonly StructuredTable[] = [],
+  nativeComments: Readonly<Record<string, string>> = {}
 ): SheetModel {
   const cells: SheetModel["cells"] = {};
   const formats: SheetModel["formats"] = {};
@@ -289,6 +296,13 @@ function worksheetToSheet(
       }
     });
   });
+
+  for (const [address, comment] of Object.entries(nativeComments)) {
+    comments[address] = comment;
+    const coordinate = parseCellAddress(address);
+    maxRow = Math.max(maxRow, coordinate.row);
+    maxColumn = Math.max(maxColumn, coordinate.column);
+  }
 
   const columnWidths: SheetModel["columnWidths"] = {};
   const hiddenColumns: NonNullable<SheetModel["hiddenColumns"]> = {};

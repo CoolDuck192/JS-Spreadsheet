@@ -5,19 +5,21 @@ import {
   type Document as XmlDocument,
   type Element as XmlElement
 } from "@xmldom/xmldom";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { makeAboveFloorWorksheetPackage } from "../test/xlsxSecurityFixtures";
 import type { StructuredTable, WorkbookModel } from "../types";
 import {
   patchNativeTableXml,
   prepareNativeTableXmlForExcelJs,
+  readNativeCommentsXml,
   readNativeTableXml
 } from "./xlsxTableXml";
 
 const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-table.xlsx");
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
 const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
+const commentFixturePath = resolve("src/test/fixtures/xlsx/variant-comment.xlsx");
 
 async function fixture(name: "generated" | "real" = "generated") {
   const bytes = await readFile(name === "generated" ? fixturePath : realFixturePath);
@@ -147,8 +149,18 @@ function firstByLocalName(document: XmlDocument | XmlElement, name: string) {
 describe("xlsxTableXml", () => {
   it("removes unsupported drawing and chart parts from the ExcelJS derivative", async () => {
     const source = await readFile(chartFixturePath);
-    const prepared = prepareNativeTableXmlForExcelJs(
+    const sourceEntries = unzipSync(
       new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const relationshipsName = "xl/worksheets/_rels/sheet1.xml.rels";
+    sourceEntries[relationshipsName] = strToU8(
+      strFromU8(sourceEntries[relationshipsName]).replace(
+        "</Relationships>",
+        '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/xl/charts/help" TargetMode="External" Id="rIdExternal"/></Relationships>'
+      )
+    );
+    const prepared = prepareNativeTableXmlForExcelJs(
+      zipSync(sourceEntries)
     );
     const entries = unzipSync(prepared);
     const names = Object.keys(entries);
@@ -158,10 +170,60 @@ describe("xlsxTableXml", () => {
     expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).not.toContain(
       "/relationships/drawing"
     );
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).toContain(
+      "https://example.com/xl/charts/help"
+    );
     expect(strFromU8(entries["[Content_Types].xml"])).not.toMatch(
       /PartName="\/xl\/(?:drawings|charts)\//i
     );
   });
+
+  it("removes foreign comments from the ExcelJS derivative after native extraction", async () => {
+    const source = await readFile(commentFixturePath);
+    const prepared = prepareNativeTableXmlForExcelJs(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const entries = unzipSync(prepared);
+
+    expect(Object.keys(entries).filter((name) => /^xl\/comments(?:\/|\d)/i.test(name))).toEqual([]);
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).not.toContain(
+      "/relationships/comments"
+    );
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("/xl/comments/");
+  });
+
+  it.each(["xl/notes.dat", "xl/notes.xml"])(
+    "ignores comment relationships to unrecognized part %s",
+    async (commentPart) => {
+      const source = await readFile(commentFixturePath);
+      const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+      entries[commentPart] = entries["xl/comments/comment1.xml"];
+      delete entries["xl/comments/comment1.xml"];
+      entries["xl/worksheets/_rels/sheet1.xml.rels"] = strToU8(
+        strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])
+          .replace("/xl/comments/comment1.xml", `/${commentPart}`)
+      );
+      entries["[Content_Types].xml"] = strToU8(
+        strFromU8(entries["[Content_Types].xml"])
+          .replace("/xl/comments/comment1.xml", `/${commentPart}`)
+      );
+
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{ sheetName: "S", comments: {} }]);
+    }
+  );
+
+  it.each(["A1048577", "XFE1", "A9007199254740992"])(
+    "ignores out-of-grid comment reference %s",
+    async (reference) => {
+      const source = await readFile(commentFixturePath);
+      const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+      entries["xl/comments/comment1.xml"] = strToU8(
+        strFromU8(entries["xl/comments/comment1.xml"]).replace('ref="A1"', `ref="${reference}"`)
+      );
+
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{ sheetName: "S", comments: {} }]);
+    }
+  );
 
   it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {
     const source = makeAboveFloorWorksheetPackage();

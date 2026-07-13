@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { FilterExpression } from "../table/core/query";
 import type { StructuredTable, WorkbookModel } from "../types";
 import { formatCellAddress } from "./addressing";
+import { createBlankWorkbook, setCellComment, setCellContent } from "./workbook";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
 
 const fixtureDirectory = resolve("src/test/fixtures/xlsx");
@@ -52,6 +53,22 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets).toHaveLength(1);
     expect(workbook.sheets[0].cells).toMatchObject({ A1: "Q", B5: 200 });
     expect(workbook.sheets[0].charts).toEqual([]);
+  });
+
+  it("imports openpyxl comments from foreign comment-part layouts", async () => {
+    const workbook = await importWorkbookFromXlsx(await fixture("variant-comment.xlsx"));
+
+    expect(workbook.sheets[0].comments.A1).toBe("hello");
+  });
+
+  it("preserves application-authored comments through the native XML path", async () => {
+    let source = createBlankWorkbook();
+    source = setCellContent(source, source.activeSheetId, "A1", "commented");
+    source = setCellComment(source, source.activeSheetId, "A1", "round-trip note");
+
+    const workbook = await importWorkbookFromXlsx(await exportWorkbookToXlsx(source));
+
+    expect(workbook.sheets[0].comments.A1).toBe("round-trip note");
   });
 
   it("imports the deterministic sales matrix exactly and removes filter-derived hidden rows", async () => {

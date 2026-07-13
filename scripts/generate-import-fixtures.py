@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -10,6 +11,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.comments import Comment
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +45,14 @@ def save_deterministic(workbook: Workbook, name: str) -> None:
                 target_info.compress_type = ZIP_DEFLATED
                 target_info.external_attr = source_info.external_attr
                 target_info.create_system = source_info.create_system
-                output.writestr(target_info, source.read(source_info.filename))
+                content = source.read(source_info.filename)
+                if source_info.filename == "docProps/core.xml":
+                    content = re.sub(
+                        rb"(<dcterms:modified\b[^>]*>)[^<]*(</dcterms:modified>)",
+                        rb"\g<1>2026-01-01T00:00:00Z\g<2>",
+                        content,
+                    )
+                output.writestr(target_info, content)
 
 
 def generate_chart_fixture() -> None:
@@ -55,8 +64,15 @@ def generate_chart_fixture() -> None:
     save_deterministic(workbook, "variant-chart.xlsx")
 
 
+def generate_comment_fixture() -> None:
+    workbook, worksheet = base_workbook()
+    worksheet["A1"].comment = Comment("hello", "author")
+    save_deterministic(workbook, "variant-comment.xlsx")
+
+
 def main() -> None:
     generate_chart_fixture()
+    generate_comment_fixture()
 
 
 if __name__ == "__main__":

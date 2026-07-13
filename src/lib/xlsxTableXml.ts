@@ -12,7 +12,7 @@ import type {
   TableAggregate,
   WorkbookModel
 } from "../types";
-import { formatCellAddress } from "./addressing";
+import { formatCellAddress, parseCellAddress } from "./addressing";
 import { a1FormulaToStructured } from "./structuredFormula";
 import {
   extractValidatedXlsxEntries,
@@ -32,17 +32,35 @@ export type NativeTableXmlMetadata = {
 };
 
 const TABLE_ENTRY_PATTERN = /^xl\/tables\/[^/]+\.xml$/i;
+const COMMENT_ENTRY_PATTERN = /^xl\/comments(?:\/[^/]+|[^/]*)\.xml$/i;
 const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
 const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
 const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const EXCEL_MAX_ROWS = 1_048_576;
+const EXCEL_MAX_COLUMNS = 16_384;
 const DRAWING_RELATIONSHIP_TYPES = new Set([
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
   "http://purl.oclc.org/ooxml/officeDocument/relationships/drawing",
   "http://purl.oclc.org/ooxml/officeDocument/relationships/vmlDrawing"
 ]);
+const COMMENT_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/comments"
+]);
+
+export type NativeWorksheetComments = {
+  sheetName: string;
+  comments: Readonly<Record<string, string>>;
+};
+
+export type PreparedXlsxImport = {
+  tableMetadata: readonly NativeTableXmlMetadata[];
+  comments: readonly NativeWorksheetComments[];
+  excelJsBytes: Uint8Array;
+};
 
 const NATIVE_TO_AGGREGATE: Readonly<Record<string, TableAggregate>> = {
   sum: "sum",
@@ -68,11 +86,62 @@ const AGGREGATE_TO_NATIVE: Readonly<Record<TableAggregate, string>> = {
 };
 
 export function readNativeTableXml(data: Uint8Array): readonly NativeTableXmlMetadata[] {
-  const entries = validatedEntries(data);
+  return readNativeTableEntries(validatedEntries(data));
+}
+
+function readNativeTableEntries(
+  entries: ReadonlyMap<string, Uint8Array>
+): readonly NativeTableXmlMetadata[] {
   return [...entries.keys()]
     .filter((name) => TABLE_ENTRY_PATTERN.test(name))
     .sort(naturalEntryOrder)
     .map((name) => readTableDocument(strFromU8(entries.get(name)!)));
+}
+
+export function readNativeCommentsXml(data: Uint8Array): readonly NativeWorksheetComments[] {
+  return readNativeCommentEntries(validatedEntries(data));
+}
+
+function readNativeCommentEntries(
+  entries: ReadonlyMap<string, Uint8Array>
+): readonly NativeWorksheetComments[] {
+  const workbookXml = entries.get("xl/workbook.xml");
+  const workbookRelationshipsXml = entries.get("xl/_rels/workbook.xml.rels");
+  if (!workbookXml || !workbookRelationshipsXml) return [];
+
+  const workbook = parseXml(strFromU8(workbookXml));
+  const workbookRelationships = relationshipsById(parseXml(strFromU8(workbookRelationshipsXml)));
+  const worksheets: NativeWorksheetComments[] = [];
+  for (const sheet of allElementsByLocalName(workbook, "sheet")) {
+    const sheetName = sheet.getAttribute("name");
+    const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
+    const worksheetPart = relationship
+      ? resolveRelationshipTarget("xl/workbook.xml", relationship.target)
+      : undefined;
+    if (!sheetName || !worksheetPart) continue;
+
+    const relationshipPart = relationshipPartName(worksheetPart);
+    const relationshipXml = entries.get(relationshipPart);
+    if (!relationshipXml) {
+      worksheets.push({ sheetName, comments: {} });
+      continue;
+    }
+
+    const comments: Record<string, string> = {};
+    for (const candidate of relationshipsById(parseXml(strFromU8(relationshipXml))).values()) {
+      if (
+        !COMMENT_RELATIONSHIP_TYPES.has(candidate.type)
+        || candidate.targetMode.toLowerCase() === "external"
+      ) continue;
+      const commentPart = resolveRelationshipTarget(worksheetPart, candidate.target);
+      if (!commentPart || !COMMENT_ENTRY_PATTERN.test(commentPart)) continue;
+      const commentXml = commentPart ? entries.get(commentPart) : undefined;
+      if (!commentXml) continue;
+      Object.assign(comments, readCommentDocument(strFromU8(commentXml)));
+    }
+    worksheets.push({ sheetName, comments });
+  }
+  return worksheets;
 }
 
 export function patchNativeTableXml(
@@ -103,8 +172,22 @@ export function patchNativeTableXml(
  * model; the original XML is read first and remains the metadata authority.
  */
 export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
-  const entries = new Map(validatedEntries(data));
+  return prepareEntriesForExcelJs(validatedEntries(data));
+}
+
+export function prepareXlsxImportForExcelJs(data: Uint8Array): PreparedXlsxImport {
+  const entries = validatedEntries(data);
+  return {
+    tableMetadata: readNativeTableEntries(entries),
+    comments: readNativeCommentEntries(entries),
+    excelJsBytes: prepareEntriesForExcelJs(entries)
+  };
+}
+
+function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>): Uint8Array {
+  const entries = new Map(entriesInput);
   removeUnsupportedDrawingParts(entries);
+  removeCommentParts(entries);
   for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
     const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const column of allElementsByLocalName(document, "tableColumn")) {
@@ -116,6 +199,127 @@ export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function removeCommentParts(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()]) {
+    if (COMMENT_ENTRY_PATTERN.test(entryName)) entries.delete(entryName);
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      if (COMMENT_RELATIONSHIP_TYPES.has(relationship.getAttribute("Type") ?? "")) {
+        relationship.parentNode?.removeChild(relationship);
+      }
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (!contentTypes) return;
+  const document = parseXml(strFromU8(contentTypes));
+  for (const override of allElementsByLocalName(document, "Override")) {
+    const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+    if (COMMENT_ENTRY_PATTERN.test(partName)) override.parentNode?.removeChild(override);
+  }
+  entries.set("[Content_Types].xml", strToU8(new XMLSerializer().serializeToString(document)));
+}
+
+function readCommentDocument(xml: string): Record<string, string> {
+  const document = parseXml(xml);
+  const comments: Record<string, string> = {};
+  for (const comment of allElementsByLocalName(document, "comment")) {
+    const address = normalizeCommentAddress(comment.getAttribute("ref") ?? "");
+    if (!address) continue;
+    const text = firstDirectChild(comment, "text");
+    comments[address] = text
+      ? allDescendantsByLocalName(text, "t").map((node) => node.textContent ?? "").join("")
+      : "";
+  }
+  return comments;
+}
+
+function normalizeCommentAddress(value: string): string | undefined {
+  try {
+    const coordinate = parseCellAddress(value.replace(/\$/g, "").toUpperCase());
+    if (
+      !Number.isSafeInteger(coordinate.row)
+      || !Number.isSafeInteger(coordinate.column)
+      || coordinate.row < 0
+      || coordinate.column < 0
+      || coordinate.row >= EXCEL_MAX_ROWS
+      || coordinate.column >= EXCEL_MAX_COLUMNS
+    ) return undefined;
+    return formatCellAddress(coordinate);
+  } catch {
+    return undefined;
+  }
+}
+
+type NativeRelationship = {
+  target: string;
+  targetMode: string;
+  type: string;
+};
+
+function relationshipsById(document: XmlDocument): ReadonlyMap<string, NativeRelationship> {
+  const relationships = new Map<string, NativeRelationship>();
+  for (const relationship of allElementsByLocalName(document, "Relationship")) {
+    const id = relationship.getAttribute("Id");
+    const target = relationship.getAttribute("Target");
+    if (!id || !target) continue;
+    relationships.set(id, {
+      target,
+      targetMode: relationship.getAttribute("TargetMode") ?? "",
+      type: relationship.getAttribute("Type") ?? ""
+    });
+  }
+  return relationships;
+}
+
+function attributeByLocalName(element: XmlElement, localName: string): string {
+  for (let index = 0; index < element.attributes.length; index += 1) {
+    const attribute = element.attributes.item(index);
+    if (attribute?.localName === localName) return attribute.value;
+  }
+  return "";
+}
+
+function relationshipPartName(partName: string): string {
+  const segments = partName.split("/");
+  const fileName = segments.pop() ?? "";
+  return [...segments, "_rels", `${fileName}.rels`].join("/");
+}
+
+function resolveRelationshipTarget(sourcePart: string, target: string): string | undefined {
+  if (target.includes("?") || target.includes("#") || target.includes("\\") || target.includes("\0")) {
+    return undefined;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    return undefined;
+  }
+  if (
+    decoded.includes("?")
+    || decoded.includes("#")
+    || decoded.includes("\\")
+    || decoded.includes("\0")
+    || /^[a-z][a-z\d+.-]*:/i.test(decoded)
+    || decoded.startsWith("//")
+  ) return undefined;
+  const segments = decoded.startsWith("/") ? [] : sourcePart.split("/").slice(0, -1);
+  for (const segment of decoded.replace(/^\//, "").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) return undefined;
+      segments.pop();
+    } else if (segment.includes(":")) return undefined;
+    else segments.push(segment);
+  }
+  return segments.length > 0 ? segments.join("/") : undefined;
 }
 
 function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {
@@ -130,14 +334,18 @@ function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {
   }
 
   for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const sourcePart = sourcePartForRelationships(entryName);
     const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const relationship of allElementsByLocalName(document, "Relationship")) {
       const type = relationship.getAttribute("Type") ?? "";
       const target = relationship.getAttribute("Target") ?? "";
+      const targetMode = relationship.getAttribute("TargetMode") ?? "";
+      const resolvedTarget = sourcePart && targetMode.toLowerCase() !== "external"
+        ? resolveRelationshipTarget(sourcePart, target)
+        : undefined;
       if (
         DRAWING_RELATIONSHIP_TYPES.has(type)
-        || /(?:^|\/)xl\/(?:drawings|charts)\//i.test(target)
-        || /^\.\.\/(?:drawings|charts)\//i.test(target)
+        || (resolvedTarget !== undefined && DRAWING_ENTRY_PATTERN.test(resolvedTarget))
       ) {
         relationship.parentNode?.removeChild(relationship);
       }
@@ -639,6 +847,10 @@ function removeDirectChildren(parent: XmlElement, localName: string): void {
 
 function allElementsByLocalName(document: XmlDocument, localName: string): XmlElement[] {
   return Array.from(document.getElementsByTagName("*")).filter((node) => node.localName === localName);
+}
+
+function allDescendantsByLocalName(element: XmlElement, localName: string): XmlElement[] {
+  return Array.from(element.getElementsByTagName("*")).filter((node) => node.localName === localName);
 }
 
 function removeElementsByLocalName(document: XmlDocument, localNames: ReadonlySet<string>): void {
