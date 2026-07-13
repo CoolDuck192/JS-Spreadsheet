@@ -87,17 +87,19 @@ function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array
 
 function aliasLongCommentWorksheets(
   bytes: Uint8Array,
-  aliases: readonly { name: string; sourceIndex: number; sheetId?: number }[]
+  aliases: readonly { name?: string; sourceIndex: number; sheetId?: number }[]
 ): Uint8Array {
   const entries = unzipSync(bytes);
   const workbookXml = strFromU8(entries["xl/workbook.xml"]);
   const sourceSheets = workbookXml.match(/<sheet\b[^>]*\/>/g);
   expect(sourceSheets).toHaveLength(2);
-  const aliasedSheets = aliases.map(({ name, sourceIndex, sheetId }, index) =>
-    sourceSheets![sourceIndex]
-      .replace(/name="[^"]*"/, `name="${name}"`)
-      .replace(/sheetId="[^"]*"/, `sheetId="${sheetId ?? index + 1}"`)
-  ).join("");
+  const aliasedSheets = aliases.map(({ name, sourceIndex, sheetId }, index) => {
+    const sourceSheet = sourceSheets![sourceIndex]
+      .replace(/sheetId="[^"]*"/, `sheetId="${sheetId ?? index + 1}"`);
+    return name === undefined
+      ? sourceSheet.replace(/\sname="[^"]*"/, "")
+      : sourceSheet.replace(/name="[^"]*"/, `name="${name}"`);
+  }).join("");
   entries["xl/workbook.xml"] = strToU8(
     workbookXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${aliasedSheets}</sheets>`)
   );
@@ -213,6 +215,17 @@ describe("real native XLSX fixtures", () => {
       expected: [
         { name: "Commented", value: "Q", comments: { A1: "hello" } },
         { name: "Plain last", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "a nameless plain worksheet precedes the commented worksheet",
+      aliases: [
+        { sourceIndex: 1 },
+        { name: "Commented", sourceIndex: 0 }
+      ],
+      expected: [
+        { name: "sheet1", value: 7, comments: {} },
+        { name: "Commented", value: "Q", comments: { A1: "hello" } }
       ]
     },
     {

@@ -139,11 +139,10 @@ function readNativeCommentEntries(
   const firstSheetIndexById = new Map<number, number>();
   const workbookSheets = allElementsByLocalName(workbook, "sheet");
   for (const [workbookSheetIndex, sheet] of workbookSheets.entries()) {
-    const sheetId = Number.parseInt(sheet.getAttribute("sheetId") ?? "", 10);
+    const { id: sheetId, name: sheetName } = excelJsWorksheetIdentity(sheet);
     if (!Number.isNaN(sheetId) && !firstSheetIndexById.has(sheetId)) {
       firstSheetIndexById.set(sheetId, workbookSheetIndex);
     }
-    const sheetName = sheet.getAttribute("name");
     const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
     const worksheetPart = relationship
       ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
@@ -271,6 +270,14 @@ function entriesWithExcelJsCompatibleWorksheetNames(
   return entries;
 }
 
+function excelJsWorksheetIdentity(sheet: XmlElement): { id: number; name: string } {
+  const id = Number.parseInt(sheet.getAttribute("sheetId") ?? "", 10);
+  return {
+    id,
+    name: sheet.getAttribute("name") ?? `sheet${id}`
+  };
+}
+
 function sliceAtUtf16CodePointBoundary(value: string, maxCodeUnits: number): string {
   const candidate = value.slice(0, maxCodeUnits);
   const trailingCodeUnit = candidate.charCodeAt(candidate.length - 1);
@@ -286,19 +293,27 @@ function truncateLongWorksheetNamesForExcelJs(
   if (!workbookXml) return new Map();
   const document = parseXml(strFromU8(workbookXml));
   const sheets = allElementsByLocalName(document, "sheet");
+  const renamedWorksheets = new Map<string, string>();
+  let changed = false;
+  const worksheetNames = sheets.map((sheet) => {
+    const sourceName = sheet.getAttribute("name");
+    const { name } = excelJsWorksheetIdentity(sheet);
+    if (sourceName === null) {
+      sheet.setAttribute("name", name);
+      changed = true;
+    }
+    return name;
+  });
   const usedNames = new Set(
-    sheets.flatMap((sheet) => {
-      const name = sheet.getAttribute("name");
+    worksheetNames.flatMap((name) => {
       return name && name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH
         ? [name.toLowerCase()]
         : [];
     })
   );
-  const renamedWorksheets = new Map<string, string>();
-  let changed = false;
 
-  for (const sheet of sheets) {
-    const name = sheet.getAttribute("name");
+  for (const [index, sheet] of sheets.entries()) {
+    const name = worksheetNames[index];
     if (!name || name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH) continue;
     const baseName = sliceAtUtf16CodePointBoundary(name, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
     let candidate = baseName;
