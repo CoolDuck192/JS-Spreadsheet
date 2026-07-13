@@ -169,9 +169,12 @@ function DataTableSurface<TRow>({
   const defaultActiveCell = viewportRows[0] && viewportColumns[0]
     ? { rowId: viewportRows[0].id, columnId: viewportColumns[0].id }
     : null;
-  const viewportSelection = selectionWithinViewport(snapshot.selection, viewportRows, viewportColumns)
-    ? snapshot.selection
-    : null;
+  const viewportSelection = useMemo(
+    () => selectionWithinViewport(snapshot.selection, viewportRows, viewportColumns)
+      ? snapshot.selection
+      : null,
+    [snapshot.selection, viewportColumns, viewportRows]
+  );
 
   const reportDiagnostic = useCallback((event: TableDiagnosticEvent) => {
     try {
