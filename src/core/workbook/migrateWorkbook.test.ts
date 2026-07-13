@@ -48,6 +48,26 @@ describe("workbook model migration", () => {
     });
   });
 
+  it("rejects persisted notIn table filters that Excel cannot serialize", () => {
+    const fixture = createVersionTwoFixture();
+    expect(migrateWorkbookModel({
+      ...fixture,
+      tables: [{
+        ...fixture.tables[0],
+        filter: {
+          kind: "set",
+          columnId: "column-fixed",
+          operator: "notIn",
+          values: [
+            { type: "string", value: "East" },
+            { type: "string", value: "West" },
+            { type: "string", value: "North" }
+          ]
+        }
+      }]
+    })).toBeNull();
+  });
+
   it.each([
     null,
     {},

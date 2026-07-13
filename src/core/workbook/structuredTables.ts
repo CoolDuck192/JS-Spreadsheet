@@ -598,6 +598,13 @@ function setFilter(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  if (hasUnsupportedNotInCardinality(filter)) {
+    return reject(
+      workbook,
+      "TABLE_FILTER_INVALID",
+      "Excel table filters require one or two excluded values"
+    );
+  }
   const columnIds = new Set(table.columns.map((column) => column.id));
   const migratedFilter = migrateTableFilter(filter, columnIds);
   if (migratedFilter === null) {
@@ -608,6 +615,17 @@ function setFilter(
   }
   const { filter: _current, ...base } = table;
   return commitTable(workbook, migratedFilter === undefined ? base : { ...base, filter: migratedFilter });
+}
+
+function hasUnsupportedNotInCardinality(filter: FilterExpression | undefined): boolean {
+  if (!filter) return false;
+  if (filter.kind === "logical") {
+    return Array.isArray(filter.operands) && filter.operands.some(hasUnsupportedNotInCardinality);
+  }
+  if (filter.kind === "not") return hasUnsupportedNotInCardinality(filter.operand);
+  return filter.kind === "set"
+    && filter.operator === "notIn"
+    && (!Array.isArray(filter.values) || filter.values.length === 0 || filter.values.length > 2);
 }
 
 function editCells(

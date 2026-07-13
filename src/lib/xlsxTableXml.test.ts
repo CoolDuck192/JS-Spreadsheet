@@ -426,16 +426,67 @@ describe("xlsxTableXml", () => {
     ]);
   });
 
-  it("rejects unsupported filter expressions instead of silently dropping them", async () => {
+  it.each([
+    ["contains", "*Ea~*st~?~~*"],
+    ["startsWith", "Ea~*st~?~~*"],
+    ["endsWith", "*Ea~*st~?~~"]
+  ] as const)("writes and reads %s filters with escaped Excel wildcards", async (operator, criterion) => {
     const source = await fixture();
-    expect(() => patchNativeTableXml(source, [{
+    const patched = patchNativeTableXml(source, [{
       ...salesTable,
       filter: {
         kind: "comparison",
         columnId: "private-region",
-        operator: "contains",
-        value: { type: "string", value: "East" }
+        operator,
+        value: { type: "string", value: "Ea*st?~" }
       }
-    }])).toThrow(/unsupported native table filter/i);
+    }]);
+    const document = parseXml(tableXml(patched));
+    const custom = firstByLocalName(document, "customFilter")!;
+
+    expect(custom.getAttribute("operator")).toBeNull();
+    expect(custom.getAttribute("val")).toBe(criterion);
+    expect(readNativeTableXml(patched)[0].filter).toEqual({
+      kind: "comparison",
+      columnId: "Region",
+      operator,
+      value: { type: "string", value: "Ea*st?~" }
+    });
+  });
+
+  it("writes and reads two-value notIn filters as ANDed not-equal comparisons", async () => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{
+      ...salesTable,
+      filter: {
+        kind: "set",
+        columnId: "private-region",
+        operator: "notIn",
+        values: [
+          { type: "string", value: "East" },
+          { type: "string", value: "West" }
+        ]
+      }
+    }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("1");
+    expect(filters.map((item) => [item.getAttribute("operator"), item.getAttribute("val")])).toEqual([
+      ["notEqual", "East"],
+      ["notEqual", "West"]
+    ]);
+    expect(readNativeTableXml(patched)[0].filter).toEqual({
+      kind: "set",
+      columnId: "Region",
+      operator: "notIn",
+      values: [
+        { type: "string", value: "East" },
+        { type: "string", value: "West" }
+      ]
+    });
   });
 });

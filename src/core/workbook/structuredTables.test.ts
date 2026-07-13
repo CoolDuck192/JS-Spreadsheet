@@ -39,6 +39,42 @@ describe("structured table metadata", () => {
     expect(getStructuredTableBodyRange(table)).toEqual(range(1, 0, 3, 2));
   });
 
+  it("rejects notIn filters that exceed Excel's two-criterion limit", () => {
+    const { workbook, services } = tableFixture(2, 3);
+    const created = commit(workbook, {
+      type: "table.create",
+      sheetId: workbook.activeSheetId,
+      range: range(0, 0, 2, 1),
+      name: "Filtered",
+      headerRow: true,
+      totalsRow: false
+    }, services);
+    const table = created.tables[0];
+    const result = reduceStructuredTableCommand(created, {
+      type: "table.setFilter",
+      tableId: table.id,
+      filter: {
+        kind: "set",
+        columnId: table.columns[0].id,
+        operator: "notIn",
+        values: [
+          { type: "string", value: "East" },
+          { type: "string", value: "West" },
+          { type: "string", value: "North" }
+        ]
+      }
+    }, services);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      workbook: created,
+      issues: [{
+        code: "TABLE_FILTER_INVALID",
+        message: "Excel table filters require one or two excluded values"
+      }]
+    });
+  });
+
   it.each(["", " Sales", "R", "A1", "XFD1048576", "R1C1", "x".repeat(256)])(
     "rejects invalid table name %s atomically",
     (name) => {

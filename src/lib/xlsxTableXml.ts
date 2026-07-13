@@ -164,16 +164,32 @@ function readAutoFilter(autoFilter: XmlElement | undefined, columnNames: readonl
     if (!customFilters) continue;
     const customExpressions: Array<Extract<FilterExpression, { kind: "comparison" }>> = [];
     for (const custom of directChildren(customFilters, "customFilter")) {
-      const operator = nativeComparisonOperator(custom.getAttribute("operator") ?? "equal");
+      const nativeOperator = custom.getAttribute("operator") ?? "equal";
+      const operator = nativeComparisonOperator(nativeOperator);
       if (!operator) continue;
+      const criterion = decodeExcelFilterCriterion(
+        operator,
+        custom.getAttribute("val") ?? ""
+      );
       customExpressions.push({
         kind: "comparison" as const,
         columnId,
-        operator,
-        value: { type: "string" as const, value: custom.getAttribute("val") ?? "" }
+        operator: criterion.operator,
+        value: { type: "string" as const, value: criterion.value }
       });
     }
-    if (customExpressions.length === 1) expressions.push(customExpressions[0]);
+    if (
+      customExpressions.length > 1
+      && customFilters.getAttribute("and") === "1"
+      && customExpressions.every((expression) => expression.operator === "neq")
+    ) {
+      expressions.push({
+        kind: "set",
+        columnId,
+        operator: "notIn",
+        values: customExpressions.map((expression) => expression.value)
+      });
+    } else if (customExpressions.length === 1) expressions.push(customExpressions[0]);
     else if (customExpressions.length > 1) {
       expressions.push({
         kind: "logical",
@@ -320,7 +336,6 @@ function patchFilter(document: XmlDocument, root: XmlElement, table: StructuredT
     removeDirectChildren(filterColumn, "filters");
     removeDirectChildren(filterColumn, "customFilters");
     if (columnFilter.kind === "set") {
-      if (columnFilter.operator !== "in") throw tableXmlError("Unsupported native table filter set operator");
       const filters = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "filters");
       for (const value of columnFilter.values) {
         const filterNode = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "filter");
@@ -338,7 +353,7 @@ function patchFilter(document: XmlDocument, root: XmlElement, table: StructuredT
         if (!operator) throw tableXmlError("Unsupported native table filter comparison operator");
         const custom = document.createElementNS(root.namespaceURI || XML_NAMESPACE, "customFilter");
         if (operator !== "equal") custom.setAttribute("operator", operator);
-        custom.setAttribute("val", scalarText(comparison.value));
+        custom.setAttribute("val", excelFilterCriterion(comparison));
         customFilters.appendChild(custom);
       }
       filterColumn.appendChild(customFilters);
@@ -358,7 +373,23 @@ type NativeColumnFilter =
     };
 
 function nativeColumnFilters(filter: FilterExpression): NativeColumnFilter[] {
-  if (filter.kind === "set") return [filter];
+  if (filter.kind === "set") {
+    if (filter.operator === "in") return [filter];
+    if (filter.values.length === 0 || filter.values.length > 2) {
+      throw tableXmlError("Native table notIn filters require one or two values");
+    }
+    return [{
+      kind: "custom",
+      columnId: filter.columnId,
+      operator: "and",
+      comparisons: filter.values.map((value) => ({
+        kind: "comparison",
+        columnId: filter.columnId,
+        operator: "neq",
+        value
+      }))
+    }];
+  }
   if (filter.kind === "comparison") {
     return [{ kind: "custom", columnId: filter.columnId, operator: "and", comparisons: [filter] }];
   }
@@ -454,11 +485,67 @@ function appComparisonOperator(
   return ({
     eq: "equal",
     neq: "notEqual",
+    contains: "equal",
+    startsWith: "equal",
+    endsWith: "equal",
     gt: "greaterThan",
     gte: "greaterThanOrEqual",
     lt: "lessThan",
     lte: "lessThanOrEqual"
   } as Partial<Record<typeof operator, string>>)[operator];
+}
+
+function excelFilterCriterion(comparison: NativeComparisonFilter): string {
+  const value = scalarText(comparison.value);
+  if (comparison.value.type !== "string") return value;
+  const escaped = escapeExcelFilterWildcards(value);
+  if (comparison.operator === "contains") return `*${escaped}*`;
+  if (comparison.operator === "startsWith") return `${escaped}*`;
+  if (comparison.operator === "endsWith") return `*${escaped}`;
+  return escaped;
+}
+
+function decodeExcelFilterCriterion(
+  operator: NativeComparisonFilter["operator"],
+  criterion: string
+): { operator: NativeComparisonFilter["operator"]; value: string } {
+  if (operator !== "eq") {
+    return { operator, value: unescapeExcelFilterWildcards(criterion) };
+  }
+  const leadingWildcard = criterion.startsWith("*");
+  const trailingIndex = criterion.length - 1;
+  const trailingWildcard = trailingIndex >= 0
+    && criterion[trailingIndex] === "*"
+    && !excelFilterCharacterIsEscaped(criterion, trailingIndex);
+  let value = criterion;
+  if (leadingWildcard) value = value.slice(1);
+  if (trailingWildcard && value.length > 0) value = value.slice(0, -1);
+  return {
+    operator: leadingWildcard && trailingWildcard
+      ? "contains"
+      : trailingWildcard
+        ? "startsWith"
+        : leadingWildcard
+          ? "endsWith"
+          : operator,
+    value: unescapeExcelFilterWildcards(value)
+  };
+}
+
+function escapeExcelFilterWildcards(value: string): string {
+  return value.replace(/[~*?]/g, (character) => `~${character}`);
+}
+
+function unescapeExcelFilterWildcards(value: string): string {
+  return value.replace(/~([~*?])/g, "$1");
+}
+
+function excelFilterCharacterIsEscaped(value: string, index: number): boolean {
+  let tildes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "~"; cursor -= 1) {
+    tildes += 1;
+  }
+  return tildes % 2 === 1;
 }
 
 function scalarText(value: QueryScalar): string {

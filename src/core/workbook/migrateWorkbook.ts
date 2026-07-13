@@ -546,13 +546,25 @@ export function migrateTableFilter(
   } catch {
     return null;
   }
-  return everyFilterColumn(filter, columnIds) ? filter : null;
+  return everyFilterColumn(filter, columnIds) && hasSerializableNotInFilters(filter)
+    ? filter
+    : null;
 }
 
 function everyFilterColumn(filter: FilterExpression, columnIds: ReadonlySet<string>): boolean {
   if (filter.kind === "logical") return filter.operands.every((operand) => everyFilterColumn(operand, columnIds));
   if (filter.kind === "not") return everyFilterColumn(filter.operand, columnIds);
   return columnIds.has(filter.columnId);
+}
+
+function hasSerializableNotInFilters(filter: FilterExpression): boolean {
+  if (filter.kind === "logical") {
+    return filter.operands.every(hasSerializableNotInFilters);
+  }
+  if (filter.kind === "not") return hasSerializableNotInFilters(filter.operand);
+  return filter.kind !== "set"
+    || filter.operator !== "notIn"
+    || (filter.values.length > 0 && filter.values.length <= 2);
 }
 
 function migrateStyle(value: unknown): TableStyle | undefined | null {
