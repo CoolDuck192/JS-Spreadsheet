@@ -124,6 +124,9 @@ function readNativeCommentEntries(
 
   const workbook = parseXml(strFromU8(workbookXml));
   const workbookRelationships = relationshipsById(parseXml(strFromU8(workbookRelationshipsXml)));
+  const relationshipsByPart = new Map<string, ReadonlyMap<string, NativeRelationship>>();
+  const commentsByPart = new Map<string, Readonly<Record<string, string>>>();
+  const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
   const worksheets: NativeWorksheetComments[] = [];
   for (const sheet of allElementsByLocalName(workbook, "sheet")) {
     const sheetName = sheet.getAttribute("name");
@@ -133,24 +136,33 @@ function readNativeCommentEntries(
       : undefined;
     if (!sheetName || !worksheetPart) continue;
 
-    const relationshipPart = relationshipPartName(worksheetPart);
-    const relationshipXml = entries.get(relationshipPart);
-    if (!relationshipXml) {
-      worksheets.push({ sheetName, comments: {} });
-      continue;
-    }
+    let comments = commentsByWorksheetPart.get(worksheetPart);
+    if (!comments) {
+      const relationshipPart = relationshipPartName(worksheetPart);
+      const relationshipXml = entries.get(relationshipPart);
+      const relationships = relationshipsByPart.get(relationshipPart)
+        ?? (relationshipXml ? relationshipsById(parseXml(strFromU8(relationshipXml))) : new Map());
+      relationshipsByPart.set(relationshipPart, relationships);
 
-    const comments: Record<string, string> = {};
-    for (const candidate of relationshipsById(parseXml(strFromU8(relationshipXml))).values()) {
-      if (
-        !COMMENT_RELATIONSHIP_TYPES.has(candidate.type)
-        || candidate.targetMode.toLowerCase() === "external"
-      ) continue;
-      const commentPart = resolveRelationshipTarget(worksheetPart, candidate.target);
-      if (!commentPart || !COMMENT_ENTRY_PATTERN.test(commentPart)) continue;
-      const commentXml = commentPart ? entries.get(commentPart) : undefined;
-      if (!commentXml) continue;
-      Object.assign(comments, readCommentDocument(strFromU8(commentXml)));
+      const parsedComments: Record<string, string> = {};
+      for (const candidate of relationships.values()) {
+        if (
+          !COMMENT_RELATIONSHIP_TYPES.has(candidate.type)
+          || candidate.targetMode.toLowerCase() === "external"
+        ) continue;
+        const commentPart = resolveRelationshipTarget(worksheetPart, candidate.target);
+        if (!commentPart || !COMMENT_ENTRY_PATTERN.test(commentPart)) continue;
+        const commentXml = entries.get(commentPart);
+        if (!commentXml) continue;
+        let commentMap = commentsByPart.get(commentPart);
+        if (!commentMap) {
+          commentMap = readCommentDocument(strFromU8(commentXml));
+          commentsByPart.set(commentPart, commentMap);
+        }
+        Object.assign(parsedComments, commentMap);
+      }
+      comments = parsedComments;
+      commentsByWorksheetPart.set(worksheetPart, comments);
     }
     worksheets.push({ sheetName, comments });
   }

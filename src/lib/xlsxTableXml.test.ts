@@ -22,6 +22,8 @@ const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx"
 const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
 const commentFixturePath = resolve("src/test/fixtures/xlsx/variant-comment.xlsx");
 const tableFixturePath = resolve("src/test/fixtures/xlsx/variant-table.xlsx");
+const ALIASED_COMMENT_SHEET_COUNT = 3_000;
+const ALIASED_COMMENT_PARSE_BUDGET_MS = 250;
 
 async function fixture(name: "generated" | "real" = "generated") {
   const bytes = await readFile(name === "generated" ? fixturePath : realFixturePath);
@@ -192,6 +194,37 @@ describe("xlsxTableXml", () => {
       "/relationships/comments"
     );
     expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("/xl/comments/");
+  });
+
+  it("memoizes aliased native-comment parts within a bounded parse duration", async () => {
+    const source = await readFile(commentFixturePath);
+    const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+    const workbookXml = strFromU8(entries["xl/workbook.xml"]);
+    const sheetXml = workbookXml.match(/<sheet\b[^>]*\/>/)?.[0];
+    expect(sheetXml).toBeDefined();
+    entries["xl/workbook.xml"] = strToU8(
+      workbookXml.replace(
+        sheetXml!,
+        Array.from(
+          { length: ALIASED_COMMENT_SHEET_COUNT },
+          (_, index) => sheetXml!
+            .replace('name="S"', `name="Alias ${index + 1}"`)
+            .replace('sheetId="1"', `sheetId="${index + 1}"`)
+        ).join("")
+      )
+    );
+    const adversarial = zipSync(entries);
+
+    const startedAt = performance.now();
+    const comments = readNativeCommentsXml(adversarial);
+    const durationMs = performance.now() - startedAt;
+
+    expect(comments).toHaveLength(ALIASED_COMMENT_SHEET_COUNT);
+    expect(comments[ALIASED_COMMENT_SHEET_COUNT - 1]).toEqual({
+      sheetName: `Alias ${ALIASED_COMMENT_SHEET_COUNT}`,
+      comments: { A1: "hello" }
+    });
+    expect(durationMs).toBeLessThan(ALIASED_COMMENT_PARSE_BUDGET_MS);
   });
 
   it.each(["xl/notes.dat", "xl/notes.xml"])(
