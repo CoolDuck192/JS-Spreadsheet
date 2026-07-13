@@ -2585,7 +2585,7 @@ function SpreadsheetWorkbook({
       });
   }
 
-  function handleImportFileByExtension(file: File | undefined) {
+  function handleImportFileByExtension(file: File | undefined, entryPoint: "drop" | "picker") {
     if (!file) return;
     const name = file.name.toLowerCase();
     if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
@@ -2595,7 +2595,9 @@ function SpreadsheetWorkbook({
     } else if (name.endsWith(".csv")) {
       handleImportCsv(file);
     } else {
-      setStatus("Drop an .xlsx, .xlsm, or .csv file to import it");
+      setStatus(entryPoint === "drop"
+        ? "Drop an .xlsx, .xlsm, or .csv file to import it"
+        : "Select an .xlsx, .xlsm, or .csv file to import it");
     }
   }
 
@@ -2793,7 +2795,7 @@ function SpreadsheetWorkbook({
     if (!file) {
       return;
     }
-    handleImportFileByExtension(file);
+    handleImportFileByExtension(file, "drop");
   }
 
   const themedStyle = {
@@ -3127,7 +3129,7 @@ function SpreadsheetWorkbook({
           aria-label="XLSX file"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
-            handleImportFileByExtension(file);
+            handleImportFileByExtension(file, "picker");
             event.currentTarget.value = "";
           }}
         />

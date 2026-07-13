@@ -1420,6 +1420,44 @@ describe("App", () => {
     expect(screen.getByLabelText("Status")).toHaveTextContent("Imported budget.xlsx");
   });
 
+  it("keeps drop guidance for unsupported TXT files without invoking the XLSX importer", () => {
+    const importer = { import: vi.fn().mockResolvedValue(createBlankWorkbook()) };
+    const { container } = render(
+      <Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />
+    );
+    const shell = container.querySelector("main.app-shell")!;
+
+    fireEvent.drop(shell, {
+      dataTransfer: { files: [new File(["unsupported"], "notes.txt")] }
+    });
+
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(
+      /^Drop an \.xlsx, \.xlsm, or \.csv file to import it$/
+    );
+    expect(importer.import).not.toHaveBeenCalled();
+  });
+
+  it("uses picker guidance for unsupported TXT files, resets the picker, and skips the XLSX importer", () => {
+    const importer = { import: vi.fn().mockResolvedValue(createBlankWorkbook()) };
+    render(<Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />);
+    const fileInput = screen.getByLabelText("XLSX file") as HTMLInputElement;
+    Object.defineProperty(fileInput, "value", {
+      configurable: true,
+      value: "C:\\fakepath\\notes.txt",
+      writable: true
+    });
+
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["unsupported"], "notes.txt")] }
+    });
+
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent(
+      /^Select an \.xlsx, \.xlsm, or \.csv file to import it$/
+    );
+    expect(fileInput.value).toBe("");
+    expect(importer.import).not.toHaveBeenCalled();
+  });
+
   it("explains that dropped legacy XLS files must be re-saved", () => {
     const { container } = render(<App />);
     const shell = container.querySelector("main.app-shell")!;
