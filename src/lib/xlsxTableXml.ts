@@ -15,6 +15,7 @@ import type {
 import { formatCellAddress, parseCellAddress } from "./addressing";
 import { a1FormulaToStructured } from "./structuredFormula";
 import {
+  MAX_XLSX_WORKSHEET_ID,
   extractValidatedXlsxEntries,
   validateXlsxArchive
 } from "./xlsxSecurity";
@@ -43,7 +44,6 @@ const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProje
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const EXCEL_MAX_WORKSHEET_NAME_LENGTH = 31;
-const EXCELJS_MAX_WORKSHEET_ARRAY_INDEX = 0xffff_fffe;
 const EXCEL_MAX_ROWS = 1_048_576;
 const EXCEL_MAX_COLUMNS = 16_384;
 const XLSX_WORKBOOK_CONTENT_TYPE =
@@ -217,7 +217,7 @@ function readNativeCommentEntries(
 }
 
 function isExcelJsPublicWorksheetId(id: number): boolean {
-  return Number.isInteger(id) && id >= 1 && id <= EXCELJS_MAX_WORKSHEET_ARRAY_INDEX;
+  return Number.isInteger(id) && id >= 1 && id <= MAX_XLSX_WORKSHEET_ID;
 }
 
 function isExcelJsWorksheetFileEntry(

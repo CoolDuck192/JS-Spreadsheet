@@ -1540,6 +1540,30 @@ describe("App", () => {
     }));
   });
 
+  it("classifies the worksheet ID consistency limit as a security rejection", async () => {
+    const message =
+      "Workbook worksheet ID 4294967294 exceeds the 100000 consistency limit.";
+    const failure = Object.assign(new Error(message), {
+      code: "XLSX_ARCHIVE_LIMIT",
+      issue: { code: "XLSX_ARCHIVE_LIMIT", message }
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const importer = { import: vi.fn().mockRejectedValue(failure) };
+    render(<Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File(["bounded input"], "oversized-id.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "XLSX import rejected by security checks"
+    ));
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent(
+      "corrupt or unreadable"
+    );
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", failure);
+  });
+
   it("surfaces native-table XML rejections as typed security failures", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const source = await readFile(resolve("src/test/fixtures/xlsx/variant-table.xlsx"));

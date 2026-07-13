@@ -15,6 +15,8 @@ import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
 import { validateXlsxArchive } from "./xlsxSecurity";
 
 const fixtureDirectory = resolve("src/test/fixtures/xlsx");
+const MAX_XLSX_WORKSHEET_ID = 100_000;
+const PATHOLOGICAL_EXCELJS_WORKSHEET_ID = 0xffff_fffe;
 const tableCommandServices: StructuredTableCommandServices = {
   createId: () => "unused-id",
   getCellEvaluation: () => null
@@ -159,6 +161,18 @@ function aliasLongCommentWorksheets(
   entries["xl/workbook.xml"] = strToU8(
     workbookXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${aliasedSheets}</sheets>`)
   );
+  return zipSync(entries);
+}
+
+function nestFirstWorkbookSheetInUnknownWrapper(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  const workbookXml = strFromU8(entries["xl/workbook.xml"]);
+  const nestedWorkbookXml = workbookXml.replace(
+    /(<sheets>)(<sheet\b[^>]*\/>)/,
+    "$1<wrapper>$2</wrapper>"
+  );
+  expect(nestedWorkbookXml).not.toBe(workbookXml);
+  entries["xl/workbook.xml"] = strToU8(nestedWorkbookXml);
   return zipSync(entries);
 }
 
@@ -458,6 +472,87 @@ describe("real native XLSX fixtures", () => {
       value: sheet.cells.A1,
       comments: sheet.comments
     }))).toEqual(expected);
+  });
+
+  it("imports the maximum worksheet ID with native comments aligned", async () => {
+    const source = aliasLongCommentWorksheets(
+      await fixture("variant-comment-long-sheet.xlsx"),
+      [
+        {
+          name: "Commented at the worksheet ID limit",
+          sourceIndex: 0,
+          sheetId: MAX_XLSX_WORKSHEET_ID
+        },
+        { name: "Plain", sourceIndex: 1, sheetId: 1 }
+      ]
+    );
+
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => ({
+      name: sheet.name,
+      value: sheet.cells.A1,
+      comments: sheet.comments
+    }))).toEqual([
+      {
+        name: "Commented at the worksheet ID l",
+        value: "Q",
+        comments: { A1: "hello" }
+      },
+      { name: "Plain", value: 7, comments: {} }
+    ]);
+  });
+
+  it("rejects a pathological ExcelJS worksheet array index within five seconds", async () => {
+    const source = aliasLongCommentWorksheets(
+      await fixture("variant-comment-long-sheet.xlsx"),
+      [
+        {
+          name: "Pathological",
+          sourceIndex: 0,
+          sheetId: PATHOLOGICAL_EXCELJS_WORKSHEET_ID
+        },
+        { name: "Plain", sourceIndex: 1, sheetId: 1 }
+      ]
+    );
+    const startedAt = performance.now();
+
+    await expect(importWorkbookFromXlsx(source)).rejects.toMatchObject({
+      code: "XLSX_ARCHIVE_LIMIT",
+      issue: {
+        code: "XLSX_ARCHIVE_LIMIT",
+        message:
+          "Workbook worksheet ID 4294967294 exceeds the 100000 consistency limit."
+      }
+    });
+    expect(performance.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("rejects a pathological worksheet ID nested in the ExcelJS sheets parser", async () => {
+    const source = nestFirstWorkbookSheetInUnknownWrapper(
+      aliasLongCommentWorksheets(
+        await fixture("variant-comment-long-sheet.xlsx"),
+        [
+          {
+            name: "Pathological",
+            sourceIndex: 0,
+            sheetId: PATHOLOGICAL_EXCELJS_WORKSHEET_ID
+          },
+          { name: "Plain", sourceIndex: 1, sheetId: 1 }
+        ]
+      )
+    );
+    const startedAt = performance.now();
+
+    await expect(importWorkbookFromXlsx(source)).rejects.toMatchObject({
+      code: "XLSX_ARCHIVE_LIMIT",
+      issue: {
+        code: "XLSX_ARCHIVE_LIMIT",
+        message:
+          "Workbook worksheet ID 4294967294 exceeds the 100000 consistency limit."
+      }
+    });
+    expect(performance.now() - startedAt).toBeLessThan(5_000);
   });
 
   it("preserves application-authored comments through the native XML path", async () => {

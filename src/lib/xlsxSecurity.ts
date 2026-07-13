@@ -6,6 +6,7 @@ import type { TableIssue } from "../core/commands/types";
 export type XlsxSecurityLimits = {
   maxArchiveBytes: number;
   maxEntries: number;
+  maxWorksheetId: number;
   maxEntryBytes: number;
   maxTotalUncompressedBytes: number;
   maxCompressionRatio: number;
@@ -17,9 +18,12 @@ export type XlsxSecurityLimits = {
   maxTotalXmlAttributes: number;
 };
 
+export const MAX_XLSX_WORKSHEET_ID = 100_000;
+
 export const DEFAULT_XLSX_SECURITY_LIMITS: Readonly<XlsxSecurityLimits> = {
   maxArchiveBytes: 64 * 1024 * 1024,
   maxEntries: 4_096,
+  maxWorksheetId: MAX_XLSX_WORKSHEET_ID,
   maxEntryBytes: 32 * 1024 * 1024,
   maxTotalUncompressedBytes: 256 * 1024 * 1024,
   maxCompressionRatio: 100,
@@ -890,6 +894,7 @@ function scanSafeXml(
   const defaults = new Map<string, string>();
   const relationshipIds = new Set<string>();
   const tableRelationships: TableRelationshipSummary[] = [];
+  const elementNames: string[] = [];
   let depth = 0;
   let rootName = "";
   let rootPrefix = "";
@@ -996,6 +1001,24 @@ function scanSafeXml(
         rootUri = tag.uri;
       }
 
+      if (
+        name === "xl/workbook.xml" &&
+        rootName === "workbook" &&
+        rootPrefix === "" &&
+        elementNames.includes("sheets") &&
+        tag.prefix === "" &&
+        tag.local === "sheet"
+      ) {
+        const worksheetId = Number.parseInt(saxAttribute(tag, "sheetId"), 10);
+        if (worksheetId > limits.maxWorksheetId) {
+          reject(
+            "XLSX_ARCHIVE_LIMIT",
+            `Workbook worksheet ID ${worksheetId} exceeds the ${limits.maxWorksheetId} consistency limit.`
+          );
+        }
+      }
+      elementNames.push(tag.prefix === "" ? tag.local : "");
+
       if (isWorksheet && depth === 2 && tag.local === "dimension") {
         worksheetDimensionCount += 1;
         const budget =
@@ -1078,6 +1101,7 @@ function scanSafeXml(
       }
     });
     parser.on("closetag", () => {
+      elementNames.pop();
       depth -= 1;
     });
     parser.write(xml).close();
