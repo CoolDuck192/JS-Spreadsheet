@@ -15,6 +15,33 @@ The generator fixes workbook metadata and ZIP timestamps to
 `2026-01-01T00:00:00Z`. These fixtures model OOXML produced independently of
 this application; their unsupported visual parts are never executed.
 
+| Fixture | SHA-256 |
+| --- | --- |
+| `variant-chart.xlsx` | `b1e21e36e053d5cebcacde426f1462a009055cf21bf0797b9d889708854ad2e0` |
+| `variant-comment.xlsx` | `be15eee84a7b98917a266e1c72cd73ccfa03207f66c440a4c0d3674b61d65a08` |
+| `variant-table.xlsx` | `5cdd602fb9d6162d8180f2631d99f712df05ae8ffa220f2eca647dc7f55c59b1` |
+| `real-kitchen-sink-trimmed.xlsx` | `7a3be94003cb7c2c872fa605c1aeab3ef08bd3b8a6b618c4bd163cec64031992` |
+
+`real-kitchen-sink-trimmed.xlsx` combines all three foreign layouts with a
+50-row calculated `SalesTable`, dates, freeze panes, a hyperlink, a merged
+heading, and a 2,000-cell dense control sheet. It is intentionally trimmed
+below 100 KiB for unit tests; the full 80,000-cell source workbook is kept out
+of git. Reproduce that full case outside the repository with:
+
+```bash
+python3 scripts/generate-import-fixtures.py \
+  --full-kitchen-sink /tmp/real-kitchen-sink.xlsx
+```
+
+This creates the same three-sheet combined workbook with 10,000 dense rows
+(80,000 dense cells) without adding the large binary to git. Validate it through
+the opt-in foreign-workbook performance regression with:
+
+```bash
+XLSX_FULL_IMPORT_FIXTURE=/tmp/real-kitchen-sink.xlsx \
+  pnpm run test:perf -- src/lib/xlsxForeignImport.perf.test.ts
+```
+
 ## Generated SalesTable fixture
 
 `generated-sales-structured-table.xlsx` is deterministic generated coverage. Regenerate it from the repository root with:

@@ -93,6 +93,53 @@ describe("real native XLSX fixtures", () => {
     expect(roundTripped.tables[0].name).toBe("T1");
   });
 
+  it("imports a trimmed openpyxl kitchen sink without losing supported workbook data", async () => {
+    const source = await fixture("real-kitchen-sink-trimmed.xlsx");
+    expect(source.byteLength).toBeLessThanOrEqual(100 * 1024);
+
+    const workbook = await importWorkbookFromXlsx(source);
+    const sales = workbook.sheets.find((sheet) => sheet.name === "Sales")!;
+    const dashboard = workbook.sheets.find((sheet) => sheet.name === "Dashboard")!;
+    const dense = workbook.sheets.find((sheet) => sheet.name === "Data10k")!;
+    const table = workbook.tables.find((candidate) => candidate.name === "SalesTable")!;
+
+    expect(workbook.sheets).toHaveLength(3);
+    expect(table.range).toEqual({ start: { row: 0, column: 0 }, end: { row: 50, column: 5 } });
+    expect(table.rowIds).toHaveLength(50);
+    expect(Array.from({ length: 50 }, (_, index) => sales.cells[`F${index + 2}`])).toEqual(
+      Array.from({ length: 50 }, (_, index) => `=D${index + 2}*E${index + 2}`)
+    );
+    expect(Array.from({ length: 50 }, (_, index) => sales.cells[`A${index + 2}`])).toEqual(
+      Array.from({ length: 50 }, (_, index) => 46_055 + index)
+    );
+    expect(Array.from({ length: 50 }, (_, index) => {
+      const row = index + 2;
+      return [
+        sales.cells[`B${row}`],
+        sales.cells[`C${row}`],
+        sales.cells[`D${row}`],
+        sales.cells[`E${row}`]
+      ];
+    })).toEqual(Array.from({ length: 50 }, (_, index) => [
+      `Rep ${index % 5 + 1}`,
+      ["South", "East", "West", "North"][index % 4],
+      (index + 1) * 2,
+      Number((9.99 + ((index + 1) % 7) * 5).toFixed(2))
+    ]));
+    expect(sales.formats.A2).toMatchObject({ numberFormat: "date" });
+    expect(sales.freezeTopRow).toBe(true);
+    expect(sales.charts).toEqual([]);
+    expect(dashboard.comments.A10).toBe("Checked by finance");
+    expect(dashboard.cells.A9).toBe("Docs");
+    expect(dashboard.merges[0].range).toEqual({
+      start: { row: 0, column: 0 },
+      end: { row: 0, column: 3 }
+    });
+    expect(Object.keys(dense.cells)).toHaveLength(2_000);
+    expect([dense.cells.A1, dense.cells.H250]).toEqual([1, 1]);
+    expect(dense.rowCount).toBe(250);
+  });
+
   it("imports the deterministic sales matrix exactly and removes filter-derived hidden rows", async () => {
     const expected = JSON.parse(await readFile(
       resolve(fixtureDirectory, "generated-sales-structured-table.expected.json"),

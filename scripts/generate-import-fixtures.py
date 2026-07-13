@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+import openpyxl
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.comments import Comment
@@ -19,12 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIRECTORY = ROOT / "src" / "test" / "fixtures" / "xlsx"
 FIXED_DATETIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
 FIXED_ZIP_TIME = (2026, 1, 1, 0, 0, 0)
+EXPECTED_OPENPYXL_VERSION = "3.1.5"
 
 
 def base_workbook() -> tuple[Workbook, object]:
-    workbook = Workbook()
-    workbook.properties.created = FIXED_DATETIME
-    workbook.properties.modified = FIXED_DATETIME
+    workbook = new_workbook()
     worksheet = workbook.active
     worksheet.title = "S"
     worksheet.append(["Q", "V"])
@@ -33,9 +34,16 @@ def base_workbook() -> tuple[Workbook, object]:
     return workbook, worksheet
 
 
-def save_deterministic(workbook: Workbook, name: str) -> None:
-    OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    destination = OUTPUT_DIRECTORY / name
+def new_workbook() -> Workbook:
+    workbook = Workbook()
+    workbook.properties.created = FIXED_DATETIME
+    workbook.properties.modified = FIXED_DATETIME
+    return workbook
+
+
+def save_deterministic(workbook: Workbook, destination: str | Path) -> None:
+    destination = OUTPUT_DIRECTORY / destination if isinstance(destination, str) else destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile(suffix=".xlsx", dir="/tmp") as temporary:
         workbook.save(temporary.name)
         with ZipFile(temporary.name, "r") as source, ZipFile(
@@ -79,10 +87,73 @@ def generate_table_fixture() -> None:
     save_deterministic(workbook, "variant-table.xlsx")
 
 
+def generate_kitchen_sink_fixture(
+    dense_rows: int = 250,
+    destination: str | Path = "real-kitchen-sink-trimmed.xlsx",
+) -> None:
+    workbook = new_workbook()
+    sales = workbook.active
+    sales.title = "Sales"
+    sales.freeze_panes = "A2"
+    sales.append(["Date", "Rep", "Region", "Units", "Unit Price", "Amount"])
+    regions = ("North", "South", "East", "West")
+    start = datetime(2026, 2, 1)
+    for index in range(1, 51):
+        row = index + 1
+        sales.append([
+            start + timedelta(days=index),
+            f"Rep {(index - 1) % 5 + 1}",
+            regions[index % len(regions)],
+            index * 2,
+            9.99 + (index % 7) * 5,
+            f"=D{row}*E{row}",
+        ])
+        sales.cell(row, 1).number_format = "yyyy-mm-dd"
+
+    table = Table(displayName="SalesTable", ref="A1:F51")
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+    sales.add_table(table)
+    chart = BarChart()
+    chart.add_data(Reference(sales, min_col=6, min_row=1, max_row=11), titles_from_data=True)
+    chart.set_categories(Reference(sales, min_col=2, min_row=2, max_row=11))
+    sales.add_chart(chart, "H2")
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard.merge_cells("A1:D1")
+    dashboard["A1"] = "Sales dashboard"
+    dashboard["A9"] = "Docs"
+    dashboard["A9"].hyperlink = "https://example.com/report"
+    dashboard["A10"] = "Reviewed"
+    dashboard["A10"].comment = Comment("Checked by finance", "Finance")
+
+    dense = workbook.create_sheet("Data10k")
+    for _ in range(dense_rows):
+        dense.append([1] * 8)
+
+    save_deterministic(workbook, destination)
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--full-kitchen-sink",
+        type=Path,
+        metavar="OUTPUT",
+        help="generate only the untrimmed 80,000-cell kitchen sink at OUTPUT",
+    )
+    arguments = parser.parse_args()
+    if openpyxl.__version__ != EXPECTED_OPENPYXL_VERSION:
+        raise RuntimeError(
+            f"Expected openpyxl {EXPECTED_OPENPYXL_VERSION}, found {openpyxl.__version__}"
+        )
+    if arguments.full_kitchen_sink:
+        generate_kitchen_sink_fixture(10_000, arguments.full_kitchen_sink.resolve())
+        return
+
     generate_chart_fixture()
     generate_comment_fixture()
     generate_table_fixture()
+    generate_kitchen_sink_fixture()
 
 
 if __name__ == "__main__":
