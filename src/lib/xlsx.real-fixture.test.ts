@@ -12,10 +12,9 @@ import {
 import { formatCellAddress } from "./addressing";
 import { createBlankWorkbook, setCellComment, setCellContent } from "./workbook";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
-import { validateXlsxArchive } from "./xlsxSecurity";
+import { MAX_XLSX_WORKSHEET_ID, validateXlsxArchive } from "./xlsxSecurity";
 
 const fixtureDirectory = resolve("src/test/fixtures/xlsx");
-const MAX_XLSX_WORKSHEET_ID = 100_000;
 const PATHOLOGICAL_EXCELJS_WORKSHEET_ID = 0xffff_fffe;
 const tableCommandServices: StructuredTableCommandServices = {
   createId: () => "unused-id",
