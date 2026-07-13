@@ -171,6 +171,7 @@ def main() -> None:
     generate_long_comment_sheet_fixture()
     generate_table_fixture()
     generate_kitchen_sink_fixture()
+    generate_kitchen_sink_fixture(10_000, "real-kitchen-sink.xlsx")
 
 
 if __name__ == "__main__":

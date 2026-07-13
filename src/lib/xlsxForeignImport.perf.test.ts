@@ -1,15 +1,19 @@
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { importWorkbookFromXlsx } from "./xlsx";
 
-const fixturePath = process.env.XLSX_FULL_IMPORT_FIXTURE ?? "";
+const fixturePath = resolve("src/test/fixtures/xlsx/real-kitchen-sink.xlsx");
+const FOREIGN_IMPORT_BUDGET_MS = 30_000;
 
-describe.runIf(fixturePath.length > 0)("full foreign XLSX import", () => {
+describe("full foreign XLSX import", () => {
   it("imports the generated 80,000-cell kitchen sink", async () => {
     const source = await readFile(fixturePath);
-    const workbook = await importWorkbookFromXlsx(
-      source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength)
-    );
+    expect(source.byteLength).toBeLessThanOrEqual(500 * 1024);
+
+    const startedAt = performance.now();
+    const workbook = await importWorkbookFromXlsx(source);
+    const importDurationMs = performance.now() - startedAt;
     const sales = workbook.sheets.find((sheet) => sheet.name === "Sales")!;
     const dashboard = workbook.sheets.find((sheet) => sheet.name === "Dashboard")!;
     const dense = workbook.sheets.find((sheet) => sheet.name === "Data10k")!;
@@ -26,5 +30,10 @@ describe.runIf(fixturePath.length > 0)("full foreign XLSX import", () => {
     expect(Object.keys(dense.cells)).toHaveLength(80_000);
     expect([dense.cells.A1, dense.cells.H10000]).toEqual([1, 1]);
     expect(dense.rowCount).toBe(10_000);
+    // eslint-disable-next-line no-console
+    console.log(`foreign-xlsx-import(80k cells)=${Math.round(importDurationMs)}ms`);
+    if (!process.env.SKIP_PERF_ASSERT) {
+      expect(importDurationMs).toBeLessThan(FOREIGN_IMPORT_BUDGET_MS);
+    }
   }, 60_000);
 });

@@ -24,6 +24,7 @@ this application; their unsupported visual parts are never executed.
 | `variant-comment-long-sheet.xlsx` | `b4891817e187c96776e192d8a86da46236a828d7d2305bdd5dc1c66b39e39dcb` |
 | `variant-table.xlsx` | `5cdd602fb9d6162d8180f2631d99f712df05ae8ffa220f2eca647dc7f55c59b1` |
 | `real-kitchen-sink-trimmed.xlsx` | `7a3be94003cb7c2c872fa605c1aeab3ef08bd3b8a6b618c4bd163cec64031992` |
+| `real-kitchen-sink.xlsx` | `bd1f587ad94854aa5317bb4cacefc00b65e2365e9691c37129c4811c42be0983` |
 
 The double-escaped fixture stores `Q&amp;amp;A` in `workbook.xml`, while the
 long-name fixture has two 41-character worksheet names with the same first 31
@@ -33,8 +34,12 @@ ExcelJS-safe unique truncation.
 `real-kitchen-sink-trimmed.xlsx` combines all three foreign layouts with a
 50-row calculated `SalesTable`, dates, freeze panes, a hyperlink, a merged
 heading, and a 2,000-cell dense control sheet. It is intentionally trimmed
-below 100 KiB for unit tests; the full 80,000-cell source workbook is kept out
-of git. Reproduce that full case outside the repository with:
+below 100 KiB for unit tests. `real-kitchen-sink.xlsx` is the checked-in
+177,545-byte performance fixture with the same workbook features and an
+80,000-cell dense sheet. `pnpm run test:perf` imports it unconditionally and
+enforces a 30-second operation budget.
+
+To generate only a standalone copy of the full case at another path, run:
 
 ```bash
 python3 scripts/generate-import-fixtures.py \
@@ -42,13 +47,7 @@ python3 scripts/generate-import-fixtures.py \
 ```
 
 This creates the same three-sheet combined workbook with 10,000 dense rows
-(80,000 dense cells) without adding the large binary to git. Validate it through
-the opt-in foreign-workbook performance regression with:
-
-```bash
-XLSX_FULL_IMPORT_FIXTURE=/tmp/real-kitchen-sink.xlsx \
-  pnpm run test:perf -- src/lib/xlsxForeignImport.perf.test.ts
-```
+(80,000 dense cells) without replacing the checked-in fixture.
 
 ## Generated SalesTable fixture
 
