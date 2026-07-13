@@ -74,7 +74,9 @@ export async function importWorkbookFromXlsx(
   const prepared = prepareXlsxImportForExcelJs(bytes);
   const xmlMetadata = prepared.tableMetadata;
   const nativeComments = prepared.comments;
-  const nativeCommentsBySheet = new Map(nativeComments.map((entry) => [entry.sheetName, entry.comments]));
+  const nativeCommentsBySheetIndex = new Map(
+    nativeComments.map((entry) => [entry.sheetIndex, entry.comments])
+  );
   const ExcelJS = await loadExcelJs();
   const excelWorkbook = new ExcelJS.Workbook();
   await excelWorkbook.xlsx.load(toArrayBuffer(prepared.excelJsBytes) as ExcelJS.Buffer);
@@ -88,7 +90,7 @@ export async function importWorkbookFromXlsx(
       worksheet,
       index,
       tablesByWorksheet[index],
-      nativeCommentsBySheet.get(worksheet.name)
+      nativeCommentsBySheetIndex.get(index)
     )
   );
   const tables = tablesByWorksheet.flat();

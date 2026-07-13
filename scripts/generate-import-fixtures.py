@@ -79,6 +79,21 @@ def generate_comment_fixture() -> None:
     save_deterministic(workbook, "variant-comment.xlsx")
 
 
+def generate_named_comment_fixture(sheet_name: str, destination: str) -> None:
+    workbook, worksheet = base_workbook()
+    worksheet.title = sheet_name
+    worksheet["A1"].comment = Comment("hello", "author")
+    save_deterministic(workbook, destination)
+
+
+def generate_long_comment_sheet_fixture() -> None:
+    workbook, worksheet = base_workbook()
+    worksheet.title = "Commented worksheet with a very long name"
+    worksheet["A1"].comment = Comment("hello", "author")
+    workbook.create_sheet("Commented worksheet with a very long note")
+    save_deterministic(workbook, "variant-comment-long-sheet.xlsx")
+
+
 def generate_table_fixture() -> None:
     workbook, worksheet = base_workbook()
     table = Table(displayName="T1", ref="A1:B5")
@@ -152,6 +167,8 @@ def main() -> None:
 
     generate_chart_fixture()
     generate_comment_fixture()
+    generate_named_comment_fixture("Q&amp;A", "variant-comment-double-escaped-sheet.xlsx")
+    generate_long_comment_sheet_fixture()
     generate_table_fixture()
     generate_kitchen_sink_fixture()
 

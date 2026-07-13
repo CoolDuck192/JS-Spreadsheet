@@ -35,10 +35,12 @@ const TABLE_ENTRY_PATTERN = /^xl\/tables\/[^/]+\.xml$/i;
 const COMMENT_ENTRY_PATTERN = /^xl\/comments(?:\/[^/]+|[^/]*)\.xml$/i;
 const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
 const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
+const EXCELJS_WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/sheet\d+\.xml$/i;
 const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
 const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProject(?:Signature)?\.bin\.rels)$/i;
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const EXCEL_MAX_WORKSHEET_NAME_LENGTH = 31;
 const EXCEL_MAX_ROWS = 1_048_576;
 const EXCEL_MAX_COLUMNS = 16_384;
 const XLSX_WORKBOOK_CONTENT_TYPE =
@@ -65,6 +67,7 @@ const VBA_RELATIONSHIP_TYPES = new Set([
 ]);
 
 export type NativeWorksheetComments = {
+  sheetIndex: number;
   sheetName: string;
   comments: Readonly<Record<string, string>>;
 };
@@ -128,13 +131,19 @@ function readNativeCommentEntries(
   const commentsByPart = new Map<string, Readonly<Record<string, string>>>();
   const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
   const worksheets: NativeWorksheetComments[] = [];
-  for (const sheet of allElementsByLocalName(workbook, "sheet")) {
+  const workbookSheets = allElementsByLocalName(workbook, "sheet");
+  for (const sheet of workbookSheets) {
     const sheetName = sheet.getAttribute("name");
     const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
     const worksheetPart = relationship
       ? resolveRelationshipTarget("xl/workbook.xml", relationship.target)
       : undefined;
-    if (!sheetName || !worksheetPart) continue;
+    if (
+      !sheetName
+      || !worksheetPart
+      || !EXCELJS_WORKSHEET_ENTRY_PATTERN.test(worksheetPart)
+      || !entries.has(worksheetPart)
+    ) continue;
 
     let comments = commentsByWorksheetPart.get(worksheetPart);
     if (!comments) {
@@ -164,7 +173,7 @@ function readNativeCommentEntries(
       comments = parsedComments;
       commentsByWorksheetPart.set(worksheetPart, comments);
     }
-    worksheets.push({ sheetName, comments });
+    worksheets.push({ sheetIndex: worksheets.length, sheetName, comments });
   }
   return worksheets;
 }
@@ -211,6 +220,7 @@ export function prepareXlsxImportForExcelJs(data: Uint8Array): PreparedXlsxImpor
 
 function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>): Uint8Array {
   const entries = new Map(entriesInput);
+  truncateLongWorksheetNamesForExcelJs(entries);
   removeUnsupportedDrawingParts(entries);
   removeCommentParts(entries);
   removeVbaProjectParts(entries);
@@ -226,6 +236,42 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function truncateLongWorksheetNamesForExcelJs(entries: Map<string, Uint8Array>): void {
+  const workbookXml = entries.get("xl/workbook.xml");
+  if (!workbookXml) return;
+  const document = parseXml(strFromU8(workbookXml));
+  const sheets = allElementsByLocalName(document, "sheet");
+  const usedNames = new Set(
+    sheets.flatMap((sheet) => {
+      const name = sheet.getAttribute("name");
+      return name && name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH
+        ? [name.toLowerCase()]
+        : [];
+    })
+  );
+  let changed = false;
+
+  for (const sheet of sheets) {
+    const name = sheet.getAttribute("name");
+    if (!name || name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH) continue;
+    const baseName = name.slice(0, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
+    let candidate = baseName;
+    let suffix = 1;
+    while (usedNames.has(candidate.toLowerCase())) {
+      const suffixText = ` ${suffix}`;
+      candidate = `${baseName.slice(0, EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length)}${suffixText}`;
+      suffix += 1;
+    }
+    sheet.setAttribute("name", candidate);
+    usedNames.add(candidate.toLowerCase());
+    changed = true;
+  }
+
+  if (changed) {
+    entries.set("xl/workbook.xml", strToU8(new XMLSerializer().serializeToString(document)));
+  }
 }
 
 function removeVbaProjectParts(entries: Map<string, Uint8Array>): void {

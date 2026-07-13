@@ -221,10 +221,43 @@ describe("xlsxTableXml", () => {
 
     expect(comments).toHaveLength(ALIASED_COMMENT_SHEET_COUNT);
     expect(comments[ALIASED_COMMENT_SHEET_COUNT - 1]).toEqual({
+      sheetIndex: ALIASED_COMMENT_SHEET_COUNT - 1,
       sheetName: `Alias ${ALIASED_COMMENT_SHEET_COUNT}`,
       comments: { A1: "hello" }
     });
     expect(durationMs).toBeLessThan(ALIASED_COMMENT_PARSE_BUDGET_MS);
+  });
+
+  it("numbers native comments by worksheet order when a chartsheet comes first", async () => {
+    const source = await readFile(commentFixturePath);
+    const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+    entries["xl/workbook.xml"] = strToU8(
+      strFromU8(entries["xl/workbook.xml"]).replace(
+        "<sheets>",
+        '<sheets><sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Chart" sheetId="2" state="visible" r:id="rId4"/>'
+      )
+    );
+    entries["xl/_rels/workbook.xml.rels"] = strToU8(
+      strFromU8(entries["xl/_rels/workbook.xml.rels"]).replace(
+        "</Relationships>",
+        '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="/xl/chartsheets/sheet1.xml" Id="rId4"/></Relationships>'
+      )
+    );
+    entries["xl/chartsheets/sheet1.xml"] = strToU8(
+      '<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews></chartsheet>'
+    );
+    entries["[Content_Types].xml"] = strToU8(
+      strFromU8(entries["[Content_Types].xml"]).replace(
+        "</Types>",
+        '<Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>'
+      )
+    );
+
+    expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+      sheetIndex: 0,
+      sheetName: "S",
+      comments: { A1: "hello" }
+    }]);
   });
 
   it.each(["xl/notes.dat", "xl/notes.xml"])(
@@ -243,7 +276,11 @@ describe("xlsxTableXml", () => {
           .replace("/xl/comments/comment1.xml", `/${commentPart}`)
       );
 
-      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{ sheetName: "S", comments: {} }]);
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+        sheetIndex: 0,
+        sheetName: "S",
+        comments: {}
+      }]);
     }
   );
 
@@ -256,7 +293,11 @@ describe("xlsxTableXml", () => {
         strFromU8(entries["xl/comments/comment1.xml"]).replace('ref="A1"', `ref="${reference}"`)
       );
 
-      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{ sheetName: "S", comments: {} }]);
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+        sheetIndex: 0,
+        sheetName: "S",
+        comments: {}
+      }]);
     }
   );
   it("canonicalizes package-root table targets for ExcelJS", async () => {

@@ -62,6 +62,27 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets[0].comments.A1).toBe("hello");
   });
 
+  it("matches native comments by sheet order when ExcelJS double-decodes the sheet name", async () => {
+    const workbook = await importWorkbookFromXlsx(
+      await fixture("variant-comment-double-escaped-sheet.xlsx")
+    );
+
+    expect(workbook.sheets[0].name).toBe("Q&A");
+    expect(workbook.sheets[0].comments.A1).toBe("hello");
+  });
+
+  it("imports comments from a worksheet whose source name exceeds Excel's limit", async () => {
+    const workbook = await importWorkbookFromXlsx(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(workbook.sheets.map((sheet) => sheet.name)).toEqual([
+      "Commented worksheet with a very",
+      "Commented worksheet with a ve 1"
+    ]);
+    expect(workbook.sheets[0].comments.A1).toBe("hello");
+  });
+
   it("preserves application-authored comments through the native XML path", async () => {
     let source = createBlankWorkbook();
     source = setCellContent(source, source.activeSheetId, "A1", "commented");
