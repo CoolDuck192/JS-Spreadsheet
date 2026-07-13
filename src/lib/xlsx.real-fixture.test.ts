@@ -4,6 +4,7 @@ import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import type { FilterExpression } from "../table/core/query";
 import type { StructuredTable, WorkbookModel } from "../types";
+import { migrateWorkbookModel } from "../core/workbook/migrateWorkbook";
 import { formatCellAddress } from "./addressing";
 import { createBlankWorkbook, setCellComment, setCellContent } from "./workbook";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
@@ -69,6 +70,27 @@ describe("real native XLSX fixtures", () => {
     const workbook = await importWorkbookFromXlsx(await exportWorkbookToXlsx(source));
 
     expect(workbook.sheets[0].comments.A1).toBe("round-trip note");
+  });
+
+  it("imports openpyxl root-relative table relationships without renaming the table", async () => {
+    const workbook = await importWorkbookFromXlsx(await fixture("variant-table.xlsx"));
+    const table = workbook.tables[0];
+
+    expect(table.name).toBe("T1");
+    expect(table.range).toEqual({ start: { row: 0, column: 0 }, end: { row: 4, column: 1 } });
+    expect(table.columns.map((column) => column.name)).toEqual(["Q", "V"]);
+    expect(table.rowIds).toHaveLength(4);
+    expect(table.style).toEqual({
+      theme: "TableStyleMedium9",
+      showFirstColumn: false,
+      showLastColumn: false,
+      showRowStripes: true,
+      showColumnStripes: false
+    });
+    expect(migrateWorkbookModel(workbook)).not.toBeNull();
+
+    const roundTripped = await importWorkbookFromXlsx(await exportWorkbookToXlsx(workbook));
+    expect(roundTripped.tables[0].name).toBe("T1");
   });
 
   it("imports the deterministic sales matrix exactly and removes filter-derived hidden rows", async () => {

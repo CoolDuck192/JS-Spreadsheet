@@ -1,6 +1,9 @@
 import type ExcelJS from "exceljs";
 import { createRandomId, createStableKeyRowId, type IdGenerator } from "../core/ids";
-import { normalizeExcelTableNameKey, validateExcelTableName } from "../core/workbook/tableNames";
+import {
+  normalizeExcelTableNameKey,
+  validateExcelTableNameForInterop
+} from "../core/workbook/tableNames";
 import type { FilterExpression, QueryScalar } from "../table/core/query";
 import type { TableDataType } from "../table/core/types";
 import type {
@@ -58,7 +61,7 @@ export async function importStructuredTablesFromWorksheet(
   const plans = nativeTables.map((nativeTable) => {
     const model = nativeTableModel(nativeTable);
     const name = model.name || model.displayName || nativeTable.name;
-    const validation = validateExcelTableName(name);
+    const validation = validateExcelTableNameForInterop(name);
     if (!validation.valid) throw xlsxTableError("XLSX_TABLE_NAME_INVALID", `Invalid native table name ${name}`);
     if (names.has(validation.normalizedKey)) {
       throw xlsxTableError("XLSX_TABLE_NAME_DUPLICATE", `Duplicate native table name ${name}`);
@@ -381,7 +384,7 @@ function coerceFilterScalar(value: QueryScalar, dataType: TableDataType | undefi
 function validateWorkbookTableNames(tables: readonly StructuredTable[]): void {
   const names = new Set<string>();
   for (const table of tables) {
-    const validation = validateExcelTableName(table.name);
+    const validation = validateExcelTableNameForInterop(table.name);
     if (!validation.valid) throw xlsxTableError("XLSX_TABLE_NAME_INVALID", `Invalid native table name ${table.name}`);
     if (names.has(validation.normalizedKey)) {
       throw xlsxTableError("XLSX_TABLE_NAME_DUPLICATE", `Duplicate native table name ${table.name}`);

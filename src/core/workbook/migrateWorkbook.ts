@@ -28,7 +28,10 @@ import {
   type TableSort
 } from "../../table/core/query";
 import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
-import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
+import {
+  normalizeExcelTableNameKey,
+  validateExcelTableNameForInterop
+} from "./tableNames";
 import { normalizeNamedRangeLookup } from "./namedRangeNames";
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
@@ -425,7 +428,7 @@ function migrateTable(
 ): StructuredTable | null {
   if (!isRecord(value)) return null;
   if (!nonBlankString(value.id) || !nonBlankString(value.name) || !nonBlankString(value.sheetId)) return null;
-  if (!validateExcelTableName(value.name).valid || !isCellRange(value.range)) return null;
+  if (!validateExcelTableNameForInterop(value.name).valid || !isCellRange(value.range)) return null;
   if (typeof value.headerRow !== "boolean" || typeof value.totalsRow !== "boolean") return null;
   const sheet = sheetById.get(value.sheetId);
   if (!sheet || !rangeInBounds(value.range, sheet)) return null;

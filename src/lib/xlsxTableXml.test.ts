@@ -20,6 +20,7 @@ const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-t
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
 const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
 const commentFixturePath = resolve("src/test/fixtures/xlsx/variant-comment.xlsx");
+const tableFixturePath = resolve("src/test/fixtures/xlsx/variant-table.xlsx");
 
 async function fixture(name: "generated" | "real" = "generated") {
   const bytes = await readFile(name === "generated" ? fixturePath : realFixturePath);
@@ -224,6 +225,18 @@ describe("xlsxTableXml", () => {
       expect(readNativeCommentsXml(zipSync(entries))).toEqual([{ sheetName: "S", comments: {} }]);
     }
   );
+  it("canonicalizes package-root table targets for ExcelJS", async () => {
+    const source = await readFile(tableFixturePath);
+    const prepared = prepareNativeTableXmlForExcelJs(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const relationships = strFromU8(
+      unzipSync(prepared)["xl/worksheets/_rels/sheet1.xml.rels"]
+    );
+
+    expect(relationships).toContain('Target="../tables/table1.xml"');
+    expect(relationships).not.toContain('Target="/xl/tables/table1.xml"');
+  });
 
   it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {
     const source = makeAboveFloorWorksheetPackage();

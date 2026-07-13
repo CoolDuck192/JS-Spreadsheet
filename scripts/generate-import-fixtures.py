@@ -12,6 +12,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.comments import Comment
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,9 +71,18 @@ def generate_comment_fixture() -> None:
     save_deterministic(workbook, "variant-comment.xlsx")
 
 
+def generate_table_fixture() -> None:
+    workbook, worksheet = base_workbook()
+    table = Table(displayName="T1", ref="A1:B5")
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+    worksheet.add_table(table)
+    save_deterministic(workbook, "variant-table.xlsx")
+
+
 def main() -> None:
     generate_chart_fixture()
     generate_comment_fixture()
+    generate_table_fixture()
 
 
 if __name__ == "__main__":

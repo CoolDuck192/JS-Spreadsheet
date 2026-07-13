@@ -50,6 +50,10 @@ const COMMENT_RELATIONSHIP_TYPES = new Set([
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
   "http://purl.oclc.org/ooxml/officeDocument/relationships/comments"
 ]);
+const TABLE_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/table"
+]);
 
 export type NativeWorksheetComments = {
   sheetName: string;
@@ -188,6 +192,7 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   const entries = new Map(entriesInput);
   removeUnsupportedDrawingParts(entries);
   removeCommentParts(entries);
+  canonicalizeTableRelationshipTargets(entries);
   for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
     const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const column of allElementsByLocalName(document, "tableColumn")) {
@@ -199,6 +204,23 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function canonicalizeTableRelationshipTargets(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()].filter((name) => (
+    /^xl\/worksheets\/_rels\/[^/]+\.xml\.rels$/i.test(name)
+  ))) {
+    const sourcePart = sourcePartForRelationships(entryName);
+    if (!sourcePart) continue;
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      if (!TABLE_RELATIONSHIP_TYPES.has(relationship.getAttribute("Type") ?? "")) continue;
+      const target = resolveRelationshipTarget(sourcePart, relationship.getAttribute("Target") ?? "");
+      const tableName = target?.match(/^xl\/tables\/([^/]+\.xml)$/i)?.[1];
+      if (tableName) relationship.setAttribute("Target", `../tables/${tableName}`);
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
 }
 
 function removeCommentParts(entries: Map<string, Uint8Array>): void {
@@ -290,6 +312,15 @@ function relationshipPartName(partName: string): string {
   const segments = partName.split("/");
   const fileName = segments.pop() ?? "";
   return [...segments, "_rels", `${fileName}.rels`].join("/");
+}
+
+function sourcePartForRelationships(relationshipPartName: string): string | undefined {
+  const marker = "/_rels/";
+  const markerOffset = relationshipPartName.indexOf(marker);
+  if (markerOffset < 0 || !relationshipPartName.endsWith(".rels")) return undefined;
+  const prefix = relationshipPartName.slice(0, markerOffset);
+  const relatedName = relationshipPartName.slice(markerOffset + marker.length, -".rels".length);
+  return relatedName && !relatedName.includes("/") ? `${prefix}/${relatedName}` : undefined;
 }
 
 function resolveRelationshipTarget(sourcePart: string, target: string): string | undefined {
