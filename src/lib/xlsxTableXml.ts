@@ -12,9 +12,10 @@ import type {
   TableAggregate,
   WorkbookModel
 } from "../types";
-import { formatCellAddress } from "./addressing";
+import { formatCellAddress, parseCellAddress } from "./addressing";
 import { a1FormulaToStructured } from "./structuredFormula";
 import {
+  MAX_XLSX_WORKSHEET_ID,
   extractValidatedXlsxEntries,
   validateXlsxArchive
 } from "./xlsxSecurity";
@@ -32,8 +33,56 @@ export type NativeTableXmlMetadata = {
 };
 
 const TABLE_ENTRY_PATTERN = /^xl\/tables\/[^/]+\.xml$/i;
-const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
+const COMMENT_ENTRY_PATTERN = /^xl\/comments(?:\/[^/]+|[^/]*)\.xml$/i;
+const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
+const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
+// Keep this in lockstep with ExcelJS 4.4's worksheet-part discovery regex.
+// In particular, ExcelJS's match is case-sensitive and is not end-anchored.
+const EXCELJS_WORKSHEET_ENTRY_PATTERN = /xl\/worksheets\/sheet\d+[.]xml/;
+const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
+const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProject(?:Signature)?\.bin\.rels)$/i;
+// Local-time constructor: fflate validates zip timestamps with local getters
+// (getFullYear() etc.), so a UTC-midnight 1980 instant becomes 1979 in
+// negative-offset timezones and throws "date not in range 1980-2099".
+const FIXED_ZIP_DATE = new Date(1980, 0, 1);
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const EXCEL_MAX_WORKSHEET_NAME_LENGTH = 31;
+const EXCEL_MAX_ROWS = 1_048_576;
+const EXCEL_MAX_COLUMNS = 16_384;
+const XLSX_WORKBOOK_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const XLSM_WORKBOOK_CONTENT_TYPE =
+  "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+const DRAWING_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/drawing",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/vmlDrawing"
+]);
+const COMMENT_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/comments"
+]);
+const TABLE_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/table"
+]);
+const VBA_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+  "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"
+]);
+
+export type NativeWorksheetComments = {
+  sheetIndex: number;
+  sheetName: string;
+  comments: Readonly<Record<string, string>>;
+};
+
+export type PreparedXlsxImport = {
+  tableMetadata: readonly NativeTableXmlMetadata[];
+  comments: readonly NativeWorksheetComments[];
+  excelJsBytes: Uint8Array;
+};
 
 const NATIVE_TO_AGGREGATE: Readonly<Record<string, TableAggregate>> = {
   sum: "sum",
@@ -59,11 +108,131 @@ const AGGREGATE_TO_NATIVE: Readonly<Record<TableAggregate, string>> = {
 };
 
 export function readNativeTableXml(data: Uint8Array): readonly NativeTableXmlMetadata[] {
-  const entries = validatedEntries(data);
+  return readNativeTableEntries(validatedEntries(data));
+}
+
+function readNativeTableEntries(
+  entries: ReadonlyMap<string, Uint8Array>
+): readonly NativeTableXmlMetadata[] {
   return [...entries.keys()]
     .filter((name) => TABLE_ENTRY_PATTERN.test(name))
     .sort(naturalEntryOrder)
     .map((name) => readTableDocument(strFromU8(entries.get(name)!)));
+}
+
+export function readNativeCommentsXml(data: Uint8Array): readonly NativeWorksheetComments[] {
+  return readNativeCommentEntries(validatedEntries(data));
+}
+
+function readNativeCommentEntries(
+  entries: ReadonlyMap<string, Uint8Array>
+): readonly NativeWorksheetComments[] {
+  const workbookXml = entries.get("xl/workbook.xml");
+  const workbookRelationshipsXml = entries.get("xl/_rels/workbook.xml.rels");
+  if (!workbookXml || !workbookRelationshipsXml) return [];
+
+  const workbook = parseXml(strFromU8(workbookXml));
+  const workbookRelationships = relationshipsById(parseXml(strFromU8(workbookRelationshipsXml)));
+  const relationshipsByPart = new Map<string, ReadonlyMap<string, NativeRelationship>>();
+  const commentsByPart = new Map<string, Readonly<Record<string, string>>>();
+  const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
+  const reconciledWorksheetsByPart = new Map<
+    string,
+    Omit<NativeWorksheetComments, "sheetIndex"> & { id: number }
+  >();
+  const firstSheetIndexById = new Map<number, number>();
+  const workbookSheets = allElementsByLocalName(workbook, "sheet");
+  for (const [workbookSheetIndex, sheet] of workbookSheets.entries()) {
+    const { id: sheetId, name: sheetName } = excelJsWorksheetIdentity(sheet);
+    if (!Number.isNaN(sheetId) && !firstSheetIndexById.has(sheetId)) {
+      firstSheetIndexById.set(sheetId, workbookSheetIndex);
+    }
+    const relationship = workbookRelationships.get(excelJsWorksheetRelationshipId(sheet));
+    const worksheetPart = relationship
+      ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
+      : undefined;
+    if (
+      !sheetName
+      || !isExcelJsWorksheetFileEntry(worksheetPart, entries)
+    ) continue;
+
+    let comments = commentsByWorksheetPart.get(worksheetPart);
+    if (!comments) {
+      const relationshipPart = relationshipPartName(worksheetPart);
+      const relationshipXml = entries.get(relationshipPart);
+      const relationships = relationshipsByPart.get(relationshipPart)
+        ?? (relationshipXml ? relationshipsById(parseXml(strFromU8(relationshipXml))) : new Map());
+      relationshipsByPart.set(relationshipPart, relationships);
+
+      const parsedComments: Record<string, string> = {};
+      for (const candidate of relationships.values()) {
+        if (
+          !COMMENT_RELATIONSHIP_TYPES.has(candidate.type)
+          || candidate.targetMode.toLowerCase() === "external"
+        ) continue;
+        const commentPart = resolveRelationshipTarget(worksheetPart, candidate.target);
+        if (!commentPart || !COMMENT_ENTRY_PATTERN.test(commentPart)) continue;
+        const commentXml = entries.get(commentPart);
+        if (!commentXml) continue;
+        let commentMap = commentsByPart.get(commentPart);
+        if (!commentMap) {
+          commentMap = readCommentDocument(strFromU8(commentXml));
+          commentsByPart.set(commentPart, commentMap);
+        }
+        Object.assign(parsedComments, commentMap);
+      }
+      comments = parsedComments;
+      commentsByWorksheetPart.set(worksheetPart, comments);
+    }
+    reconciledWorksheetsByPart.set(worksheetPart, {
+      id: sheetId,
+      sheetName,
+      comments
+    });
+  }
+
+  const worksheetsById = new Map<
+    number,
+    Omit<NativeWorksheetComments, "sheetIndex"> & { orderNo: number }
+  >();
+  // zipEntries sorts the prepared derivative, so ExcelJS assigns worksheet models
+  // to its sparse ID registry in this physical part order after reconciliation.
+  const excelJsWorksheetParts = [...entries.keys()]
+    .filter((name) => isExcelJsWorksheetFileEntry(name, entries))
+    .sort();
+  for (const worksheetPart of excelJsWorksheetParts) {
+    const worksheet = reconciledWorksheetsByPart.get(worksheetPart);
+    if (!worksheet || !isExcelJsPublicWorksheetId(worksheet.id)) continue;
+    worksheetsById.set(worksheet.id, {
+      orderNo: firstSheetIndexById.get(worksheet.id) ?? -1,
+      sheetName: worksheet.sheetName,
+      comments: worksheet.comments
+    });
+  }
+
+  return [...worksheetsById.values()]
+    .sort((left, right) => left.orderNo - right.orderNo)
+    .map((worksheet, sheetIndex) => ({
+      sheetIndex,
+      sheetName: worksheet.sheetName,
+      comments: worksheet.comments
+    }));
+}
+
+function isExcelJsPublicWorksheetId(id: number): boolean {
+  return Number.isInteger(id) && id >= 1 && id <= MAX_XLSX_WORKSHEET_ID;
+}
+
+function isExcelJsWorksheetFileEntry(
+  entryName: string | undefined,
+  entries: ReadonlyMap<string, Uint8Array>
+): entryName is string {
+  return Boolean(
+    entryName
+    && !entryName.endsWith("/")
+    && EXCELJS_WORKSHEET_ENTRY_PATTERN.test(entryName)
+    && entries.has(entryName)
+  );
 }
 
 export function patchNativeTableXml(
@@ -91,10 +260,31 @@ export function patchNativeTableXml(
 /**
  * ExcelJS 4.4 cannot parse table-column formula children before the final
  * column. Import uses this validated derivative only for ExcelJS's cell/table
- * model; the original XML is read first and remains the metadata authority.
+ * model; native metadata is read from the validated, consistently renamed
+ * entry view before the unsupported formula children are removed.
  */
 export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
-  const entries = new Map(validatedEntries(data));
+  return prepareEntriesForExcelJs(entriesWithExcelJsCompatibleWorksheetNames(
+    validatedEntries(data)
+  ));
+}
+
+export function prepareXlsxImportForExcelJs(data: Uint8Array): PreparedXlsxImport {
+  const originalEntries = validatedEntries(data);
+  const preparedEntries = entriesWithExcelJsCompatibleWorksheetNames(originalEntries);
+  return {
+    tableMetadata: readNativeTableEntries(preparedEntries),
+    comments: readNativeCommentEntries(originalEntries),
+    excelJsBytes: prepareEntriesForExcelJs(preparedEntries)
+  };
+}
+
+function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>): Uint8Array {
+  const entries = new Map(entriesInput);
+  removeUnsupportedDrawingParts(entries);
+  removeCommentParts(entries);
+  removeVbaProjectParts(entries);
+  canonicalizeTableRelationshipTargets(entries);
   for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
     const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const column of allElementsByLocalName(document, "tableColumn")) {
@@ -106,6 +296,602 @@ export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function entriesWithExcelJsCompatibleWorksheetNames(
+  entriesInput: ReadonlyMap<string, Uint8Array>
+): Map<string, Uint8Array> {
+  const entries = new Map(entriesInput);
+  const renamedWorksheets = truncateLongWorksheetNamesForExcelJs(entries);
+  rewriteRenamedWorksheetQualifiers(entries, renamedWorksheets);
+  return entries;
+}
+
+function excelJsWorksheetIdentity(sheet: XmlElement): { id: number; name: string } {
+  const id = Number.parseInt(sheet.getAttribute("sheetId") ?? "", 10);
+  return {
+    id,
+    name: sheet.getAttribute("name") ?? `sheet${id}`
+  };
+}
+
+function excelJsWorksheetRelationshipId(sheet: XmlElement): string {
+  return sheet.getAttribute("r:id") ?? "";
+}
+
+function sliceAtUtf16CodePointBoundary(value: string, maxCodeUnits: number): string {
+  const candidate = value.slice(0, maxCodeUnits);
+  const trailingCodeUnit = candidate.charCodeAt(candidate.length - 1);
+  return trailingCodeUnit >= 0xd800 && trailingCodeUnit <= 0xdbff
+    ? candidate.slice(0, -1)
+    : candidate;
+}
+
+function reserveUniqueWorksheetName(name: string, usedNames: Set<string>): string {
+  const baseName = sliceAtUtf16CodePointBoundary(name, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
+  let candidate = baseName;
+  let suffix = 1;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const suffixText = ` ${suffix}`;
+    candidate = `${sliceAtUtf16CodePointBoundary(
+      baseName,
+      EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length
+    )}${suffixText}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function truncateLongWorksheetNamesForExcelJs(
+  entries: Map<string, Uint8Array>
+): ReadonlyMap<string, string> {
+  const workbookXml = entries.get("xl/workbook.xml");
+  if (!workbookXml) return new Map();
+  const document = parseXml(strFromU8(workbookXml));
+  const sheets = allElementsByLocalName(document, "sheet");
+  const renamedWorksheets = new Map<string, string>();
+  let changed = false;
+  const sourceNames = sheets.map((sheet) => sheet.getAttribute("name"));
+  const usedNames = new Set(
+    sourceNames.flatMap((name) => {
+      return name && name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH
+        ? [name.toLowerCase()]
+        : [];
+    })
+  );
+  const workbookRelationshipsXml = entries.get("xl/_rels/workbook.xml.rels");
+  const workbookRelationships: ReadonlyMap<string, NativeRelationship> = workbookRelationshipsXml
+    ? relationshipsById(parseXml(strFromU8(workbookRelationshipsXml)))
+    : new Map();
+  const worksheetParts = sheets.map((sheet) => {
+    const relationship = workbookRelationships.get(excelJsWorksheetRelationshipId(sheet));
+    const worksheetPart = relationship
+      ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
+      : undefined;
+    return isExcelJsWorksheetFileEntry(worksheetPart, entries)
+      ? worksheetPart
+      : undefined;
+  });
+  const finalSynthesizedNameByPart = new Map<string, string | null>();
+  for (const [index, worksheetPart] of worksheetParts.entries()) {
+    if (!worksheetPart) continue;
+    finalSynthesizedNameByPart.set(
+      worksheetPart,
+      sourceNames[index] === null ? excelJsWorksheetIdentity(sheets[index]).name : null
+    );
+  }
+  const synthesizedNamesByPart = new Map<string, string>();
+  for (const worksheetPart of worksheetParts) {
+    if (!worksheetPart || synthesizedNamesByPart.has(worksheetPart)) continue;
+    const finalSynthesizedName = finalSynthesizedNameByPart.get(worksheetPart);
+    if (finalSynthesizedName) {
+      synthesizedNamesByPart.set(
+        worksheetPart,
+        reserveUniqueWorksheetName(finalSynthesizedName, usedNames)
+      );
+    }
+  }
+  const synthesizedNamesBySheetIndex = new Map<number, string>();
+  for (const [index, sheet] of sheets.entries()) {
+    if (sourceNames[index] !== null) continue;
+    const worksheetPart = worksheetParts[index];
+    if (worksheetPart && !synthesizedNamesByPart.has(worksheetPart)) {
+      synthesizedNamesByPart.set(
+        worksheetPart,
+        reserveUniqueWorksheetName(excelJsWorksheetIdentity(sheet).name, usedNames)
+      );
+    } else if (!worksheetPart) {
+      synthesizedNamesBySheetIndex.set(
+        index,
+        reserveUniqueWorksheetName(excelJsWorksheetIdentity(sheet).name, usedNames)
+      );
+    }
+  }
+  const worksheetNames = sheets.map((sheet, index) => {
+    const sourceName = sourceNames[index];
+    if (sourceName !== null) return sourceName;
+
+    const worksheetPart = worksheetParts[index];
+    const candidate = worksheetPart
+      ? synthesizedNamesByPart.get(worksheetPart)!
+      : synthesizedNamesBySheetIndex.get(index)!;
+    sheet.setAttribute("name", candidate);
+    changed = true;
+    return candidate;
+  });
+
+  for (const [index, sheet] of sheets.entries()) {
+    const name = worksheetNames[index];
+    if (!name || name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH) continue;
+    const candidate = reserveUniqueWorksheetName(name, usedNames);
+    sheet.setAttribute("name", candidate);
+    renamedWorksheets.set(name, candidate);
+    changed = true;
+  }
+
+  if (changed) {
+    entries.set("xl/workbook.xml", strToU8(new XMLSerializer().serializeToString(document)));
+  }
+  return renamedWorksheets;
+}
+
+const FORMULA_BEARING_ELEMENT_NAMES = new Set([
+  "calculatedColumnFormula",
+  "definedName",
+  "f",
+  "formula",
+  "formula1",
+  "formula2",
+  "totalsRowFormula"
+]);
+
+function rewriteRenamedWorksheetQualifiers(
+  entries: Map<string, Uint8Array>,
+  renamedWorksheets: ReadonlyMap<string, string>
+): void {
+  if (renamedWorksheets.size === 0) return;
+  const replacements = new Map(
+    [...renamedWorksheets].map(([source, destination]) => [
+      excelJsWorksheetNameKey(source),
+      destination
+    ])
+  );
+  const formulaEntryNames = [...entries.keys()].filter((name) => (
+    name === "xl/workbook.xml"
+    || WORKSHEET_ENTRY_PATTERN.test(name)
+    || TABLE_ENTRY_PATTERN.test(name)
+  ));
+
+  for (const entryName of formulaEntryNames) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    let changed = false;
+    for (const element of Array.from(document.getElementsByTagName("*"))) {
+      if (!FORMULA_BEARING_ELEMENT_NAMES.has(element.localName ?? "")) continue;
+      const formula = element.textContent ?? "";
+      const rewritten = rewriteFormulaWorksheetQualifiers(formula, replacements);
+      if (rewritten === formula) continue;
+      while (element.firstChild) element.removeChild(element.firstChild);
+      element.appendChild(document.createTextNode(rewritten));
+      changed = true;
+    }
+    if (changed) {
+      entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+    }
+  }
+}
+
+function rewriteFormulaWorksheetQualifiers(
+  formula: string,
+  replacements: ReadonlyMap<string, string>
+): string {
+  let rewritten = "";
+  let index = 0;
+  while (index < formula.length) {
+    if (formula[index] === '"') {
+      const end = skipFormulaQuotedSegment(formula, index, '"');
+      rewritten += formula.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (formula[index] === "[") {
+      const end = skipFormulaBracketedSegment(formula, index);
+      rewritten += formula.slice(index, end);
+      index = end;
+      continue;
+    }
+    const qualifier = formula[index] === "'"
+      ? readQuotedFormulaWorksheetQualifier(formula, index)
+      : readUnquotedFormulaWorksheetQualifier(formula, index);
+    if (!qualifier) {
+      if (formula[index] === "'") {
+        const end = skipFormulaQuotedSegment(formula, index, "'");
+        rewritten += formula.slice(index, end);
+        index = end;
+        continue;
+      }
+      rewritten += formula[index];
+      index += 1;
+      continue;
+    }
+    const replacement = rewriteWorksheetQualifierNames(qualifier.names, replacements);
+    rewritten += replacement
+      ? `${quoteFormulaWorksheetQualifier(replacement)}!`
+      : formula.slice(index, qualifier.end);
+    index = qualifier.end;
+  }
+  return rewritten;
+}
+
+type FormulaWorksheetQualifier = {
+  names: readonly string[];
+  end: number;
+};
+
+function readQuotedFormulaWorksheetQualifier(
+  formula: string,
+  start: number
+): FormulaWorksheetQualifier | undefined {
+  let value = "";
+  let index = start + 1;
+  while (index < formula.length) {
+    if (formula[index] !== "'") {
+      value += formula[index];
+      index += 1;
+      continue;
+    }
+    if (formula[index + 1] === "'") {
+      value += "'";
+      index += 2;
+      continue;
+    }
+    if (formula[index + 1] !== "!" || value.includes("[")) return undefined;
+    return { names: value.split(":"), end: index + 2 };
+  }
+  return undefined;
+}
+
+function readUnquotedFormulaWorksheetQualifier(
+  formula: string,
+  start: number
+): FormulaWorksheetQualifier | undefined {
+  if (!isFormulaWorksheetNameStart(formulaCodePointAt(formula, start))) return undefined;
+  const previous = formulaCodePointBefore(formula, start);
+  if (previous === "]" || isFormulaWorksheetNameContinue(previous)) return undefined;
+  const names: string[] = [];
+  let index = start;
+  while (true) {
+    const nameStart = index;
+    index += formulaCodePointLengthAt(formula, index);
+    while (isFormulaWorksheetNameContinue(formulaCodePointAt(formula, index))) {
+      index += formulaCodePointLengthAt(formula, index);
+    }
+    names.push(formula.slice(nameStart, index));
+    if (formula[index] !== ":" || !isFormulaWorksheetNameStart(
+      formulaCodePointAt(formula, index + 1)
+    )) break;
+    index += 1;
+  }
+  return formula[index] === "!" ? { names, end: index + 1 } : undefined;
+}
+
+function rewriteWorksheetQualifierNames(
+  names: readonly string[],
+  replacements: ReadonlyMap<string, string>
+): string | undefined {
+  let changed = false;
+  const rewritten = names.map((name) => {
+    const replacement = replacements.get(excelJsWorksheetNameKey(name));
+    if (!replacement) return name;
+    changed = true;
+    return replacement;
+  });
+  return changed ? rewritten.join(":") : undefined;
+}
+
+function quoteFormulaWorksheetQualifier(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function excelJsWorksheetNameKey(value: string): string {
+  return value.toLowerCase();
+}
+
+function skipFormulaQuotedSegment(
+  formula: string,
+  start: number,
+  quote: '"' | "'"
+): number {
+  let index = start + 1;
+  while (index < formula.length) {
+    if (formula[index] !== quote) {
+      index += 1;
+    } else if (formula[index + 1] === quote) {
+      index += 2;
+    } else {
+      return index + 1;
+    }
+  }
+  return formula.length;
+}
+
+function skipFormulaBracketedSegment(formula: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < formula.length; index += 1) {
+    if (formula[index] === "[") {
+      depth += 1;
+    } else if (formula[index] === "]") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return formula.length;
+}
+
+function isFormulaWorksheetNameStart(value: string): boolean {
+  return /^[\p{ID_Start}_]$/u.test(value);
+}
+
+function isFormulaWorksheetNameContinue(value: string): boolean {
+  return /^[\p{ID_Continue}_.]$/u.test(value);
+}
+
+function formulaCodePointAt(value: string, index: number): string {
+  const codePoint = value.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function formulaCodePointBefore(value: string, index: number): string {
+  if (index <= 0) return "";
+  const previousCodeUnit = value.charCodeAt(index - 1);
+  if (previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff && index >= 2) {
+    const leadingCodeUnit = value.charCodeAt(index - 2);
+    if (leadingCodeUnit >= 0xd800 && leadingCodeUnit <= 0xdbff) {
+      return value.slice(index - 2, index);
+    }
+  }
+  return value[index - 1];
+}
+
+function formulaCodePointLengthAt(value: string, index: number): number {
+  const codePoint = value.codePointAt(index);
+  return codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+}
+
+function removeVbaProjectParts(entries: Map<string, Uint8Array>): void {
+  const removedParts = new Set(
+    [...entries.keys()].filter((name) => VBA_ENTRY_PATTERN.test(name))
+  );
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const sourcePart = sourcePartForRelationships(entryName);
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      const type = relationship.getAttribute("Type") ?? "";
+      if (!VBA_RELATIONSHIP_TYPES.has(type)) continue;
+      const target = sourcePart
+        ? resolveRelationshipTarget(sourcePart, relationship.getAttribute("Target") ?? "")
+        : undefined;
+      if (target) {
+        removedParts.add(target);
+        removedParts.add(relationshipPartName(target));
+      }
+      relationship.parentNode?.removeChild(relationship);
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+  for (const partName of removedParts) entries.delete(partName);
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (!contentTypes) return;
+  const document = parseXml(strFromU8(contentTypes));
+  for (const override of allElementsByLocalName(document, "Override")) {
+    const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+    if (removedParts.has(partName) || VBA_ENTRY_PATTERN.test(partName)) {
+      override.parentNode?.removeChild(override);
+    } else if (override.getAttribute("ContentType") === XLSM_WORKBOOK_CONTENT_TYPE) {
+      override.setAttribute("ContentType", XLSX_WORKBOOK_CONTENT_TYPE);
+    }
+  }
+  entries.set("[Content_Types].xml", strToU8(new XMLSerializer().serializeToString(document)));
+}
+
+function canonicalizeTableRelationshipTargets(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()].filter((name) => (
+    /^xl\/worksheets\/_rels\/[^/]+\.xml\.rels$/i.test(name)
+  ))) {
+    const sourcePart = sourcePartForRelationships(entryName);
+    if (!sourcePart) continue;
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      if (!TABLE_RELATIONSHIP_TYPES.has(relationship.getAttribute("Type") ?? "")) continue;
+      const target = resolveRelationshipTarget(sourcePart, relationship.getAttribute("Target") ?? "");
+      const tableName = target?.match(/^xl\/tables\/([^/]+\.xml)$/i)?.[1];
+      if (tableName) relationship.setAttribute("Target", `../tables/${tableName}`);
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+}
+
+function removeCommentParts(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()]) {
+    if (COMMENT_ENTRY_PATTERN.test(entryName)) entries.delete(entryName);
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      if (COMMENT_RELATIONSHIP_TYPES.has(relationship.getAttribute("Type") ?? "")) {
+        relationship.parentNode?.removeChild(relationship);
+      }
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (!contentTypes) return;
+  const document = parseXml(strFromU8(contentTypes));
+  for (const override of allElementsByLocalName(document, "Override")) {
+    const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+    if (COMMENT_ENTRY_PATTERN.test(partName)) override.parentNode?.removeChild(override);
+  }
+  entries.set("[Content_Types].xml", strToU8(new XMLSerializer().serializeToString(document)));
+}
+
+function readCommentDocument(xml: string): Record<string, string> {
+  const document = parseXml(xml);
+  const comments: Record<string, string> = {};
+  for (const comment of allElementsByLocalName(document, "comment")) {
+    const address = normalizeCommentAddress(comment.getAttribute("ref") ?? "");
+    if (!address) continue;
+    const text = firstDirectChild(comment, "text");
+    comments[address] = text
+      ? allDescendantsByLocalName(text, "t").map((node) => node.textContent ?? "").join("")
+      : "";
+  }
+  return comments;
+}
+
+function normalizeCommentAddress(value: string): string | undefined {
+  try {
+    const coordinate = parseCellAddress(value.replace(/\$/g, "").toUpperCase());
+    if (
+      !Number.isSafeInteger(coordinate.row)
+      || !Number.isSafeInteger(coordinate.column)
+      || coordinate.row < 0
+      || coordinate.column < 0
+      || coordinate.row >= EXCEL_MAX_ROWS
+      || coordinate.column >= EXCEL_MAX_COLUMNS
+    ) return undefined;
+    return formatCellAddress(coordinate);
+  } catch {
+    return undefined;
+  }
+}
+
+type NativeRelationship = {
+  target: string;
+  targetMode: string;
+  type: string;
+};
+
+function relationshipsById(document: XmlDocument): ReadonlyMap<string, NativeRelationship> {
+  const relationships = new Map<string, NativeRelationship>();
+  for (const relationship of allElementsByLocalName(document, "Relationship")) {
+    const id = relationship.getAttribute("Id");
+    const target = relationship.getAttribute("Target");
+    if (!id || !target) continue;
+    relationships.set(id, {
+      target,
+      targetMode: relationship.getAttribute("TargetMode") ?? "",
+      type: relationship.getAttribute("Type") ?? ""
+    });
+  }
+  return relationships;
+}
+
+function attributeByLocalName(element: XmlElement, localName: string): string {
+  for (let index = 0; index < element.attributes.length; index += 1) {
+    const attribute = element.attributes.item(index);
+    if (attribute?.localName === localName) return attribute.value;
+  }
+  return "";
+}
+
+function relationshipPartName(partName: string): string {
+  const segments = partName.split("/");
+  const fileName = segments.pop() ?? "";
+  return [...segments, "_rels", `${fileName}.rels`].join("/");
+}
+
+function sourcePartForRelationships(relationshipPartName: string): string | undefined {
+  const marker = "/_rels/";
+  const markerOffset = relationshipPartName.indexOf(marker);
+  if (markerOffset < 0 || !relationshipPartName.endsWith(".rels")) return undefined;
+  const prefix = relationshipPartName.slice(0, markerOffset);
+  const relatedName = relationshipPartName.slice(markerOffset + marker.length, -".rels".length);
+  return relatedName && !relatedName.includes("/") ? `${prefix}/${relatedName}` : undefined;
+}
+
+function resolveRelationshipTarget(sourcePart: string, target: string): string | undefined {
+  if (target.includes("?") || target.includes("#") || target.includes("\\") || target.includes("\0")) {
+    return undefined;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    return undefined;
+  }
+  if (
+    decoded.includes("?")
+    || decoded.includes("#")
+    || decoded.includes("\\")
+    || decoded.includes("\0")
+    || /^[a-z][a-z\d+.-]*:/i.test(decoded)
+    || decoded.startsWith("//")
+  ) return undefined;
+  const segments = decoded.startsWith("/") ? [] : sourcePart.split("/").slice(0, -1);
+  for (const segment of decoded.replace(/^\//, "").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) return undefined;
+      segments.pop();
+    } else if (segment.includes(":")) return undefined;
+    else segments.push(segment);
+  }
+  return segments.length > 0 ? segments.join("/") : undefined;
+}
+
+function resolveExcelJsWorkbookWorksheetTarget(target: string): string {
+  // The original archive is already validated. Preserve ExcelJS's literal
+  // worksheetHash key here; it does not URI-decode workbook relationship targets.
+  return `xl/${target.replace(/^(\s|\/xl\/)+/, "")}`;
+}
+
+function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()]) {
+    if (DRAWING_ENTRY_PATTERN.test(entryName)) entries.delete(entryName);
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => WORKSHEET_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    removeElementsByLocalName(document, new Set(["drawing", "legacyDrawing", "legacyDrawingHF"]));
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const sourcePart = sourcePartForRelationships(entryName);
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      const type = relationship.getAttribute("Type") ?? "";
+      const target = relationship.getAttribute("Target") ?? "";
+      const targetMode = relationship.getAttribute("TargetMode") ?? "";
+      const resolvedTarget = sourcePart && targetMode.toLowerCase() !== "external"
+        ? resolveRelationshipTarget(sourcePart, target)
+        : undefined;
+      if (
+        DRAWING_RELATIONSHIP_TYPES.has(type)
+        || (resolvedTarget !== undefined && DRAWING_ENTRY_PATTERN.test(resolvedTarget))
+      ) {
+        relationship.parentNode?.removeChild(relationship);
+      }
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (contentTypes) {
+    const document = parseXml(strFromU8(contentTypes));
+    for (const override of allElementsByLocalName(document, "Override")) {
+      const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+      if (DRAWING_ENTRY_PATTERN.test(partName)) override.parentNode?.removeChild(override);
+    }
+    entries.set(
+      "[Content_Types].xml",
+      strToU8(new XMLSerializer().serializeToString(document))
+    );
+  }
 }
 
 function readTableDocument(xml: string): NativeTableXmlMetadata {
@@ -590,6 +1376,16 @@ function allElementsByLocalName(document: XmlDocument, localName: string): XmlEl
   return Array.from(document.getElementsByTagName("*")).filter((node) => node.localName === localName);
 }
 
+function allDescendantsByLocalName(element: XmlElement, localName: string): XmlElement[] {
+  return Array.from(element.getElementsByTagName("*")).filter((node) => node.localName === localName);
+}
+
+function removeElementsByLocalName(document: XmlDocument, localNames: ReadonlySet<string>): void {
+  for (const element of Array.from(document.getElementsByTagName("*"))) {
+    if (localNames.has(element.localName ?? "")) element.parentNode?.removeChild(element);
+  }
+}
+
 function xmlRoot(document: XmlDocument): XmlElement {
   const root = document.documentElement;
   if (!root) throw tableXmlError("Native table XML has no document element");
@@ -663,7 +1459,7 @@ function issueError(issue: { code: string; message: string }): Error {
 }
 
 function tableXmlError(message: string): Error {
-  return Object.assign(new Error(message), { code: "XLSX_XML_UNSAFE" });
+  return issueError({ code: "XLSX_XML_UNSAFE", message });
 }
 
 // Kept exported for the XLSX adapter's explicit standard-function mapping.

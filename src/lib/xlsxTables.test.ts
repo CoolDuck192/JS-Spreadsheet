@@ -349,8 +349,8 @@ describe("xlsxTables", () => {
       rows: [[1]]
     });
     const native = listWorksheetTables(worksheet)[0] as unknown as { table: { name: string; displayName: string } };
-    native.table.name = "A1";
-    native.table.displayName = "A1";
+    native.table.name = "bad name";
+    native.table.displayName = "bad name";
     await expect(importStructuredTablesFromWorksheet(worksheet, "sheet", [], {})).rejects.toMatchObject({
       code: "XLSX_TABLE_NAME_INVALID"
     });

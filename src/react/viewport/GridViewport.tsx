@@ -330,7 +330,11 @@ export function GridViewport({
               zIndex: 3,
               display: "grid",
               gridTemplateColumns,
-              height: headerHeight
+              height: headerHeight,
+              // Pin to the first grid track: sticky rows stay in flow, and
+              // grid-canvas hosts would otherwise auto-place them into
+              // stretched tracks far below the top (see rowPositionStyle).
+              gridArea: "1 / 1"
             }}
           >
             {renderRowHeader ? (
@@ -762,7 +766,17 @@ function rowPositionStyle(
     height: measurement.size
   };
   if (row.pinned === "top") {
-    return { ...base, position: "sticky", top: headerHeight + (offsets.get(row.id) ?? 0), zIndex: 4 };
+    // Explicit gridArea keeps the sticky row's static position at the top of
+    // grid-display canvases (e.g. .spreadsheet-grid): auto-placement would
+    // stretch it into its own track mid-canvas, where the sticky top offset
+    // never engages and the frozen row renders off-screen.
+    return {
+      ...base,
+      position: "sticky",
+      top: headerHeight + (offsets.get(row.id) ?? 0),
+      gridArea: "1 / 1",
+      zIndex: 4
+    };
   }
   if (row.pinned === "bottom") {
     return { ...base, position: "sticky", top: undefined, bottom: offsets.get(row.id) ?? 0, zIndex: 4 };

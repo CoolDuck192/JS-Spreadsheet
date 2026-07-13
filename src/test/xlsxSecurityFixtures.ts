@@ -1,6 +1,8 @@
 import { strToU8, zipSync } from "fflate";
 
-const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
+// Local-time constructor: fflate validates zip timestamps with local getters,
+// so a UTC-midnight 1980 instant underflows to 1979 in negative-offset zones.
+const FIXED_ZIP_DATE = new Date(1980, 0, 1);
 const DENSE_ROW_COUNT = 100_000;
 // Five wrapper nodes plus 47,620 rows and 20 cell/value nodes per row
 // produce 1,000,025 elements, just above the former fixed one-million cap.

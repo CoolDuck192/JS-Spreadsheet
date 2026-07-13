@@ -16,11 +16,13 @@ import type {
 import { columnIndexToName, formatCellAddress, parseCellAddress, parseRangeAddress } from "./addressing";
 import { extractFormulaReferences } from "./formulaReferences";
 import { DEFAULT_ROW_HEIGHT } from "./sheetDimensions";
-import { validateXlsxArchive } from "./xlsxSecurity";
+import {
+  isSupportedXlsxWorksheetSize,
+  validateXlsxArchive
+} from "./xlsxSecurity";
 import {
   patchNativeTableXml,
-  prepareNativeTableXmlForExcelJs,
-  readNativeTableXml
+  prepareXlsxImportForExcelJs
 } from "./xlsxTableXml";
 import {
   addStructuredTablesToWorksheet,
@@ -72,18 +74,27 @@ export async function importWorkbookFromXlsx(
   const bytes = copyToUint8Array(data);
   const validation = validateXlsxArchive(bytes);
   if (!validation.ok) throw issueError(validation.issue);
-  const xmlMetadata = readNativeTableXml(bytes);
-  const excelJsBytes = prepareNativeTableXmlForExcelJs(bytes);
+  const prepared = prepareXlsxImportForExcelJs(bytes);
+  const xmlMetadata = prepared.tableMetadata;
+  const nativeComments = prepared.comments;
+  const nativeCommentsBySheetIndex = new Map(
+    nativeComments.map((entry) => [entry.sheetIndex, entry.comments])
+  );
   const ExcelJS = await loadExcelJs();
   const excelWorkbook = new ExcelJS.Workbook();
-  await excelWorkbook.xlsx.load(toArrayBuffer(excelJsBytes) as ExcelJS.Buffer);
+  await excelWorkbook.xlsx.load(toArrayBuffer(prepared.excelJsBytes) as ExcelJS.Buffer);
 
   const worksheets = excelWorkbook.worksheets.length > 0 ? excelWorkbook.worksheets : [excelWorkbook.addWorksheet("Sheet1")];
   const tablesByWorksheet = await Promise.all(worksheets.map((worksheet, index) =>
     importStructuredTablesFromWorksheet(worksheet, `sheet-${index + 1}`, xmlMetadata, options)
   ));
   const sheets = worksheets.map((worksheet, index) =>
-    worksheetToSheet(worksheet, index, tablesByWorksheet[index])
+    worksheetToSheet(
+      worksheet,
+      index,
+      tablesByWorksheet[index],
+      nativeCommentsBySheetIndex.get(index)
+    )
   );
   const tables = tablesByWorksheet.flat();
   assertUniqueImportedTableNames(tables);
@@ -242,7 +253,8 @@ async function sheetToWorksheet(sheet: SheetModel, worksheet: ExcelJS.Worksheet)
 function worksheetToSheet(
   worksheet: ExcelJS.Worksheet,
   index: number,
-  tables: readonly StructuredTable[] = []
+  tables: readonly StructuredTable[] = [],
+  nativeComments: Readonly<Record<string, string>> = {}
 ): SheetModel {
   const cells: SheetModel["cells"] = {};
   const formats: SheetModel["formats"] = {};
@@ -340,13 +352,30 @@ function worksheetToSheet(
     maxRow = Math.max(maxRow, table.range.end.row);
     maxColumn = Math.max(maxColumn, table.range.end.column);
   }
+  let rowCount = Math.max(DEFAULT_ROWS, maxRow + 1);
+  let columnCount = Math.max(DEFAULT_COLUMNS, maxColumn + 1);
+  for (const [address, comment] of Object.entries(nativeComments)) {
+    const coordinate = parseCellAddress(address);
+    const isAlreadyInGrid =
+      coordinate.row < rowCount && coordinate.column < columnCount;
+    const candidateRowCount = Math.max(rowCount, coordinate.row + 1);
+    const candidateColumnCount = Math.max(columnCount, coordinate.column + 1);
+    if (
+      isAlreadyInGrid ||
+      isSupportedXlsxWorksheetSize(candidateRowCount, candidateColumnCount)
+    ) {
+      comments[address] = comment;
+      rowCount = candidateRowCount;
+      columnCount = candidateColumnCount;
+    }
+  }
   const freezePanes = worksheetFreezePanes(worksheet);
 
   return {
     id: `sheet-${index + 1}`,
     name: worksheet.name || `Sheet${index + 1}`,
-    rowCount: Math.max(DEFAULT_ROWS, maxRow + 1),
-    columnCount: Math.max(DEFAULT_COLUMNS, maxColumn + 1),
+    rowCount,
+    columnCount,
     isHidden: worksheet.state === "hidden" || worksheet.state === "veryHidden",
     tabColor: excelColorToHex(worksheet.properties?.tabColor),
     cells,

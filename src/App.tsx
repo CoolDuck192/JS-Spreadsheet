@@ -2571,10 +2571,34 @@ function SpreadsheetWorkbook({
           : await importWorkbookFromXlsx(buffer);
         const result = session.replaceWorkbook(nextWorkbook, { history: "preserve", origin: "import" });
         if (result.status === "committed") {
-          resetAfterWorkbookReplacement(`Imported ${file.name}`);
+          // Host-provided importers own their macro policy; only the built-in
+          // importer guarantees that the validated derivative strips VBA.
+          const macroNotice = !importer && file.name.toLowerCase().endsWith(".xlsm")
+            ? " (macros ignored)"
+            : "";
+          resetAfterWorkbookReplacement(`Imported ${file.name}${macroNotice}`);
         }
       })
-      .catch(() => reportServiceFailure("service.import.xlsx.failed", "XLSX import failed"));
+      .catch((error: unknown) => {
+        console.error("XLSX import failed", error);
+        reportServiceFailure("service.import.xlsx.failed", xlsxImportFailureMessage(error));
+      });
+  }
+
+  function handleImportFileByExtension(file: File | undefined, entryPoint: "drop" | "picker") {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
+      handleImportXlsx(file);
+    } else if (name.endsWith(".xls")) {
+      setStatus("Legacy .xls files aren't supported. Re-save the workbook as .xlsx and try again.");
+    } else if (name.endsWith(".csv")) {
+      handleImportCsv(file);
+    } else {
+      setStatus(entryPoint === "drop"
+        ? "Drop an .xlsx, .xlsm, or .csv file to import it"
+        : "Select an .xlsx, .xlsm, or .csv file to import it");
+    }
   }
 
   function handleExportXlsx() {
@@ -2771,15 +2795,7 @@ function SpreadsheetWorkbook({
     if (!file) {
       return;
     }
-
-    const name = file.name.toLowerCase();
-    if (name.endsWith(".xlsx")) {
-      handleImportXlsx(file);
-    } else if (name.endsWith(".csv")) {
-      handleImportCsv(file);
-    } else {
-      setStatus("Drop an .xlsx or .csv file to import it");
-    }
+    handleImportFileByExtension(file, "drop");
   }
 
   const themedStyle = {
@@ -3109,11 +3125,11 @@ function SpreadsheetWorkbook({
           ref={xlsxInputRef}
           className="hidden-file-input"
           type="file"
-          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
           aria-label="XLSX file"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
-            handleImportXlsx(file);
+            handleImportFileByExtension(file, "picker");
             event.currentTarget.value = "";
           }}
         />
@@ -4351,4 +4367,50 @@ function downloadWorkbookArtifact(artifact: WorkbookExportArtifact): void {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+const XLSX_SECURITY_ISSUE_CODES = new Set([
+  "XLSX_ARCHIVE_LIMIT",
+  "XLSX_SHEET_TOO_LARGE",
+  "XLSX_XML_UNSAFE",
+  "XLSX_RELATIONSHIP_INVALID"
+]);
+const XLSX_ARCHIVE_CONSISTENCY_REJECTION = /^(?:Invalid local ZIP header|Inconsistent local ZIP header|Inconsistent ZIP entry name|Inconsistent ZIP sizes|Invalid stored ZIP sizes) for [\s\S]+\.$/i;
+
+function xlsxImportFailureMessage(error: unknown): string {
+  if (isRecord(error)) {
+    const issue = isRecord(error.issue) ? error.issue : undefined;
+    if (issue && isCorruptXlsxPackageIssue(issue)) {
+      return "Could not read XLSX file; it may be corrupt or unreadable";
+    }
+    if (issue && typeof issue.code === "string" && XLSX_SECURITY_ISSUE_CODES.has(issue.code)) {
+      return "XLSX import rejected by security checks";
+    }
+    if (
+      error.name === "NotReadableError"
+      || error.name === "AbortError"
+      || error.code === "XLSX_FILE_UNREADABLE"
+    ) {
+      return "Could not read XLSX file; it may be corrupt or unreadable";
+    }
+  }
+  return "XLSX import failed because the workbook parser encountered an unexpected error";
+}
+
+function isCorruptXlsxPackageIssue(issue: Record<string, unknown>): boolean {
+  if (typeof issue.message !== "string") return false;
+  if (issue.code === "XLSX_ARCHIVE_LIMIT") {
+    if (XLSX_ARCHIVE_CONSISTENCY_REJECTION.test(issue.message)) return false;
+    return /\b(?:missing|malformed|invalid|truncated|inconsistent|offset|overflow|CRC-32)\b|cannot be safely inflated|could not be safely validated/i
+      .test(issue.message);
+  }
+  if (issue.code === "XLSX_XML_UNSAFE") {
+    return /\b(?:invalid character encoding|malformed|no document element)\b/i.test(issue.message);
+  }
+  return issue.code === "XLSX_RELATIONSHIP_INVALID"
+    && /\b(?:missing|invalid root element|wrong content type)\b/i.test(issue.message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

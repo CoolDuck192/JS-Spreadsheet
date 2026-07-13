@@ -6,6 +6,7 @@ import type { TableIssue } from "../core/commands/types";
 export type XlsxSecurityLimits = {
   maxArchiveBytes: number;
   maxEntries: number;
+  maxWorksheetId: number;
   maxEntryBytes: number;
   maxTotalUncompressedBytes: number;
   maxCompressionRatio: number;
@@ -17,9 +18,12 @@ export type XlsxSecurityLimits = {
   maxTotalXmlAttributes: number;
 };
 
+export const MAX_XLSX_WORKSHEET_ID = 100_000;
+
 export const DEFAULT_XLSX_SECURITY_LIMITS: Readonly<XlsxSecurityLimits> = {
   maxArchiveBytes: 64 * 1024 * 1024,
   maxEntries: 4_096,
+  maxWorksheetId: MAX_XLSX_WORKSHEET_ID,
   maxEntryBytes: 32 * 1024 * 1024,
   maxTotalUncompressedBytes: 256 * 1024 * 1024,
   maxCompressionRatio: 100,
@@ -93,6 +97,26 @@ const XML_BUDGET_BASE = 1_024;
 // cells per worksheet. This covers the supported dense import envelope without
 // allowing a sparse full-grid dimension to mint an effectively unbounded grant.
 const MAX_DENSE_WORKSHEET_CELLS = 2_000_000;
+
+export function isSupportedXlsxWorksheetSize(
+  rowCount: number,
+  columnCount: number
+): boolean {
+  if (
+    !Number.isSafeInteger(rowCount) ||
+    !Number.isSafeInteger(columnCount) ||
+    rowCount < 1 ||
+    columnCount < 1 ||
+    rowCount > MAX_WORKSHEET_ROWS ||
+    columnCount > MAX_WORKSHEET_COLUMNS
+  ) {
+    return false;
+  }
+
+  const cells = checkedMultiply(rowCount, columnCount);
+  return cells !== null && cells <= MAX_DENSE_WORKSHEET_CELLS;
+}
+
 const MAX_PART_XML_ELEMENTS =
   XML_BUDGET_BASE + MAX_WORKSHEET_ROWS + MAX_DENSE_WORKSHEET_CELLS * 3;
 const MAX_PART_XML_ATTRIBUTES =
@@ -776,7 +800,7 @@ function worksheetDimensionBudget(value: string): XmlCounts | null {
   const columns = endColumn - startColumn + 1;
   const cells = checkedMultiply(rows, columns);
   if (cells === null) return null;
-  if (cells > MAX_DENSE_WORKSHEET_CELLS) {
+  if (!isSupportedXlsxWorksheetSize(rows, columns)) {
     reject(
       "XLSX_SHEET_TOO_LARGE",
       `Worksheet dimension ${value} is too large to import safely.`
@@ -870,6 +894,7 @@ function scanSafeXml(
   const defaults = new Map<string, string>();
   const relationshipIds = new Set<string>();
   const tableRelationships: TableRelationshipSummary[] = [];
+  const elementNames: string[] = [];
   let depth = 0;
   let rootName = "";
   let rootPrefix = "";
@@ -976,6 +1001,24 @@ function scanSafeXml(
         rootUri = tag.uri;
       }
 
+      if (
+        name === "xl/workbook.xml" &&
+        rootName === "workbook" &&
+        rootPrefix === "" &&
+        elementNames.includes("sheets") &&
+        tag.prefix === "" &&
+        tag.local === "sheet"
+      ) {
+        const worksheetId = Number.parseInt(saxAttribute(tag, "sheetId"), 10);
+        if (worksheetId > limits.maxWorksheetId) {
+          reject(
+            "XLSX_ARCHIVE_LIMIT",
+            `Workbook worksheet ID ${worksheetId} exceeds the ${limits.maxWorksheetId} consistency limit.`
+          );
+        }
+      }
+      elementNames.push(tag.prefix === "" ? tag.local : "");
+
       if (isWorksheet && depth === 2 && tag.local === "dimension") {
         worksheetDimensionCount += 1;
         const budget =
@@ -1058,6 +1101,7 @@ function scanSafeXml(
       }
     });
     parser.on("closetag", () => {
+      elementNames.pop();
       depth -= 1;
     });
     parser.write(xml).close();

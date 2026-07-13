@@ -10,6 +10,7 @@ import {
 } from "../test/xlsxSecurityFixtures";
 
 import {
+  isSupportedXlsxWorksheetSize,
   validateXlsxArchive,
   type XlsxSecurityLimits
 } from "./xlsxSecurity";
@@ -252,6 +253,20 @@ function expectRejectedBeforeLoad(
   expect(workbook).toBeUndefined();
   expect(excelJsLoader).not.toHaveBeenCalled();
 }
+
+describe("isSupportedXlsxWorksheetSize", () => {
+  it("accepts exact worksheet and dense-envelope boundaries", () => {
+    expect(isSupportedXlsxWorksheetSize(1_048_576, 1)).toBe(true);
+    expect(isSupportedXlsxWorksheetSize(1, 16_384)).toBe(true);
+    expect(isSupportedXlsxWorksheetSize(100_000, 20)).toBe(true);
+  });
+
+  it("rejects one-over worksheet and dense-envelope boundaries", () => {
+    expect(isSupportedXlsxWorksheetSize(100_000, 21)).toBe(false);
+    expect(isSupportedXlsxWorksheetSize(1_048_577, 1)).toBe(false);
+    expect(isSupportedXlsxWorksheetSize(1, 16_385)).toBe(false);
+  });
+});
 
 describe("validateXlsxArchive ZIP preflight", () => {
   it("accepts a minimal native-table package", () => {

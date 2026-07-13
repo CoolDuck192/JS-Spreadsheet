@@ -5,18 +5,30 @@ import {
   type Document as XmlDocument,
   type Element as XmlElement
 } from "@xmldom/xmldom";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { makeAboveFloorWorksheetPackage } from "../test/xlsxSecurityFixtures";
+import { addSyntheticVbaProject } from "../test/xlsxImportFixtures";
 import type { StructuredTable, WorkbookModel } from "../types";
 import {
   patchNativeTableXml,
   prepareNativeTableXmlForExcelJs,
+  prepareXlsxImportForExcelJs,
+  readNativeCommentsXml,
   readNativeTableXml
 } from "./xlsxTableXml";
+import { validateXlsxArchive } from "./xlsxSecurity";
 
 const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-table.xlsx");
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
+const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
+const commentFixturePath = resolve("src/test/fixtures/xlsx/variant-comment.xlsx");
+const longCommentFixturePath = resolve(
+  "src/test/fixtures/xlsx/variant-comment-long-sheet.xlsx"
+);
+const tableFixturePath = resolve("src/test/fixtures/xlsx/variant-table.xlsx");
+const ALIASED_COMMENT_SHEET_COUNT = 3_000;
+const ALIASED_COMMENT_PARSE_BUDGET_MS = 250;
 
 async function fixture(name: "generated" | "real" = "generated") {
   const bytes = await readFile(name === "generated" ? fixturePath : realFixturePath);
@@ -144,6 +156,324 @@ function firstByLocalName(document: XmlDocument | XmlElement, name: string) {
 }
 
 describe("xlsxTableXml", () => {
+  it("removes unsupported drawing and chart parts from the ExcelJS derivative", async () => {
+    const source = await readFile(chartFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const relationshipsName = "xl/worksheets/_rels/sheet1.xml.rels";
+    sourceEntries[relationshipsName] = strToU8(
+      strFromU8(sourceEntries[relationshipsName]).replace(
+        "</Relationships>",
+        '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/xl/charts/help" TargetMode="External" Id="rIdExternal"/></Relationships>'
+      )
+    );
+    const prepared = prepareNativeTableXmlForExcelJs(
+      zipSync(sourceEntries)
+    );
+    const entries = unzipSync(prepared);
+    const names = Object.keys(entries);
+
+    expect(names.filter((name) => /^xl\/(?:drawings|charts)\//i.test(name))).toEqual([]);
+    expect(strFromU8(entries["xl/worksheets/sheet1.xml"])).not.toMatch(/<drawing\b/i);
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).not.toContain(
+      "/relationships/drawing"
+    );
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).toContain(
+      "https://example.com/xl/charts/help"
+    );
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toMatch(
+      /PartName="\/xl\/(?:drawings|charts)\//i
+    );
+  });
+
+  it("removes foreign comments from the ExcelJS derivative after native extraction", async () => {
+    const source = await readFile(commentFixturePath);
+    const prepared = prepareNativeTableXmlForExcelJs(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const entries = unzipSync(prepared);
+
+    expect(Object.keys(entries).filter((name) => /^xl\/comments(?:\/|\d)/i.test(name))).toEqual([]);
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).not.toContain(
+      "/relationships/comments"
+    );
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("/xl/comments/");
+  });
+
+  it("rewrites long worksheet qualifiers before metadata extraction and ExcelJS loading", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const sourceFormula = [
+      `IF("'Commented worksheet with a very long note'!A1"="literal",`,
+      `'Commented worksheet with a very long note'!A1,`,
+      `'[Book.xlsx]Commented worksheet with a very long note'!A1)`,
+      `+'Commented worksheet with a very long name:Commented worksheet with a very long note'!A1`
+    ].join("");
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>${sourceFormula}</f></c></row>`
+      )
+    );
+    const prepared = prepareXlsxImportForExcelJs(
+      zipSync(sourceEntries)
+    );
+    const entries = unzipSync(prepared.excelJsBytes);
+
+    expect(strFromU8(entries["xl/workbook.xml"])).toContain(
+      "'Commented worksheet with a ve 1'!$A$1"
+    );
+    expect(strFromU8(entries["xl/worksheets/sheet1.xml"])).toContain(
+      "'Commented worksheet with a ve 1'!$A$1"
+    );
+    expect(prepared.tableMetadata[0].calculatedColumns.Linked).toBe(
+      "='Commented worksheet with a ve 1'!$A$1"
+    );
+    const preparedSecondWorksheet = strFromU8(entries["xl/worksheets/sheet2.xml"]);
+    expect(preparedSecondWorksheet).toContain(
+      `IF("'Commented worksheet with a very long note'!A1"="literal",`
+      + `'Commented worksheet with a ve 1'!A1,`
+      + `'[Book.xlsx]Commented worksheet with a very long note'!A1)`
+      + `+'Commented worksheet with a very:Commented worksheet with a ve 1'!A1`
+    );
+    expect(validateXlsxArchive(prepared.excelJsBytes).ok).toBe(true);
+  });
+
+  it("drops a trailing high surrogate when truncating a long worksheet name", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const sourceName = `${"A".repeat(30)}😀`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName]).replaceAll(
+          "Commented worksheet with a very long name",
+          sourceName
+        )
+      );
+    }
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const workbookXml = strFromU8(unzipSync(prepared.excelJsBytes)["xl/workbook.xml"]);
+    expect(workbookXml).not.toContain("\uFFFD");
+    const workbook = parseXml(workbookXml);
+    const preparedName = firstByLocalName(workbook, "sheet")?.getAttribute("name");
+
+    expect(preparedName).toBe("A".repeat(30));
+    expect(preparedName).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
+  it("drops a trailing high surrogate before adding a worksheet collision suffix", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const collidingName = `${"A".repeat(28)}😀B`;
+    const sourceName = `${collidingName}C`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName])
+          .replaceAll("Commented worksheet with a very long name", sourceName)
+          .replaceAll("Commented worksheet with a very long note", collidingName)
+      );
+    }
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const workbookXml = strFromU8(unzipSync(prepared.excelJsBytes)["xl/workbook.xml"]);
+    expect(workbookXml).not.toContain("\uFFFD");
+    const workbook = parseXml(workbookXml);
+    const preparedName = firstByLocalName(workbook, "sheet")?.getAttribute("name");
+
+    expect(preparedName).toBe(`${"A".repeat(28)} 1`);
+    expect(preparedName).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
+  it("bounds malformed quoted-formula scanning while preparing long worksheet names", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const adversarialFormula = "'".repeat(20_000);
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>${adversarialFormula}</f></c></row>`
+      )
+    );
+
+    const startedAt = performance.now();
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const durationMs = performance.now() - startedAt;
+
+    expect(strFromU8(unzipSync(prepared.excelJsBytes)["xl/worksheets/sheet2.xml"]))
+      .toContain(adversarialFormula);
+    expect(durationMs).toBeLessThan(1_000);
+  });
+
+  it("keeps compatibility-distinct long worksheet replacements separate", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const commonPrefix = "A".repeat(31);
+    const firstSourceName = `${commonPrefix}①`;
+    const secondSourceName = `${commonPrefix}1`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName])
+          .replaceAll("Commented worksheet with a very long name", firstSourceName)
+          .replaceAll("Commented worksheet with a very long note", secondSourceName)
+      );
+    }
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>'${firstSourceName}'!A1+'${secondSourceName}'!A1</f></c></row>`
+      )
+    );
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const preparedSecondWorksheet = strFromU8(
+      unzipSync(prepared.excelJsBytes)["xl/worksheets/sheet2.xml"]
+    );
+
+    expect(preparedSecondWorksheet).toContain(
+      `'${commonPrefix}'!A1+'${"A".repeat(29)} 1'!A1`
+    );
+  });
+
+  it("memoizes aliased native-comment parts within a bounded parse duration", async () => {
+    const source = await readFile(commentFixturePath);
+    const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+    const workbookXml = strFromU8(entries["xl/workbook.xml"]);
+    const sheetXml = workbookXml.match(/<sheet\b[^>]*\/>/)?.[0];
+    expect(sheetXml).toBeDefined();
+    entries["xl/workbook.xml"] = strToU8(
+      workbookXml.replace(
+        sheetXml!,
+        Array.from(
+          { length: ALIASED_COMMENT_SHEET_COUNT },
+          (_, index) => sheetXml!
+            .replace('name="S"', `name="Alias ${index + 1}"`)
+            .replace('sheetId="1"', `sheetId="${index + 1}"`)
+        ).join("")
+      )
+    );
+    const adversarial = zipSync(entries);
+
+    const startedAt = performance.now();
+    const comments = readNativeCommentsXml(adversarial);
+    const durationMs = performance.now() - startedAt;
+
+    expect(comments).toEqual([{
+      sheetIndex: 0,
+      sheetName: `Alias ${ALIASED_COMMENT_SHEET_COUNT}`,
+      comments: { A1: "hello" }
+    }]);
+    expect(durationMs).toBeLessThan(ALIASED_COMMENT_PARSE_BUDGET_MS);
+  });
+
+  it("numbers native comments by worksheet order when a chartsheet comes first", async () => {
+    const source = await readFile(commentFixturePath);
+    const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+    entries["xl/workbook.xml"] = strToU8(
+      strFromU8(entries["xl/workbook.xml"]).replace(
+        "<sheets>",
+        '<sheets><sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Chart" sheetId="2" state="visible" r:id="rId4"/>'
+      )
+    );
+    entries["xl/_rels/workbook.xml.rels"] = strToU8(
+      strFromU8(entries["xl/_rels/workbook.xml.rels"]).replace(
+        "</Relationships>",
+        '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="/xl/chartsheets/sheet1.xml" Id="rId4"/></Relationships>'
+      )
+    );
+    entries["xl/chartsheets/sheet1.xml"] = strToU8(
+      '<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews></chartsheet>'
+    );
+    entries["[Content_Types].xml"] = strToU8(
+      strFromU8(entries["[Content_Types].xml"]).replace(
+        "</Types>",
+        '<Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/></Types>'
+      )
+    );
+
+    expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+      sheetIndex: 0,
+      sheetName: "S",
+      comments: { A1: "hello" }
+    }]);
+  });
+
+  it.each(["xl/notes.dat", "xl/notes.xml"])(
+    "ignores comment relationships to unrecognized part %s",
+    async (commentPart) => {
+      const source = await readFile(commentFixturePath);
+      const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+      entries[commentPart] = entries["xl/comments/comment1.xml"];
+      delete entries["xl/comments/comment1.xml"];
+      entries["xl/worksheets/_rels/sheet1.xml.rels"] = strToU8(
+        strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])
+          .replace("/xl/comments/comment1.xml", `/${commentPart}`)
+      );
+      entries["[Content_Types].xml"] = strToU8(
+        strFromU8(entries["[Content_Types].xml"])
+          .replace("/xl/comments/comment1.xml", `/${commentPart}`)
+      );
+
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+        sheetIndex: 0,
+        sheetName: "S",
+        comments: {}
+      }]);
+    }
+  );
+
+  it.each(["A1048577", "XFE1", "A9007199254740992"])(
+    "ignores out-of-grid comment reference %s",
+    async (reference) => {
+      const source = await readFile(commentFixturePath);
+      const entries = unzipSync(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+      entries["xl/comments/comment1.xml"] = strToU8(
+        strFromU8(entries["xl/comments/comment1.xml"]).replace('ref="A1"', `ref="${reference}"`)
+      );
+
+      expect(readNativeCommentsXml(zipSync(entries))).toEqual([{
+        sheetIndex: 0,
+        sheetName: "S",
+        comments: {}
+      }]);
+    }
+  );
+  it("canonicalizes package-root table targets for ExcelJS", async () => {
+    const source = await readFile(tableFixturePath);
+    const prepared = prepareNativeTableXmlForExcelJs(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const relationships = strFromU8(
+      unzipSync(prepared)["xl/worksheets/_rels/sheet1.xml.rels"]
+    );
+
+    expect(relationships).toContain('Target="../tables/table1.xml"');
+    expect(relationships).not.toContain('Target="/xl/tables/table1.xml"');
+  });
+
+  it("removes VBA projects from the ExcelJS derivative", async () => {
+    const prepared = prepareNativeTableXmlForExcelJs(
+      addSyntheticVbaProject(await fixture())
+    );
+    const entries = unzipSync(prepared);
+
+    expect(entries["xl/vbaProject.bin"]).toBeUndefined();
+    expect(strFromU8(entries["xl/_rels/workbook.xml.rels"])).not.toContain("vbaProject");
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("macroEnabled");
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("vbaProject.bin");
+  });
+
   it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {
     const source = makeAboveFloorWorksheetPackage();
     const patched = patchNativeTableXml(source, [denseTable]);

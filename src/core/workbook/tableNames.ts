@@ -38,6 +38,18 @@ export function normalizeExcelTableNameKey(name: string): string {
   return name.normalize("NFKC").toLowerCase();
 }
 
+/**
+ * Third-party OOXML writers can persist table names that Excel's UI would not
+ * allow users to create, including A1-like names. Preserve those names during
+ * import, persistence, and export while keeping interactive naming strict.
+ */
+export function validateExcelTableNameForInterop(name: string): ExcelTableNameValidation {
+  const validation = validateExcelTableName(name);
+  return !validation.valid && validation.reason === "cellReference"
+    ? { valid: true, normalizedKey: normalizeExcelTableNameKey(name) }
+    : validation;
+}
+
 function isR1C1Reference(name: string): boolean {
   return /^r[1-9]\d*c[1-9]\d*$/.test(name);
 }
