@@ -87,15 +87,21 @@ function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array
 
 function aliasLongCommentWorksheets(
   bytes: Uint8Array,
-  aliases: readonly { name?: string; sourceIndex: number; sheetId?: number }[]
+  aliases: readonly {
+    name?: string;
+    sourceIndex: number;
+    sheetId?: number | string | null;
+  }[]
 ): Uint8Array {
   const entries = unzipSync(bytes);
   const workbookXml = strFromU8(entries["xl/workbook.xml"]);
   const sourceSheets = workbookXml.match(/<sheet\b[^>]*\/>/g);
   expect(sourceSheets).toHaveLength(2);
   const aliasedSheets = aliases.map(({ name, sourceIndex, sheetId }, index) => {
-    const sourceSheet = sourceSheets![sourceIndex]
-      .replace(/sheetId="[^"]*"/, `sheetId="${sheetId ?? index + 1}"`);
+    const sourceSheet = sheetId === null
+      ? sourceSheets![sourceIndex].replace(/\ssheetId="[^"]*"/, "")
+      : sourceSheets![sourceIndex]
+          .replace(/sheetId="[^"]*"/, `sheetId="${sheetId ?? index + 1}"`);
     return name === undefined
       ? sourceSheet.replace(/\sname="[^"]*"/, "")
       : sourceSheet.replace(/name="[^"]*"/, `name="${name}"`);
@@ -226,6 +232,36 @@ describe("real native XLSX fixtures", () => {
       expected: [
         { name: "sheet1", value: 7, comments: {} },
         { name: "Commented", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "a worksheet with a missing sheet ID is absent from ExcelJS's registry",
+      aliases: [
+        { name: "S", sourceIndex: 0, sheetId: 1 },
+        { name: "N", sourceIndex: 1, sheetId: null }
+      ],
+      expected: [
+        { name: "S", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "distinct worksheet parts with one ID collapse to ExcelJS's last part",
+      aliases: [
+        { name: "X", sourceIndex: 0, sheetId: 7 },
+        { name: "Y", sourceIndex: 1, sheetId: 7 }
+      ],
+      expected: [
+        { name: "Y", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "a radix-prefixed sheet ID occupies ExcelJS's hidden slot zero",
+      aliases: [
+        { name: "Dropped", sourceIndex: 0, sheetId: "0x2" },
+        { name: "Survivor", sourceIndex: 1, sheetId: 2 }
+      ],
+      expected: [
+        { name: "Survivor", value: 7, comments: {} }
       ]
     },
     {

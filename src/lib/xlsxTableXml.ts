@@ -43,6 +43,7 @@ const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProje
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const EXCEL_MAX_WORKSHEET_NAME_LENGTH = 31;
+const EXCELJS_MAX_WORKSHEET_ARRAY_INDEX = 0xffff_fffe;
 const EXCEL_MAX_ROWS = 1_048_576;
 const EXCEL_MAX_COLUMNS = 16_384;
 const XLSX_WORKBOOK_CONTENT_TYPE =
@@ -132,9 +133,9 @@ function readNativeCommentEntries(
   const relationshipsByPart = new Map<string, ReadonlyMap<string, NativeRelationship>>();
   const commentsByPart = new Map<string, Readonly<Record<string, string>>>();
   const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
-  const worksheetsByPart = new Map<
+  const reconciledWorksheetsByPart = new Map<
     string,
-    Omit<NativeWorksheetComments, "sheetIndex"> & { orderNo: number }
+    Omit<NativeWorksheetComments, "sheetIndex"> & { id: number }
   >();
   const firstSheetIndexById = new Map<number, number>();
   const workbookSheets = allElementsByLocalName(workbook, "sheet");
@@ -182,20 +183,43 @@ function readNativeCommentEntries(
       comments = parsedComments;
       commentsByWorksheetPart.set(worksheetPart, comments);
     }
-    worksheetsByPart.delete(worksheetPart);
-    worksheetsByPart.set(worksheetPart, {
-      orderNo: firstSheetIndexById.get(sheetId) ?? -1,
+    reconciledWorksheetsByPart.set(worksheetPart, {
+      id: sheetId,
       sheetName,
       comments
     });
   }
-  return [...worksheetsByPart.values()]
+
+  const worksheetsById = new Map<
+    number,
+    Omit<NativeWorksheetComments, "sheetIndex"> & { orderNo: number }
+  >();
+  // zipEntries sorts the prepared derivative, so ExcelJS assigns worksheet models
+  // to its sparse ID registry in this physical part order after reconciliation.
+  const excelJsWorksheetParts = [...entries.keys()]
+    .filter((name) => EXCELJS_WORKSHEET_ENTRY_PATTERN.test(name))
+    .sort();
+  for (const worksheetPart of excelJsWorksheetParts) {
+    const worksheet = reconciledWorksheetsByPart.get(worksheetPart);
+    if (!worksheet || !isExcelJsPublicWorksheetId(worksheet.id)) continue;
+    worksheetsById.set(worksheet.id, {
+      orderNo: firstSheetIndexById.get(worksheet.id) ?? -1,
+      sheetName: worksheet.sheetName,
+      comments: worksheet.comments
+    });
+  }
+
+  return [...worksheetsById.values()]
     .sort((left, right) => left.orderNo - right.orderNo)
     .map((worksheet, sheetIndex) => ({
       sheetIndex,
       sheetName: worksheet.sheetName,
       comments: worksheet.comments
     }));
+}
+
+function isExcelJsPublicWorksheetId(id: number): boolean {
+  return Number.isInteger(id) && id >= 1 && id <= EXCELJS_MAX_WORKSHEET_ARRAY_INDEX;
 }
 
 export function patchNativeTableXml(
