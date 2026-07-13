@@ -21,7 +21,7 @@ this application; their unsupported visual parts are never executed.
 | `variant-chart.xlsx` | `b1e21e36e053d5cebcacde426f1462a009055cf21bf0797b9d889708854ad2e0` |
 | `variant-comment.xlsx` | `be15eee84a7b98917a266e1c72cd73ccfa03207f66c440a4c0d3674b61d65a08` |
 | `variant-comment-double-escaped-sheet.xlsx` | `48b41a6ddda58fd009c366e8cfe43b700b68b297c90ea9f980d133703abfefc9` |
-| `variant-comment-long-sheet.xlsx` | `b4891817e187c96776e192d8a86da46236a828d7d2305bdd5dc1c66b39e39dcb` |
+| `variant-comment-long-sheet.xlsx` | `9716206428a4334719e1d5f8b6e37cd143f048e577b0fdf21ac7e76518a53842` |
 | `variant-table.xlsx` | `5cdd602fb9d6162d8180f2631d99f712df05ae8ffa220f2eca647dc7f55c59b1` |
 | `real-kitchen-sink-trimmed.xlsx` | `7a3be94003cb7c2c872fa605c1aeab3ef08bd3b8a6b618c4bd163cec64031992` |
 | `real-kitchen-sink.xlsx` | `bd1f587ad94854aa5317bb4cacefc00b65e2365e9691c37129c4811c42be0983` |
@@ -29,7 +29,9 @@ this application; their unsupported visual parts are never executed.
 The double-escaped fixture stores `Q&amp;amp;A` in `workbook.xml`, while the
 long-name fixture has two 41-character worksheet names with the same first 31
 characters. Both carry native-comment coverage for order-based association and
-ExcelJS-safe unique truncation.
+ExcelJS-safe unique truncation. The long-name fixture also links the sheets
+through cell formulas, a defined name, and native calculated-column metadata so
+the prepared workbook's renamed references are regression-tested as a unit.
 
 `real-kitchen-sink-trimmed.xlsx` combines all three foreign layouts with a
 50-row calculated `SalesTable`, dates, freeze panes, a hyperlink, a merged

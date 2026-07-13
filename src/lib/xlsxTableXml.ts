@@ -35,7 +35,9 @@ const TABLE_ENTRY_PATTERN = /^xl\/tables\/[^/]+\.xml$/i;
 const COMMENT_ENTRY_PATTERN = /^xl\/comments(?:\/[^/]+|[^/]*)\.xml$/i;
 const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
 const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
-const EXCELJS_WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/sheet\d+\.xml$/i;
+// Keep this in lockstep with ExcelJS 4.4's worksheet-part discovery regex.
+// In particular, ExcelJS's match is case-sensitive and is not end-anchored.
+const EXCELJS_WORKSHEET_ENTRY_PATTERN = /xl\/worksheets\/sheet\d+[.]xml/;
 const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
 const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProject(?:Signature)?\.bin\.rels)$/i;
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
@@ -136,7 +138,7 @@ function readNativeCommentEntries(
     const sheetName = sheet.getAttribute("name");
     const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
     const worksheetPart = relationship
-      ? resolveRelationshipTarget("xl/workbook.xml", relationship.target)
+      ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
       : undefined;
     if (
       !sheetName
@@ -203,24 +205,27 @@ export function patchNativeTableXml(
 /**
  * ExcelJS 4.4 cannot parse table-column formula children before the final
  * column. Import uses this validated derivative only for ExcelJS's cell/table
- * model; the original XML is read first and remains the metadata authority.
+ * model; native metadata is read from the validated, consistently renamed
+ * entry view before the unsupported formula children are removed.
  */
 export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
-  return prepareEntriesForExcelJs(validatedEntries(data));
+  return prepareEntriesForExcelJs(entriesWithExcelJsCompatibleWorksheetNames(
+    validatedEntries(data)
+  ));
 }
 
 export function prepareXlsxImportForExcelJs(data: Uint8Array): PreparedXlsxImport {
-  const entries = validatedEntries(data);
+  const originalEntries = validatedEntries(data);
+  const preparedEntries = entriesWithExcelJsCompatibleWorksheetNames(originalEntries);
   return {
-    tableMetadata: readNativeTableEntries(entries),
-    comments: readNativeCommentEntries(entries),
-    excelJsBytes: prepareEntriesForExcelJs(entries)
+    tableMetadata: readNativeTableEntries(preparedEntries),
+    comments: readNativeCommentEntries(originalEntries),
+    excelJsBytes: prepareEntriesForExcelJs(preparedEntries)
   };
 }
 
 function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>): Uint8Array {
   const entries = new Map(entriesInput);
-  truncateLongWorksheetNamesForExcelJs(entries);
   removeUnsupportedDrawingParts(entries);
   removeCommentParts(entries);
   removeVbaProjectParts(entries);
@@ -238,9 +243,20 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   return output;
 }
 
-function truncateLongWorksheetNamesForExcelJs(entries: Map<string, Uint8Array>): void {
+function entriesWithExcelJsCompatibleWorksheetNames(
+  entriesInput: ReadonlyMap<string, Uint8Array>
+): Map<string, Uint8Array> {
+  const entries = new Map(entriesInput);
+  const renamedWorksheets = truncateLongWorksheetNamesForExcelJs(entries);
+  rewriteRenamedWorksheetQualifiers(entries, renamedWorksheets);
+  return entries;
+}
+
+function truncateLongWorksheetNamesForExcelJs(
+  entries: Map<string, Uint8Array>
+): ReadonlyMap<string, string> {
   const workbookXml = entries.get("xl/workbook.xml");
-  if (!workbookXml) return;
+  if (!workbookXml) return new Map();
   const document = parseXml(strFromU8(workbookXml));
   const sheets = allElementsByLocalName(document, "sheet");
   const usedNames = new Set(
@@ -251,6 +267,7 @@ function truncateLongWorksheetNamesForExcelJs(entries: Map<string, Uint8Array>):
         : [];
     })
   );
+  const renamedWorksheets = new Map<string, string>();
   let changed = false;
 
   for (const sheet of sheets) {
@@ -266,12 +283,236 @@ function truncateLongWorksheetNamesForExcelJs(entries: Map<string, Uint8Array>):
     }
     sheet.setAttribute("name", candidate);
     usedNames.add(candidate.toLowerCase());
+    renamedWorksheets.set(name, candidate);
     changed = true;
   }
 
   if (changed) {
     entries.set("xl/workbook.xml", strToU8(new XMLSerializer().serializeToString(document)));
   }
+  return renamedWorksheets;
+}
+
+const FORMULA_BEARING_ELEMENT_NAMES = new Set([
+  "calculatedColumnFormula",
+  "definedName",
+  "f",
+  "formula",
+  "formula1",
+  "formula2",
+  "totalsRowFormula"
+]);
+
+function rewriteRenamedWorksheetQualifiers(
+  entries: Map<string, Uint8Array>,
+  renamedWorksheets: ReadonlyMap<string, string>
+): void {
+  if (renamedWorksheets.size === 0) return;
+  const replacements = new Map(
+    [...renamedWorksheets].map(([source, destination]) => [
+      excelJsWorksheetNameKey(source),
+      destination
+    ])
+  );
+  const formulaEntryNames = [...entries.keys()].filter((name) => (
+    name === "xl/workbook.xml"
+    || WORKSHEET_ENTRY_PATTERN.test(name)
+    || TABLE_ENTRY_PATTERN.test(name)
+  ));
+
+  for (const entryName of formulaEntryNames) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    let changed = false;
+    for (const element of Array.from(document.getElementsByTagName("*"))) {
+      if (!FORMULA_BEARING_ELEMENT_NAMES.has(element.localName ?? "")) continue;
+      const formula = element.textContent ?? "";
+      const rewritten = rewriteFormulaWorksheetQualifiers(formula, replacements);
+      if (rewritten === formula) continue;
+      while (element.firstChild) element.removeChild(element.firstChild);
+      element.appendChild(document.createTextNode(rewritten));
+      changed = true;
+    }
+    if (changed) {
+      entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+    }
+  }
+}
+
+function rewriteFormulaWorksheetQualifiers(
+  formula: string,
+  replacements: ReadonlyMap<string, string>
+): string {
+  let rewritten = "";
+  let index = 0;
+  while (index < formula.length) {
+    if (formula[index] === '"') {
+      const end = skipFormulaQuotedSegment(formula, index, '"');
+      rewritten += formula.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (formula[index] === "[") {
+      const end = skipFormulaBracketedSegment(formula, index);
+      rewritten += formula.slice(index, end);
+      index = end;
+      continue;
+    }
+    const qualifier = formula[index] === "'"
+      ? readQuotedFormulaWorksheetQualifier(formula, index)
+      : readUnquotedFormulaWorksheetQualifier(formula, index);
+    if (!qualifier) {
+      if (formula[index] === "'") {
+        const end = skipFormulaQuotedSegment(formula, index, "'");
+        rewritten += formula.slice(index, end);
+        index = end;
+        continue;
+      }
+      rewritten += formula[index];
+      index += 1;
+      continue;
+    }
+    const replacement = rewriteWorksheetQualifierNames(qualifier.names, replacements);
+    rewritten += replacement
+      ? `${quoteFormulaWorksheetQualifier(replacement)}!`
+      : formula.slice(index, qualifier.end);
+    index = qualifier.end;
+  }
+  return rewritten;
+}
+
+type FormulaWorksheetQualifier = {
+  names: readonly string[];
+  end: number;
+};
+
+function readQuotedFormulaWorksheetQualifier(
+  formula: string,
+  start: number
+): FormulaWorksheetQualifier | undefined {
+  let value = "";
+  let index = start + 1;
+  while (index < formula.length) {
+    if (formula[index] !== "'") {
+      value += formula[index];
+      index += 1;
+      continue;
+    }
+    if (formula[index + 1] === "'") {
+      value += "'";
+      index += 2;
+      continue;
+    }
+    if (formula[index + 1] !== "!" || value.includes("[")) return undefined;
+    return { names: value.split(":"), end: index + 2 };
+  }
+  return undefined;
+}
+
+function readUnquotedFormulaWorksheetQualifier(
+  formula: string,
+  start: number
+): FormulaWorksheetQualifier | undefined {
+  if (!isFormulaWorksheetNameStart(formulaCodePointAt(formula, start))) return undefined;
+  const previous = formulaCodePointBefore(formula, start);
+  if (previous === "]" || isFormulaWorksheetNameContinue(previous)) return undefined;
+  const names: string[] = [];
+  let index = start;
+  while (true) {
+    const nameStart = index;
+    index += formulaCodePointLengthAt(formula, index);
+    while (isFormulaWorksheetNameContinue(formulaCodePointAt(formula, index))) {
+      index += formulaCodePointLengthAt(formula, index);
+    }
+    names.push(formula.slice(nameStart, index));
+    if (formula[index] !== ":" || !isFormulaWorksheetNameStart(
+      formulaCodePointAt(formula, index + 1)
+    )) break;
+    index += 1;
+  }
+  return formula[index] === "!" ? { names, end: index + 1 } : undefined;
+}
+
+function rewriteWorksheetQualifierNames(
+  names: readonly string[],
+  replacements: ReadonlyMap<string, string>
+): string | undefined {
+  let changed = false;
+  const rewritten = names.map((name) => {
+    const replacement = replacements.get(excelJsWorksheetNameKey(name));
+    if (!replacement) return name;
+    changed = true;
+    return replacement;
+  });
+  return changed ? rewritten.join(":") : undefined;
+}
+
+function quoteFormulaWorksheetQualifier(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function excelJsWorksheetNameKey(value: string): string {
+  return value.toLowerCase();
+}
+
+function skipFormulaQuotedSegment(
+  formula: string,
+  start: number,
+  quote: '"' | "'"
+): number {
+  let index = start + 1;
+  while (index < formula.length) {
+    if (formula[index] !== quote) {
+      index += 1;
+    } else if (formula[index + 1] === quote) {
+      index += 2;
+    } else {
+      return index + 1;
+    }
+  }
+  return formula.length;
+}
+
+function skipFormulaBracketedSegment(formula: string, start: number): number {
+  let depth = 0;
+  for (let index = start; index < formula.length; index += 1) {
+    if (formula[index] === "[") {
+      depth += 1;
+    } else if (formula[index] === "]") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return formula.length;
+}
+
+function isFormulaWorksheetNameStart(value: string): boolean {
+  return /^[\p{ID_Start}_]$/u.test(value);
+}
+
+function isFormulaWorksheetNameContinue(value: string): boolean {
+  return /^[\p{ID_Continue}_.]$/u.test(value);
+}
+
+function formulaCodePointAt(value: string, index: number): string {
+  const codePoint = value.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function formulaCodePointBefore(value: string, index: number): string {
+  if (index <= 0) return "";
+  const previousCodeUnit = value.charCodeAt(index - 1);
+  if (previousCodeUnit >= 0xdc00 && previousCodeUnit <= 0xdfff && index >= 2) {
+    const leadingCodeUnit = value.charCodeAt(index - 2);
+    if (leadingCodeUnit >= 0xd800 && leadingCodeUnit <= 0xdbff) {
+      return value.slice(index - 2, index);
+    }
+  }
+  return value[index - 1];
+}
+
+function formulaCodePointLengthAt(value: string, index: number): number {
+  const codePoint = value.codePointAt(index);
+  return codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
 }
 
 function removeVbaProjectParts(entries: Map<string, Uint8Array>): void {
@@ -457,6 +698,12 @@ function resolveRelationshipTarget(sourcePart: string, target: string): string |
     else segments.push(segment);
   }
   return segments.length > 0 ? segments.join("/") : undefined;
+}
+
+function resolveExcelJsWorkbookWorksheetTarget(target: string): string | undefined {
+  const candidate = `xl/${target.replace(/^(\s|\/xl\/)+/, "")}`;
+  const safelyResolved = resolveRelationshipTarget("workbook.xml", `/${candidate}`);
+  return safelyResolved === candidate ? candidate : undefined;
 }
 
 function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {

@@ -13,14 +13,19 @@ import type { StructuredTable, WorkbookModel } from "../types";
 import {
   patchNativeTableXml,
   prepareNativeTableXmlForExcelJs,
+  prepareXlsxImportForExcelJs,
   readNativeCommentsXml,
   readNativeTableXml
 } from "./xlsxTableXml";
+import { validateXlsxArchive } from "./xlsxSecurity";
 
 const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-table.xlsx");
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
 const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
 const commentFixturePath = resolve("src/test/fixtures/xlsx/variant-comment.xlsx");
+const longCommentFixturePath = resolve(
+  "src/test/fixtures/xlsx/variant-comment-long-sheet.xlsx"
+);
 const tableFixturePath = resolve("src/test/fixtures/xlsx/variant-table.xlsx");
 const ALIASED_COMMENT_SHEET_COUNT = 3_000;
 const ALIASED_COMMENT_PARSE_BUDGET_MS = 250;
@@ -194,6 +199,101 @@ describe("xlsxTableXml", () => {
       "/relationships/comments"
     );
     expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("/xl/comments/");
+  });
+
+  it("rewrites long worksheet qualifiers before metadata extraction and ExcelJS loading", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const sourceFormula = [
+      `IF("'Commented worksheet with a very long note'!A1"="literal",`,
+      `'Commented worksheet with a very long note'!A1,`,
+      `'[Book.xlsx]Commented worksheet with a very long note'!A1)`,
+      `+'Commented worksheet with a very long name:Commented worksheet with a very long note'!A1`
+    ].join("");
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>${sourceFormula}</f></c></row>`
+      )
+    );
+    const prepared = prepareXlsxImportForExcelJs(
+      zipSync(sourceEntries)
+    );
+    const entries = unzipSync(prepared.excelJsBytes);
+
+    expect(strFromU8(entries["xl/workbook.xml"])).toContain(
+      "'Commented worksheet with a ve 1'!$A$1"
+    );
+    expect(strFromU8(entries["xl/worksheets/sheet1.xml"])).toContain(
+      "'Commented worksheet with a ve 1'!$A$1"
+    );
+    expect(prepared.tableMetadata[0].calculatedColumns.Linked).toBe(
+      "='Commented worksheet with a ve 1'!$A$1"
+    );
+    const preparedSecondWorksheet = strFromU8(entries["xl/worksheets/sheet2.xml"]);
+    expect(preparedSecondWorksheet).toContain(
+      `IF("'Commented worksheet with a very long note'!A1"="literal",`
+      + `'Commented worksheet with a ve 1'!A1,`
+      + `'[Book.xlsx]Commented worksheet with a very long note'!A1)`
+      + `+'Commented worksheet with a very:Commented worksheet with a ve 1'!A1`
+    );
+    expect(validateXlsxArchive(prepared.excelJsBytes).ok).toBe(true);
+  });
+
+  it("bounds malformed quoted-formula scanning while preparing long worksheet names", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const adversarialFormula = "'".repeat(20_000);
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>${adversarialFormula}</f></c></row>`
+      )
+    );
+
+    const startedAt = performance.now();
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const durationMs = performance.now() - startedAt;
+
+    expect(strFromU8(unzipSync(prepared.excelJsBytes)["xl/worksheets/sheet2.xml"]))
+      .toContain(adversarialFormula);
+    expect(durationMs).toBeLessThan(1_000);
+  });
+
+  it("keeps compatibility-distinct long worksheet replacements separate", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const commonPrefix = "A".repeat(31);
+    const firstSourceName = `${commonPrefix}①`;
+    const secondSourceName = `${commonPrefix}1`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName])
+          .replaceAll("Commented worksheet with a very long name", firstSourceName)
+          .replaceAll("Commented worksheet with a very long note", secondSourceName)
+      );
+    }
+    sourceEntries["xl/worksheets/sheet2.xml"] = strToU8(
+      strFromU8(sourceEntries["xl/worksheets/sheet2.xml"]).replace(
+        "</row>",
+        `<c r="B1"><f>'${firstSourceName}'!A1+'${secondSourceName}'!A1</f></c></row>`
+      )
+    );
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const preparedSecondWorksheet = strFromU8(
+      unzipSync(prepared.excelJsBytes)["xl/worksheets/sheet2.xml"]
+    );
+
+    expect(preparedSecondWorksheet).toContain(
+      `'${commonPrefix}'!A1+'${"A".repeat(29)} 1'!A1`
+    );
   });
 
   it("memoizes aliased native-comment parts within a bounded parse duration", async () => {

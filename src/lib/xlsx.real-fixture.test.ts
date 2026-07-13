@@ -12,6 +12,7 @@ import {
 import { formatCellAddress } from "./addressing";
 import { createBlankWorkbook, setCellComment, setCellContent } from "./workbook";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
+import { validateXlsxArchive } from "./xlsxSecurity";
 
 const fixtureDirectory = resolve("src/test/fixtures/xlsx");
 const tableCommandServices: StructuredTableCommandServices = {
@@ -55,6 +56,35 @@ function tableXmlStrings(bytes: Uint8Array): string[] {
     .map((name) => strFromU8(entries[name]));
 }
 
+function uppercaseFirstWorksheetPart(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  entries["xl/worksheets/Sheet1.xml"] = entries["xl/worksheets/sheet1.xml"];
+  delete entries["xl/worksheets/sheet1.xml"];
+  entries["xl/worksheets/_rels/Sheet1.xml.rels"] =
+    entries["xl/worksheets/_rels/sheet1.xml.rels"];
+  delete entries["xl/worksheets/_rels/sheet1.xml.rels"];
+  entries["xl/_rels/workbook.xml.rels"] = strToU8(
+    strFromU8(entries["xl/_rels/workbook.xml.rels"])
+      .replace("worksheets/sheet1.xml", "worksheets/Sheet1.xml")
+  );
+  entries["[Content_Types].xml"] = strToU8(
+    strFromU8(entries["[Content_Types].xml"])
+      .replace("/xl/worksheets/sheet1.xml", "/xl/worksheets/Sheet1.xml")
+  );
+  return zipSync(entries);
+}
+
+function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  entries["xl/_rels/workbook.xml.rels"] = strToU8(
+    strFromU8(entries["xl/_rels/workbook.xml.rels"]).replace(
+      'Target="/xl/worksheets/sheet1.xml"',
+      'Target=" /xl/worksheets/sheet1.xml"'
+    )
+  );
+  return zipSync(entries);
+}
+
 describe("real native XLSX fixtures", () => {
   it("imports openpyxl worksheets containing unsupported charts", async () => {
     const workbook = await importWorkbookFromXlsx(await fixture("variant-chart.xlsx"));
@@ -79,7 +109,7 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets[0].comments.A1).toBe("hello");
   });
 
-  it("imports comments from a worksheet whose source name exceeds Excel's limit", async () => {
+  it("keeps long-name comments, formulas, defined names, and table formulas coherent", async () => {
     const workbook = await importWorkbookFromXlsx(
       await fixture("variant-comment-long-sheet.xlsx")
     );
@@ -89,6 +119,44 @@ describe("real native XLSX fixtures", () => {
       "Commented worksheet with a ve 1"
     ]);
     expect(workbook.sheets[0].comments.A1).toBe("hello");
+    expect(workbook.sheets[0].cells.C2).toBe(
+      "='Commented worksheet with a ve 1'!$A$1"
+    );
+    expect(workbook.namedRanges).toEqual([{
+      name: "LongSheetCell",
+      sheetId: "sheet-2",
+      range: { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } }
+    }]);
+    expect(
+      workbook.tables[0].columns.find((column) => column.name === "Linked")?.calculatedFormula
+    ).toBe("='Commented worksheet with a ve 1'!$A$1");
+  });
+
+  it("does not assign comments from worksheet parts that ExcelJS skips", async () => {
+    const source = uppercaseFirstWorksheetPart(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(validateXlsxArchive(source).ok).toBe(true);
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => sheet.name)).toEqual([
+      "Commented worksheet with a ve 1"
+    ]);
+    expect(workbook.sheets[0].comments).toEqual({});
+  });
+
+  it("keeps comment indexes aligned for worksheet targets normalized by ExcelJS", async () => {
+    const source = prefixFirstWorksheetTargetWithWhitespace(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(validateXlsxArchive(source).ok).toBe(true);
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets).toHaveLength(2);
+    expect(workbook.sheets[0].comments).toEqual({ A1: "hello" });
+    expect(workbook.sheets[1].comments).toEqual({});
   });
 
   it("preserves application-authored comments through the native XML path", async () => {

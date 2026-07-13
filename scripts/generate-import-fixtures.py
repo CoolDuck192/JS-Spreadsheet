@@ -14,7 +14,8 @@ import openpyxl
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.comments import Comment
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.table import Table, TableFormula, TableStyleInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,7 +91,26 @@ def generate_long_comment_sheet_fixture() -> None:
     workbook, worksheet = base_workbook()
     worksheet.title = "Commented worksheet with a very long name"
     worksheet["A1"].comment = Comment("hello", "author")
-    workbook.create_sheet("Commented worksheet with a very long note")
+    linked = workbook.create_sheet("Commented worksheet with a very long note")
+    linked["A1"] = 7
+    worksheet["C1"] = "Linked"
+    for row in range(2, 6):
+        worksheet.cell(row, 3).value = (
+            "='Commented worksheet with a very long note'!$A$1"
+        )
+    table = Table(displayName="LongTable", ref="A1:C5")
+    table._initialise_columns()
+    for column, name in zip(table.tableColumns, ("Q", "V", "Linked"), strict=True):
+        column.name = name
+    table.tableColumns[2].calculatedColumnFormula = TableFormula(
+        attr_text="'Commented worksheet with a very long note'!$A$1"
+    )
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+    worksheet.add_table(table)
+    workbook.defined_names.add(DefinedName(
+        "LongSheetCell",
+        attr_text="'Commented worksheet with a very long note'!$A$1",
+    ))
     save_deterministic(workbook, "variant-comment-long-sheet.xlsx")
 
 
