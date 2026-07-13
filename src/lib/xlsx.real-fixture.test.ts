@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { strFromU8, unzipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import type { FilterExpression } from "../table/core/query";
 import type { StructuredTable, WorkbookModel } from "../types";
@@ -70,6 +70,35 @@ describe("real native XLSX fixtures", () => {
     const workbook = await importWorkbookFromXlsx(await exportWorkbookToXlsx(source));
 
     expect(workbook.sheets[0].comments.A1).toBe("round-trip note");
+  });
+
+  it("drops an XFD1048576 orphan comment without expanding a tiny sheet", async () => {
+    const entries = unzipSync(await fixture("variant-comment.xlsx"));
+    entries["xl/comments/comment1.xml"] = strToU8(
+      strFromU8(entries["xl/comments/comment1.xml"])
+        .replace('ref="A1"', 'ref="XFD1048576"')
+    );
+
+    const workbook = await importWorkbookFromXlsx(zipSync(entries));
+
+    expect(workbook.sheets[0]).toMatchObject({
+      rowCount: 100,
+      columnCount: 26
+    });
+    expect(workbook.sheets[0].comments).toEqual({});
+  });
+
+  it("drops an AZ200 comment-only cell outside the default import grid", async () => {
+    let source = createBlankWorkbook();
+    source = setCellComment(source, source.activeSheetId, "AZ200", "orphaned note");
+
+    const workbook = await importWorkbookFromXlsx(await exportWorkbookToXlsx(source));
+
+    expect(workbook.sheets[0]).toMatchObject({
+      rowCount: 100,
+      columnCount: 26
+    });
+    expect(workbook.sheets[0].comments).toEqual({});
   });
 
   it("imports openpyxl root-relative table relationships without renaming the table", async () => {

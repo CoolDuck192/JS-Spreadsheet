@@ -297,13 +297,6 @@ function worksheetToSheet(
     });
   });
 
-  for (const [address, comment] of Object.entries(nativeComments)) {
-    comments[address] = comment;
-    const coordinate = parseCellAddress(address);
-    maxRow = Math.max(maxRow, coordinate.row);
-    maxColumn = Math.max(maxColumn, coordinate.column);
-  }
-
   const columnWidths: SheetModel["columnWidths"] = {};
   const hiddenColumns: NonNullable<SheetModel["hiddenColumns"]> = {};
   const worksheetColumns = Array.isArray(worksheet.columns) ? worksheet.columns : [];
@@ -354,13 +347,21 @@ function worksheetToSheet(
     maxRow = Math.max(maxRow, table.range.end.row);
     maxColumn = Math.max(maxColumn, table.range.end.column);
   }
+  const rowCount = Math.max(DEFAULT_ROWS, maxRow + 1);
+  const columnCount = Math.max(DEFAULT_COLUMNS, maxColumn + 1);
+  for (const [address, comment] of Object.entries(nativeComments)) {
+    const coordinate = parseCellAddress(address);
+    if (coordinate.row < rowCount && coordinate.column < columnCount) {
+      comments[address] = comment;
+    }
+  }
   const freezePanes = worksheetFreezePanes(worksheet);
 
   return {
     id: `sheet-${index + 1}`,
     name: worksheet.name || `Sheet${index + 1}`,
-    rowCount: Math.max(DEFAULT_ROWS, maxRow + 1),
-    columnCount: Math.max(DEFAULT_COLUMNS, maxColumn + 1),
+    rowCount,
+    columnCount,
     isHidden: worksheet.state === "hidden" || worksheet.state === "veryHidden",
     tabColor: excelColorToHex(worksheet.properties?.tabColor),
     cells,
