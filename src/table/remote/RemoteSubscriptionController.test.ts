@@ -71,6 +71,109 @@ describe("RemoteSubscriptionController", () => {
     await vi.waitFor(() => expect(harness.query).toHaveBeenCalledTimes(2));
   });
 
+  it("retries an invalidated stale-replica response until a newer revision is available", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness();
+      harness.query
+        .mockResolvedValueOnce(result("1", []))
+        .mockResolvedValueOnce(result("3", [{ id: "1", salary: 120, group: "A" }]));
+
+      harness.subscription.accept({ kind: "invalidate", revision: "2" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.query).toHaveBeenCalledTimes(2);
+      expect(harness.queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED" }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(harness.query).toHaveBeenCalledTimes(3);
+      expect(harness.queryController.getSnapshot()).toMatchObject({ status: "ready", revision: "3" });
+    } finally {
+      harness?.subscription.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops automatic invalidation recovery after three refresh attempts", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness();
+      harness.query.mockResolvedValue(result("1", []));
+
+      harness.subscription.accept({ kind: "invalidate", revision: "2" });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(harness.query).toHaveBeenCalledTimes(4);
+      expect(harness.queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED", retryable: true }
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(harness.query).toHaveBeenCalledTimes(4);
+    } finally {
+      harness?.subscription.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries the whole accumulated window when a later replay page is stale", async () => {
+    vi.useFakeTimers();
+    let subscription: RemoteSubscriptionController<Row> | undefined;
+    try {
+      const query = vi.fn()
+        .mockResolvedValueOnce(infiniteResult("1", [{ id: "1", salary: 100, group: "A" }], "page-2"))
+        .mockResolvedValueOnce(infiniteResult("2", [{ id: "2", salary: 90, group: "A" }]))
+        .mockResolvedValueOnce(infiniteResult("5", [{ id: "1", salary: 110, group: "A" }], "stale-page-2"))
+        .mockResolvedValueOnce(infiniteResult("4", [{ id: "2", salary: 90, group: "A" }]))
+        .mockResolvedValueOnce(infiniteResult("6", [{ id: "1", salary: 120, group: "A" }], "retry-page-2"))
+        .mockResolvedValueOnce(infiniteResult("7", [{ id: "2", salary: 95, group: "A" }]));
+      const complete = { executor: "server" as const, scope: "completeDataset" as const };
+      const source = createSource({
+        capabilities: { ...capabilities(), pagination: { ...complete, modes: ["infinite"] } },
+        paginationMode: "infinite",
+        query
+      });
+      const queryController = new RemoteQueryController(source);
+      await queryController.load(infiniteRequest(), "page-1");
+      await queryController.load(infiniteRequest("page-2"), "page-2");
+      const mutations = new RemoteMutationController({
+        source,
+        queryController,
+        overlays: new OptimisticOverlayStore(),
+        getActiveQuery: () => infiniteRequest("page-2"),
+        onChange: vi.fn()
+      });
+      let operation = 0;
+      subscription = new RemoteSubscriptionController({
+        source,
+        queryController,
+        mutationController: mutations,
+        getActiveQuery: () => infiniteRequest("page-2"),
+        createOperationId: () => `subscription-${++operation}`
+      });
+
+      subscription.accept({ kind: "invalidate", revision: "4" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(query).toHaveBeenCalledTimes(4);
+      expect(queryController.getSnapshot()).toMatchObject({
+        status: "error",
+        error: { code: "REMOTE_INVALIDATED" }
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(query).toHaveBeenCalledTimes(6);
+      expect(queryController.getSnapshot()).toMatchObject({ status: "ready", revision: "7" });
+      expect(queryController.getSnapshot().items.map((item) => item.id)).toEqual(["1", "2"]);
+    } finally {
+      subscription?.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a pending attempt and creates an explicit subscription conflict", async () => {
     const acknowledgement = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const harness = await createHarness(undefined, async () => acknowledgement.promise);
@@ -106,6 +209,67 @@ describe("RemoteSubscriptionController", () => {
     })]);
   });
 
+  it("settles a matching uncertain batch from subscription authority", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost after commit");
+    });
+    await harness.mutations.execute("operation-uncertain-match", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({
+      kind: "rows-upserted",
+      revision: "2",
+      rows: [{ id: "1", salary: 120, group: "A" }]
+    });
+
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.mutations.getConflicts()).toEqual([]);
+  });
+
+  it("turns an uncertain subscription mismatch into a terminal conflict", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost");
+    });
+    await harness.mutations.execute("operation-uncertain-conflict", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({
+      kind: "rows-upserted",
+      revision: "2",
+      rows: [{ id: "1", salary: 115, group: "A" }]
+    });
+
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.mutations.getConflicts()).toEqual([expect.objectContaining({
+      operationId: "operation-uncertain-conflict",
+      attemptedValue: 120,
+      authoritativeValue: 115
+    })]);
+  });
+
   it("turns delete-versus-pending-edit into a conflict instead of dropping the attempt", async () => {
     const acknowledgement = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const harness = await createHarness(undefined, async () => acknowledgement.promise);
@@ -132,6 +296,31 @@ describe("RemoteSubscriptionController", () => {
       authoritativeValue: undefined,
       revision: "2"
     })]);
+  });
+
+  it("settles an uncertain edit when an authoritative subscription deletes its row", async () => {
+    const harness = await createHarness(undefined, async () => {
+      throw new Error("connection lost");
+    });
+    await harness.mutations.execute("operation-uncertain-delete", [{
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "salary",
+      rawText: "120",
+      parsedValue: 120,
+      optimisticCell: {
+        storedValue: 120,
+        evaluatedValue: 120,
+        displayValue: "120",
+        metadata: {}
+      }
+    }]);
+
+    harness.subscription.accept({ kind: "rows-deleted", revision: "2", rowIds: ["1"] });
+
+    expect(harness.mutations.getPendingOperations()).toEqual([]);
+    expect(harness.overlays.getLatest("1", "salary")).toBeUndefined();
+    expect(harness.mutations.getConflicts()).toEqual([]);
   });
 
   it("invalidates unknown revision order and rejects an older in-flight query after a newer event", async () => {
@@ -244,6 +433,34 @@ function result(revision: string, rows: readonly Row[]): QueryResult<Row> {
     revision,
     completeness: "completeDataset",
     pageInfo: { kind: "none", total: { kind: "known", value: rows.length } }
+  };
+}
+
+function infiniteRequest(after?: string): QueryRequest {
+  return {
+    sorting: [],
+    filter: null,
+    grouping: [],
+    aggregates: [],
+    pagination: { kind: "infinite", ...(after === undefined ? {} : { after }), limit: 50 }
+  };
+}
+
+function infiniteResult(
+  revision: string,
+  rows: readonly Row[],
+  nextCursor?: string
+): QueryResult<Row> {
+  return {
+    items: rows.map((row) => ({ kind: "data" as const, id: row.id, original: row, depth: 0 })),
+    revision,
+    completeness: "loadedRows",
+    pageInfo: {
+      kind: "infinite",
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+      loadedCount: rows.length,
+      total: { kind: "unknown" }
+    }
   };
 }
 

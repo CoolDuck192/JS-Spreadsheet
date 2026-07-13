@@ -53,6 +53,21 @@ test("keeps a newly added sheet visible and focused in the viewport", async ({ p
   expect(tabListBottom).toBeLessThanOrEqual(800);
 });
 
+test("keeps DOM focus on the active cell through repeated arrow navigation", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("gridcell", { name: "A1", exact: true }).click();
+  for (const [key, address] of [
+    ["ArrowDown", "A2"],
+    ["ArrowDown", "A3"],
+    ["ArrowRight", "B3"],
+    ["ArrowDown", "B4"]
+  ] as const) {
+    await page.keyboard.press(key);
+    await expect(page.getByRole("gridcell", { name: address, exact: true })).toBeFocused();
+  }
+});
+
 test("keeps a newly added sheet tab inside a narrow viewport", async ({ page }) => {
   const viewport = { width: 390, height: 844 };
   await page.setViewportSize(viewport);

@@ -116,6 +116,8 @@ describe("useGoogleSheetsImport", () => {
 
   it("lets a direct provider bypass built-in client and LAN-origin setup", async () => {
     const direct = provider();
+    const invalidateAccessToken = vi.fn();
+    Object.assign(direct, { invalidateAccessToken });
     const clientIdStorage = storage();
     googleMocks.importWorkbook.mockResolvedValue(result());
     const onImported = vi.fn();
@@ -138,6 +140,12 @@ describe("useGoogleSheetsImport", () => {
       expect.objectContaining({ getAccessToken: expect.any(Function) })
     );
     expect(googleMocks.importWorkbook.mock.calls[0][1]).not.toBe(direct);
+    const trackedProvider = googleMocks.importWorkbook.mock.calls[0][1] as TokenProvider & {
+      invalidateAccessToken?(scopes: readonly string[]): void | Promise<void>;
+    };
+    expect(trackedProvider.invalidateAccessToken).toBeTypeOf("function");
+    await trackedProvider.invalidateAccessToken?.(["scope"]);
+    expect(invalidateAccessToken).toHaveBeenCalledWith(["scope"]);
     await waitFor(() => expect(onImported).toHaveBeenCalledTimes(1));
   });
 
@@ -179,6 +187,23 @@ describe("useGoogleSheetsImport", () => {
     expect(nestedFactory).toHaveBeenCalledWith(CLIENT_ID);
     expect(deprecatedFactory).not.toHaveBeenCalled();
     expect(nestedProvider.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not construct or prepare built-in Google auth until the dialog opens", async () => {
+    const builtInProvider = provider();
+    googleMocks.builtInFactory.mockReturnValue(builtInProvider);
+    const controller = renderController({
+      configuration: { clientId: CLIENT_ID }
+    });
+
+    await act(async () => Promise.resolve());
+    expect(controller.result.current.phase).toBe("closed");
+    expect(googleMocks.builtInFactory).not.toHaveBeenCalled();
+    expect(builtInProvider.prepare).not.toHaveBeenCalled();
+
+    await openReady(controller);
+    expect(googleMocks.builtInFactory).toHaveBeenCalledWith(CLIENT_ID);
+    expect(builtInProvider.prepare).toHaveBeenCalledTimes(1);
   });
 
   it("blocks only the built-in provider on a raw LAN IP", async () => {
@@ -258,6 +283,39 @@ describe("useGoogleSheetsImport", () => {
     expect(controller.result.current.clientIdSource).toBe("session");
     expect(controller.result.current.warning?.message).not.toMatch(/payload|token|secret|response/i);
     expect(onError).toHaveBeenCalled();
+  });
+
+  it("can change and forget a session-only client ID without remounting", async () => {
+    const hostFactory = vi.fn(() => provider());
+    const controller = renderController({
+      configuration: { tokenProviderFactory: hostFactory }
+    });
+
+    act(() => controller.result.current.openDialog());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    act(() => controller.result.current.setClientIdDraft(CLIENT_ID));
+    await act(async () => controller.result.current.saveClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+
+    expect(controller.result.current.clientIdSource).toBe("session");
+    expect(controller.result.current.canChangeClientId).toBe(true);
+    expect(controller.result.current.canForgetClientId).toBe(true);
+
+    act(() => controller.result.current.changeClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    expect(controller.result.current.clientIdEditable).toBe(true);
+    expect(controller.result.current.clientIdDraft).toBe(CLIENT_ID);
+
+    act(() => controller.result.current.setClientIdDraft(SECOND_CLIENT_ID));
+    await act(async () => controller.result.current.saveClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("ready"));
+    expect(controller.result.current.clientIdDraft).toBe(SECOND_CLIENT_ID);
+
+    await act(async () => controller.result.current.forgetClientId());
+    await waitFor(() => expect(controller.result.current.phase).toBe("setup"));
+    expect(controller.result.current.clientIdSource).toBe("missing");
+    expect(controller.result.current.clientIdDraft).toBe("");
+    expect(controller.result.current.clientIdEditable).toBe(true);
   });
 
   it("retains the usable stored ID when clearing storage fails", async () => {
@@ -937,7 +995,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
@@ -967,7 +1025,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { tokenProviderFactory: factoryA },
@@ -994,7 +1052,7 @@ describe("useGoogleSheetsImport", () => {
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: factoryA },
       onImported
     });
-    await waitFor(() => expect(providerA.prepare).toHaveBeenCalledTimes(1));
+    await openReady(controller);
 
     controller.rerender({
       configuration: { clientId: CLIENT_ID, tokenProviderFactory: failingFactory },

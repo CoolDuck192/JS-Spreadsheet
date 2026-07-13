@@ -20,6 +20,7 @@ import {
   type TableCapabilities
 } from "../core/capabilities";
 import type { QueryRow } from "../core/query";
+import { coalesceTableCellMetadataUpdates } from "../core/metadata";
 import type {
   ColumnDef,
   ExportArtifact,
@@ -127,8 +128,13 @@ export function createWorkbookTableSession(
           if (intent.selection === null) {
             return commitLocal(() => { localSelection = null; });
           }
-          localSelection = undefined;
-          return dispatchSelection(table, intent.selection);
+          {
+            const result = dispatchSelection(table, intent.selection);
+            if (result.status !== "committed" || localSelection === undefined) return result;
+            if (!result.changed) return commitLocal(() => { localSelection = undefined; });
+            localSelection = undefined;
+            return result;
+          }
         case "set-row-selection":
           if (intent.rowIds.some((rowId) => !table.rowIds.includes(rowId))) {
             return rejected("validation", "TABLE_ROW_NOT_FOUND", "Selected table row does not exist");
@@ -460,39 +466,49 @@ export function createWorkbookTableSession(
     table: StructuredTable,
     updates: readonly TableCellMetadataUpdate[]
   ): CommandResult {
-    const commands: WorkbookCommand[] = [];
+    const unlockCommands: WorkbookCommand[] = [];
+    const metadataCommands: WorkbookCommand[] = [];
+    const lockCommands: WorkbookCommand[] = [];
     const formulaEdits: Array<{ rowId: string; columnId: string; rawText: string }> = [];
-    for (const update of updates) {
+    for (const update of coalesceTableCellMetadataUpdates(updates)) {
       const coord = resolveCell(table, update);
       if (!coord) return rejected("validation", "TABLE_CELL_NOT_FOUND", "Metadata target does not exist");
       const range = { start: coord, end: coord };
+      if (update.patch.readOnly === false) {
+        unlockCommands.push({
+          type: "range.readOnly.set",
+          sheetId: table.sheetId,
+          range,
+          readOnly: false
+        });
+      }
       if (update.patch.format) {
-        commands.push({
-          type: "range.format",
+        metadataCommands.push({
+          type: "range.format.replace",
           sheetId: table.sheetId,
           range,
           format: fromTableFormat(update.patch.format)
         });
       }
       if ("validation" in update.patch) {
-        commands.push(update.patch.validation
+        metadataCommands.push(update.patch.validation
           ? { type: "range.validation.set", sheetId: table.sheetId, range, rule: fromTableValidation(update.patch.validation) }
           : { type: "range.validation.clear", sheetId: table.sheetId, range });
       }
       if ("comment" in update.patch) {
-        commands.push({
+        metadataCommands.push({
           type: "cell.comment.set",
           sheetId: table.sheetId,
           address: formatCellAddress(coord),
           comment: update.patch.comment ?? null
         });
       }
-      if ("readOnly" in update.patch) {
-        commands.push({
+      if (update.patch.readOnly === true) {
+        lockCommands.push({
           type: "range.readOnly.set",
           sheetId: table.sheetId,
           range,
-          readOnly: update.patch.readOnly === true
+          readOnly: true
         });
       }
       if ("formula" in update.patch) {
@@ -503,7 +519,9 @@ export function createWorkbookTableSession(
         });
       }
     }
+    const commands: WorkbookCommand[] = [...unlockCommands, ...metadataCommands];
     if (formulaEdits.length > 0) commands.push({ type: "table.editCells", tableId, edits: formulaEdits });
+    commands.push(...lockCommands);
     if (commands.length === 0) return { status: "committed", revision: getSnapshot().revision, changed: false };
     return workbookSession.dispatch({ type: "transaction", commands });
   }

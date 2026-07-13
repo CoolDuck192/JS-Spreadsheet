@@ -1,5 +1,6 @@
 import {
   createRef,
+  StrictMode,
   type KeyboardEvent,
   type ReactNode
 } from "react";
@@ -7,6 +8,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLocalRecordTableSession } from "../table/local/RecordTableSession";
+import { createTableMetadataKey } from "../table/local/tableMetadata";
 import type { ChangeContext, RowUpdater, TableDiagnosticEvent, TableViewState } from "../table/core/types";
 import { DataTable } from "./DataTable";
 import type {
@@ -213,6 +215,80 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("120");
   });
 
+  it("replaces a cell from the first printable key", async () => {
+    const user = userEvent.setup();
+    renderTable();
+    const salary = screen.getByRole("gridcell", { name: "e1 Salary" });
+    await user.click(salary);
+
+    fireEvent.keyDown(salary, { key: "4" });
+
+    const editor = screen.getByRole("textbox", { name: "Edit e1 Salary" });
+    expect(editor).toHaveValue("4");
+    await user.type(editor, "5{Enter}");
+    expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("45");
+  });
+
+  it("keeps an unmatched list value unchanged when no option is chosen", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      defaultDocument: {
+        version: 1,
+        cells: {
+          [createTableMetadataKey("e1", "name")]: {
+            validation: { kind: "list", values: ["Grace", "Lin"] }
+          }
+        },
+        calculatedColumns: [],
+        namedStyles: []
+      }
+    });
+    render(<DataTable aria-label="List editor employees" session={session} />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "e1 Name" }));
+    const editor = screen.getByRole("combobox", { name: "Edit e1 Name" });
+    expect(editor).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Blank" })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveTextContent("Ada");
+    session.destroy();
+  });
+
+  it("keeps a blank boolean cell blank when tabbing without a choice", async () => {
+    const user = userEvent.setup();
+    const nullableBooleanColumns: readonly ColumnDef<Employee>[] = [
+      columns[0],
+      columns[1],
+      {
+        id: "active",
+        header: "Active",
+        dataType: "boolean",
+        accessor: (row) => row.active,
+        update: (row: Employee, value: unknown) => ({ ...row, active: value as boolean })
+      },
+      columns[2]
+    ];
+    const session = createSession({
+      source: {
+        kind: "local",
+        rows: [{ ...employees[0], active: null as unknown as boolean }, ...employees.slice(1)],
+        getRowId
+      },
+      columns: nullableBooleanColumns
+    });
+    render(<DataTable aria-label="Boolean editor employees" session={session} />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "e1 Active" }));
+    const editor = screen.getByRole("combobox", { name: "Edit e1 Active" });
+    expect(editor).toHaveValue("");
+    await user.keyboard("{Tab}");
+
+    expect(session.getSnapshot().getCell("e1", "active").storedValue).toBeNull();
+    expect(screen.getByRole("gridcell", { name: "e1 Active" })).toHaveTextContent("");
+    session.destroy();
+  });
+
   it("sorts, filters, groups, aggregates, and paginates the complete local dataset", async () => {
     const user = userEvent.setup();
     const ref = createRef<DataTableHandle>();
@@ -240,6 +316,53 @@ describe("DataTable", () => {
     expect(screen.getByRole("row", { name: "Totals" })).toHaveAttribute("aria-rowindex", "5");
     await userClick("Next page");
     expect(dataRowTexts()[0]).toContain("Lin");
+  });
+
+  it("keeps one visible roving tab stop when selected rows or columns disappear", async () => {
+    const user = userEvent.setup();
+    const ref = createRef<DataTableHandle>();
+    renderTable({ ref });
+    const grid = screen.getByRole("grid", { name: "Employees" });
+    await user.click(screen.getByRole("gridcell", { name: "e3 Salary" }));
+
+    await dispatch(ref, {
+      type: "set-filter",
+      filter: {
+        kind: "comparison",
+        columnId: "department",
+        operator: "eq",
+        value: { type: "string", value: "Engineering" }
+      }
+    });
+
+    expect(grid.querySelectorAll('[role="gridcell"][tabindex="0"]')).toHaveLength(1);
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveAttribute("tabindex", "0");
+
+    await dispatch(ref, { type: "set-filter", filter: null });
+    await dispatch(ref, { type: "set-column-visibility", columnId: "salary", visible: false });
+
+    expect(grid.querySelectorAll('[role="gridcell"][tabindex="0"]')).toHaveLength(1);
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveAttribute("tabindex", "0");
+  });
+
+  it("numbers grouped data rows sequentially across group boundaries", async () => {
+    const ref = createRef<DataTableHandle>();
+    renderTable({ ref });
+
+    await dispatch(ref, { type: "set-grouping", grouping: [{ columnId: "department" }] });
+
+    const dataRows = screen.getAllByRole("row")
+      .filter((row) => row.getAttribute("data-row-kind") === "data");
+    expect(dataRows.map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Row 1",
+      "Row 2",
+      "Row 3"
+    ]);
+    expect(dataRows.map((row) => within(row).getByRole("rowheader").getAttribute("aria-label"))).toEqual([
+      "Row 1",
+      "Row 2",
+      "Row 3"
+    ]);
   });
 
   it("copies and atomically pastes a tab/newline matrix", async () => {
@@ -314,6 +437,88 @@ describe("DataTable", () => {
     session.destroy();
   });
 
+  it("clears quick-tool fill color, validation, comment, and formula values", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      formulaService: { evaluate: () => ({ value: 42, displayValue: "42" }) }
+    });
+    render(<DataTable aria-label="Metadata employees" session={session} />);
+    await user.click(screen.getByRole("gridcell", { name: "e1 Salary" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.type(screen.getByLabelText("Fill color"), "#eaf7f2");
+    await user.type(screen.getByLabelText("Validation list"), "10,42,100");
+    await user.type(screen.getByLabelText("Comment"), "Reviewed");
+    await user.type(screen.getByLabelText("Formula"), "=salary");
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    await user.clear(screen.getByLabelText("Fill color"));
+    await user.clear(screen.getByLabelText("Validation list"));
+    await user.clear(screen.getByLabelText("Comment"));
+    await user.clear(screen.getByLabelText("Formula"));
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(session.getSnapshot().getCell("e1", "salary").metadata).toEqual({ format: {} });
+    session.destroy();
+  });
+
+  it("does not overwrite untouched metadata when applying one quick tool", async () => {
+    const user = userEvent.setup();
+    const session = createSession({
+      defaultDocument: {
+        version: 1,
+        cells: {
+          [createTableMetadataKey("e1", "salary")]: {
+            format: { numberFormat: "currency", bold: true, textColor: "red" },
+            readOnly: true
+          }
+        },
+        calculatedColumns: [],
+        namedStyles: []
+      }
+    });
+    render(<DataTable aria-label="Protected metadata employees" session={session} />);
+    await user.click(screen.getByRole("gridcell", { name: "e1 Salary" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.type(screen.getByLabelText("Comment"), "Reviewed");
+
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(session.getSnapshot().getCell("e1", "salary").metadata).toEqual({
+      format: { numberFormat: "currency", bold: true, textColor: "red" },
+      comment: "Reviewed",
+      readOnly: true
+    });
+    session.destroy();
+  });
+
+  it("does not reuse applied quick-tool state for another selection", async () => {
+    const user = userEvent.setup();
+    const session = createSession();
+    const dispatch = vi.spyOn(session, "dispatch");
+    render(<DataTable aria-label="Metadata employees" session={session} />);
+
+    await user.click(screen.getByRole("gridcell", { name: "e1 Name" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.click(screen.getByLabelText("Read only"));
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+    expect(session.getSnapshot().getCell("e1", "name").metadata.readOnly).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+    await user.click(screen.getByRole("gridcell", { name: "e2 Name" }));
+    await user.click(screen.getByRole("button", { name: "Quick tools" }));
+
+    expect(screen.getByLabelText("Read only")).not.toBeChecked();
+    await user.type(screen.getByLabelText("Comment"), "B only");
+    await user.click(screen.getByRole("button", { name: "Apply quick tools" }));
+
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "e2", columnId: "name", patch: { comment: "B only" } }]
+    });
+    expect(session.getSnapshot().getCell("e2", "name").metadata).toEqual({ comment: "B only" });
+    session.destroy();
+  });
+
   it("resizes, hides, and pins columns by stable id", async () => {
     const user = userEvent.setup();
     const session = createSession();
@@ -343,8 +548,9 @@ describe("DataTable", () => {
     renderTable();
 
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
 
     expect(menu).toHaveAttribute("popover", "auto");
     expect(menu.closest(".js-spreadsheet-data-table")).not.toBeNull();
@@ -354,8 +560,29 @@ describe("DataTable", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
 
     expect(hidePopover).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it("keeps a column menu open through StrictMode effect replay", async () => {
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <DataTable
+          aria-label="Strict employees"
+          rows={employees}
+          columns={columns}
+          getRowId={getRowId}
+        />
+      </StrictMode>
+    );
+
+    const trigger = screen.getByRole("button", { name: "Column options for Name" });
+    await user.click(trigger);
+
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
   });
 
   it("closes and cleanly reopens a column menu from the same trigger", async () => {
@@ -366,7 +593,7 @@ describe("DataTable", () => {
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
 
     await user.click(trigger);
-    const firstMenu = screen.getByRole("menu", { name: "Name column menu" });
+    const firstMenu = screen.getByRole("dialog", { name: "Name column menu" });
     await user.click(trigger);
 
     expect(firstMenu).not.toBeInTheDocument();
@@ -379,7 +606,7 @@ describe("DataTable", () => {
 
     await user.click(trigger);
 
-    expect(screen.getByRole("menu", { name: "Name column menu" })).not.toBe(firstMenu);
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).not.toBe(firstMenu);
     expect(screen.getByRole("button", { name: "Sort Name ascending" })).toHaveFocus();
     expect(showPopover).toHaveBeenCalledTimes(2);
     expect(hidePopover).toHaveBeenCalledTimes(1);
@@ -394,11 +621,11 @@ describe("DataTable", () => {
     const departmentTrigger = screen.getByRole("button", { name: "Column options for Department" });
 
     await user.click(nameTrigger);
-    const staleMenu = screen.getByRole("menu", { name: "Name column menu" });
+    const staleMenu = screen.getByRole("dialog", { name: "Name column menu" });
     await user.click(departmentTrigger);
 
     expect(staleMenu).not.toBeInTheDocument();
-    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Department column menu" })).toBeInTheDocument();
     expect(nameTrigger).toHaveAttribute("aria-expanded", "false");
     expect(departmentTrigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
@@ -409,7 +636,7 @@ describe("DataTable", () => {
     Object.defineProperty(staleToggle, "newState", { value: "closed" });
     fireEvent(staleMenu, staleToggle);
 
-    expect(screen.getByRole("menu", { name: "Department column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Department column menu" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sort Department ascending" })).toHaveFocus();
   });
 
@@ -434,7 +661,7 @@ describe("DataTable", () => {
     });
 
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const left = Number.parseFloat(menu.style.left);
     const top = Number.parseFloat(menu.style.top);
 
@@ -460,7 +687,7 @@ describe("DataTable", () => {
       return nativeRect.call(this);
     });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
 
     vi.stubGlobal("innerWidth", 320);
     vi.stubGlobal("innerHeight", 240);
@@ -475,13 +702,13 @@ describe("DataTable", () => {
     renderTable();
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const toggle = new Event("toggle");
     Object.defineProperty(toggle, "newState", { value: "closed" });
 
     fireEvent(menu, toggle);
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 
@@ -490,7 +717,7 @@ describe("DataTable", () => {
     renderTable();
     const trigger = screen.getByRole("button", { name: "Column options for Name" });
     await user.click(trigger);
-    const menu = screen.getByRole("menu", { name: "Name column menu" });
+    const menu = screen.getByRole("dialog", { name: "Name column menu" });
     const cell = screen.getByRole("gridcell", { name: "e1 Name" });
     cell.focus();
     const toggle = new Event("toggle");
@@ -498,7 +725,7 @@ describe("DataTable", () => {
 
     fireEvent(menu, toggle);
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(cell).toHaveFocus();
     expect(trigger).not.toHaveFocus();
   });
@@ -511,7 +738,7 @@ describe("DataTable", () => {
 
     fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 
@@ -525,7 +752,7 @@ describe("DataTable", () => {
 
     fireEvent.scroll(screen.getByRole("grid", { name: "Employees" }));
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(cell).toHaveFocus();
     expect(trigger).not.toHaveFocus();
   });
@@ -540,7 +767,7 @@ describe("DataTable", () => {
     expect(header).not.toBeNull();
     fireEvent.scroll(header!);
 
-    expect(screen.getByRole("menu", { name: "Name column menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Name column menu" })).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -572,7 +799,7 @@ describe("DataTable", () => {
       />
     );
 
-    expect(screen.queryByRole("menu", { name: "Name column menu" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Name column menu" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Column options for Name" })).not.toBeInTheDocument();
     expect(hidePopover).toHaveBeenCalledTimes(1);
   });
@@ -621,16 +848,58 @@ describe("DataTable", () => {
     const session = createSession();
     render(<DataTable aria-label="Order employees" session={session} />);
     const nameHandle = screen.getByRole("button", { name: "Reorder Name" });
-    const salaryHeader = screen.getByRole("columnheader", { name: "Salary" });
+    const departmentHeader = screen.getByRole("columnheader", { name: "Department" });
     fireEvent.dragStart(nameHandle);
-    fireEvent.dragOver(salaryHeader);
-    fireEvent.drop(salaryHeader);
+    fireEvent.dragOver(departmentHeader);
+    fireEvent.drop(departmentHeader);
     await waitFor(() => expect(session.getSnapshot().state.columnOrder.indexOf("name")).toBeGreaterThan(0));
 
     await openColumnMenu(user, "Name");
     await user.click(screen.getByRole("button", { name: "Move Name left" }));
     expect(visibleHeaderNames()[0]).toBe("Name");
     expect(screen.getByRole("status")).toHaveTextContent("Name moved to position 1");
+    session.destroy();
+  });
+
+  it("does not announce a column move when the session reports no change", async () => {
+    const user = userEvent.setup();
+    const session = createSession();
+    vi.spyOn(session, "dispatch").mockResolvedValueOnce({
+      status: "committed",
+      revision: session.getSnapshot().revision,
+      changed: false
+    });
+    render(<DataTable aria-label="No-op order employees" session={session} />);
+
+    await openColumnMenu(user, "Name");
+    await user.click(screen.getByRole("button", { name: "Move Name right" }));
+
+    expect(screen.getByRole("status")).not.toHaveTextContent("Name moved");
+    session.destroy();
+  });
+
+  it("drops a right-moving column after its target and reaches the final position", async () => {
+    const session = createSession();
+    render(<DataTable aria-label="Right drop employees" session={session} />);
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Reorder Name" }));
+    fireEvent.drop(screen.getByRole("columnheader", { name: "Department" }));
+    await waitFor(() => expect(visibleHeaderNames()).toEqual([
+      "Department",
+      "Name",
+      "Salary",
+      "Active"
+    ]));
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "Reorder Name" }));
+    fireEvent.drop(screen.getByRole("columnheader", { name: "Active" }));
+    await waitFor(() => expect(visibleHeaderNames()).toEqual([
+      "Department",
+      "Salary",
+      "Active",
+      "Name"
+    ]));
+    expect(screen.getByRole("status")).toHaveTextContent("Name moved to position 4");
     session.destroy();
   });
 

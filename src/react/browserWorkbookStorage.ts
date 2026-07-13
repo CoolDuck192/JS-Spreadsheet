@@ -3,6 +3,15 @@ import type { WorkbookStorage } from "../App";
 
 const BROWSER_AUTOSAVE_CELL_LIMIT = 100_000;
 
+export class BrowserWorkbookStorageCapacityError extends Error {
+  readonly cellLimit = BROWSER_AUTOSAVE_CELL_LIMIT;
+
+  constructor() {
+    super("Workbook is too large for browser autosave. Use Export XLSX to save your work.");
+    this.name = "BrowserWorkbookStorageCapacityError";
+  }
+}
+
 export function createBrowserWorkbookStorage(storage: Storage): WorkbookStorage {
   return {
     load() {
@@ -10,7 +19,7 @@ export function createBrowserWorkbookStorage(storage: Storage): WorkbookStorage 
     },
     save(workbook) {
       if (hasMoreThanCellLimit(workbook, BROWSER_AUTOSAVE_CELL_LIMIT)) {
-        throw new Error("Workbook exceeds browser autosave capacity");
+        throw new BrowserWorkbookStorageCapacityError();
       }
       if (!saveWorkbook(storage, workbook)) {
         throw new Error("Browser storage write failed");

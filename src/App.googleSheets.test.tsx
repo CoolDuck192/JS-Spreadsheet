@@ -44,6 +44,25 @@ describe("Task 8 Google Sheets App integration", () => {
     vi.unstubAllEnvs();
   });
 
+  it("does not prepare configured Google auth while the feature is disabled", async () => {
+    const tokenProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("token")
+    };
+
+    render(
+      <Spreadsheet
+        services={{ googleSheets: { tokenProvider } }}
+        features={{ googleSheets: false }}
+        storage={false}
+      />
+    );
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByRole("button", { name: "Import Google Sheet" })).not.toBeInTheDocument();
+    expect(tokenProvider.prepare).not.toHaveBeenCalled();
+  });
+
   it("Task 8 fresh standalone LAN state explains built-in origin blocking", async () => {
     expect(window.location.origin).toBe("http://192.168.6.232:4173");
     const user = userEvent.setup();

@@ -7,7 +7,8 @@ import {
 } from "@xmldom/xmldom";
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import type { StructuredTable } from "../types";
+import { makeAboveFloorWorksheetPackage } from "../test/xlsxSecurityFixtures";
+import type { StructuredTable, WorkbookModel } from "../types";
 import {
   patchNativeTableXml,
   prepareNativeTableXmlForExcelJs,
@@ -60,6 +61,29 @@ const salesTable: StructuredTable = {
       { type: "string", value: "East" },
       { type: "string", value: "North" }
     ]
+  }
+};
+
+const denseTable: StructuredTable = {
+  id: "dense-table-id",
+  name: "DenseTable",
+  sheetId: "dense-sheet-id",
+  range: { start: { row: 0, column: 0 }, end: { row: 47_619, column: 9 } },
+  headerRow: true,
+  totalsRow: false,
+  columns: Array.from({ length: 10 }, (_, index) => ({
+    id: `dense-column-${index + 1}`,
+    name: `Column${index + 1}`,
+    sheetColumn: index
+  })),
+  rowIds: [],
+  keyColumnId: "dense-column-1",
+  style: {
+    theme: "TableStyleMedium9",
+    showFirstColumn: false,
+    showLastColumn: true,
+    showRowStripes: true,
+    showColumnStripes: false
   }
 };
 
@@ -120,6 +144,18 @@ function firstByLocalName(document: XmlDocument | XmlElement, name: string) {
 }
 
 describe("xlsxTableXml", () => {
+  it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {
+    const source = makeAboveFloorWorksheetPackage();
+    const patched = patchNativeTableXml(source, [denseTable]);
+    const patchedEntries = unzipSync(patched);
+    const patchedTable = patchedEntries["xl/tables/table1.xml"];
+
+    expect(patchedTable).toBeDefined();
+    expect(strFromU8(patchedTable)).toContain('name="TableStyleMedium9"');
+    expect(strFromU8(patchedEntries["xl/worksheets/sheet1.xml"]))
+      .toContain('dimension ref="A1:J47620"');
+  });
+
   it("reads native table XML from the validated archive view when a ZIP comment resembles an EOCD", async () => {
     const source = await fixture();
     const commented = withEocdLikeZipComment(source);
@@ -236,6 +272,67 @@ describe("xlsxTableXml", () => {
     expect(patchedEntries["xl/workbook.xml"]).toEqual(sourceEntries["xl/workbook.xml"]);
   });
 
+  it("preserves quoted sheet qualifiers in calculated and custom totals formulas", async () => {
+    const source = await fixture();
+    const table: StructuredTable = {
+      ...salesTable,
+      columns: salesTable.columns.map((column) =>
+        column.name === "Amount"
+          ? { ...column, calculatedFormula: "='A1'!B2+C2" }
+          : column
+      )
+    };
+    const workbook: WorkbookModel = {
+      version: 2,
+      activeSheetId: table.sheetId,
+      sheets: [{
+        id: table.sheetId,
+        name: "Sales",
+        rowCount: 6,
+        columnCount: 6,
+        cells: { D6: "='Sheet''s'!B2+C2" },
+        formats: {},
+        columnWidths: {},
+        rowHeights: {},
+        comments: {},
+        hyperlinks: {},
+        validations: {},
+        conditionalFormats: [],
+        filters: [],
+        charts: [],
+        merges: [],
+        protection: { isProtected: false, lockedCells: {}, unlockedCells: {} }
+      }],
+      namedRanges: [],
+      tables: [table]
+    };
+
+    const patched = patchNativeTableXml(source, [table], workbook);
+    const document = parseXml(tableXml(patched));
+    const columns = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "tableColumn"
+    );
+    const amount = columns.find((node) => node.getAttribute("name") === "Amount")!;
+    const units = columns.find((node) => node.getAttribute("name") === "Units")!;
+
+    expect(firstByLocalName(amount, "calculatedColumnFormula")?.textContent).toBe(
+      "'A1'!B2+SalesTable[@Region]"
+    );
+    expect(units.getAttribute("totalsRowFunction")).toBe("custom");
+    expect(firstByLocalName(units, "totalsRowFormula")?.textContent).toBe(
+      "'Sheet''s'!B2+SalesTable[@Region]"
+    );
+    expect(readNativeTableXml(patched)[0]).toMatchObject({
+      calculatedColumns: { Amount: "='A1'!B2+SalesTable[@Region]" },
+      totals: {
+        Units: {
+          function: "custom",
+          formula: "='Sheet''s'!B2+SalesTable[@Region]"
+        }
+      }
+    });
+  });
+
   it("writes custom filter comparisons and produces stable bytes", async () => {
     const source = await fixture();
     const customTable: StructuredTable = {
@@ -254,16 +351,142 @@ describe("xlsxTableXml", () => {
     expect(tableXml(first)).toContain('<customFilter operator="notEqual" val="4"/>');
   });
 
-  it("rejects unsupported filter expressions instead of silently dropping them", async () => {
+  it("writes same-column OR comparisons as native custom filters", async () => {
     const source = await fixture();
-    expect(() => patchNativeTableXml(source, [{
+    const patched = patchNativeTableXml(source, [{
+      ...salesTable,
+      filter: {
+        kind: "logical",
+        operator: "or",
+        operands: [
+          {
+            kind: "comparison",
+            columnId: "private-units",
+            operator: "eq",
+            value: { type: "number", value: 5 }
+          },
+          {
+            kind: "comparison",
+            columnId: "private-units",
+            operator: "eq",
+            value: { type: "number", value: 20 }
+          }
+        ]
+      }
+    }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("0");
+    expect(filters.map((filter) => filter.getAttribute("val"))).toEqual(["5", "20"]);
+  });
+
+  it.each([
+    ["logical comparisons", {
+      kind: "logical" as const,
+      operator: "and" as const,
+      operands: [
+        {
+          kind: "comparison" as const,
+          columnId: "private-units",
+          operator: "gte" as const,
+          value: { type: "number" as const, value: 5 }
+        },
+        {
+          kind: "comparison" as const,
+          columnId: "private-units",
+          operator: "lte" as const,
+          value: { type: "number" as const, value: 10 }
+        }
+      ]
+    }],
+    ["a between range", {
+      kind: "range" as const,
+      columnId: "private-units",
+      operator: "between" as const,
+      lower: { type: "number" as const, value: 5 },
+      upper: { type: "number" as const, value: 10 }
+    }]
+  ])("writes %s as ANDed native custom filters", async (_label, filter) => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{ ...salesTable, filter }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("1");
+    expect(filters.map((item) => [item.getAttribute("operator"), item.getAttribute("val")])).toEqual([
+      ["greaterThanOrEqual", "5"],
+      ["lessThanOrEqual", "10"]
+    ]);
+  });
+
+  it.each([
+    ["contains", "*Ea~*st~?~~*"],
+    ["startsWith", "Ea~*st~?~~*"],
+    ["endsWith", "*Ea~*st~?~~"]
+  ] as const)("writes and reads %s filters with escaped Excel wildcards", async (operator, criterion) => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{
       ...salesTable,
       filter: {
         kind: "comparison",
         columnId: "private-region",
-        operator: "contains",
-        value: { type: "string", value: "East" }
+        operator,
+        value: { type: "string", value: "Ea*st?~" }
       }
-    }])).toThrow(/unsupported native table filter/i);
+    }]);
+    const document = parseXml(tableXml(patched));
+    const custom = firstByLocalName(document, "customFilter")!;
+
+    expect(custom.getAttribute("operator")).toBeNull();
+    expect(custom.getAttribute("val")).toBe(criterion);
+    expect(readNativeTableXml(patched)[0].filter).toEqual({
+      kind: "comparison",
+      columnId: "Region",
+      operator,
+      value: { type: "string", value: "Ea*st?~" }
+    });
+  });
+
+  it("writes and reads two-value notIn filters as ANDed not-equal comparisons", async () => {
+    const source = await fixture();
+    const patched = patchNativeTableXml(source, [{
+      ...salesTable,
+      filter: {
+        kind: "set",
+        columnId: "private-region",
+        operator: "notIn",
+        values: [
+          { type: "string", value: "East" },
+          { type: "string", value: "West" }
+        ]
+      }
+    }]);
+    const document = parseXml(tableXml(patched));
+    const customFilters = firstByLocalName(document, "customFilters")!;
+    const filters = Array.from(document.getElementsByTagName("*")).filter(
+      (node) => node.localName === "customFilter"
+    );
+
+    expect(customFilters.getAttribute("and")).toBe("1");
+    expect(filters.map((item) => [item.getAttribute("operator"), item.getAttribute("val")])).toEqual([
+      ["notEqual", "East"],
+      ["notEqual", "West"]
+    ]);
+    expect(readNativeTableXml(patched)[0].filter).toEqual({
+      kind: "set",
+      columnId: "Region",
+      operator: "notIn",
+      values: [
+        { type: "string", value: "East" },
+        { type: "string", value: "West" }
+      ]
+    });
   });
 });

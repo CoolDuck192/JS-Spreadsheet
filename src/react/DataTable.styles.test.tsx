@@ -31,4 +31,17 @@ describe("DataTable style boundary", () => {
       /(?:^|[{}])\s*(?:body|html|:root|button|input|select|textarea|\*)(?=\s|,|\{|\.|:|#|\[)/m
     );
   });
+
+  it("keeps mobile pagination and dynamic toolbar labels visible", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/styles/data-table.css"), "utf8");
+    const markerIndex = css.indexOf("@container js-spreadsheet-table (max-width: 640px)");
+    expect(markerIndex).toBeGreaterThan(-1);
+    const compact = css.slice(markerIndex);
+
+    expect(compact).not.toMatch(/__toolbar\s*>\s*button\s*\{[^}]*font-size:\s*0;/s);
+    expect(compact).not.toMatch(/__toolbar\s*>\s*span\s*\{[^}]*display:\s*none;/s);
+    expect(compact).toMatch(/__toolbar-icon-button\s*\{[^}]*font-size:\s*0;/s);
+    expect(css).toMatch(/__pagination\s*\{[^}]*display:\s*inline-flex;/s);
+    expect(compact).toMatch(/__toolbar-summary\s*\{[^}]*display:\s*none;/s);
+  });
 });

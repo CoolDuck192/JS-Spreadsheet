@@ -47,6 +47,40 @@ describe("buildLocalRowModel", () => {
     expect(inactive.items.map((row) => row.id)).toEqual(["1", "3"]);
   });
 
+  it("treats undefined accessor values as blanks in filters, aggregates, and groups", () => {
+    type OptionalRow = { id: string; bonus?: number };
+    const optionalHelper = createColumnHelper<OptionalRow>();
+    const optionalColumns = [
+      optionalHelper.accessor("bonus", { id: "bonus", header: "Bonus", dataType: "number" })
+    ];
+    const optionalRows: readonly OptionalRow[] = [
+      { id: "missing-1" },
+      { id: "paid", bonus: 10 },
+      { id: "missing-2" }
+    ];
+
+    const blank = buildLocalRowModel(optionalRows, optionalColumns, query({
+      filter: { kind: "blank", columnId: "bonus", operator: "isBlank" }
+    }), (row) => row.id);
+    const counted = buildLocalRowModel(optionalRows, optionalColumns, query({
+      aggregates: [{ id: "bonus-count", columnId: "bonus", function: "count" }]
+    }), (row) => row.id);
+    const grouped = buildLocalRowModel(optionalRows, optionalColumns, query({
+      grouping: [{ columnId: "bonus" }]
+    }), (row) => row.id);
+
+    expect(blank.items.map((row) => row.id)).toEqual(["missing-1", "missing-2"]);
+    expect(counted.items.at(-1)).toMatchObject({
+      kind: "aggregate",
+      aggregates: { "bonus-count": 1 }
+    });
+    expect(grouped.items).toContainEqual(expect.objectContaining({
+      kind: "group",
+      key: { type: "null" },
+      count: 2
+    }));
+  });
+
   it("sorts stably, groups, and aggregates the complete dataset", () => {
     const model = buildLocalRowModel(rows, columns, query({
       sorting: [{ columnId: "salary", direction: "desc", nulls: "last" }],
@@ -254,6 +288,35 @@ describe("buildLocalRowModel", () => {
       kind: "group",
       aggregates: { sum: 100, average: 50, count: 2, min: 0, max: 100 }
     });
+  });
+
+  it("computes mixed-type min and max independently of row sort order", () => {
+    type MixedRow = { id: string; value: unknown };
+    const mixedHelper = createColumnHelper<MixedRow>();
+    const mixedColumns = [mixedHelper.accessor("value", { id: "value", header: "Value" })];
+    const mixedRows: readonly MixedRow[] = [
+      { id: "number", value: 10 },
+      { id: "string", value: "abc" },
+      { id: "boolean", value: false }
+    ];
+    const aggregates = [
+      { id: "minimum", columnId: "value", function: "min" as const },
+      { id: "maximum", columnId: "value", function: "max" as const }
+    ];
+
+    const sourceOrder = buildLocalRowModel(mixedRows, mixedColumns, query({ aggregates }), (row) => row.id);
+    const sortedOrder = buildLocalRowModel(mixedRows, mixedColumns, query({
+      sorting: [{ columnId: "value", direction: "desc" }],
+      aggregates
+    }), (row) => row.id);
+    const sourceAggregate = sourceOrder.items.at(-1);
+    const sortedAggregate = sortedOrder.items.at(-1);
+
+    expect(sourceAggregate).toMatchObject({
+      kind: "aggregate",
+      aggregates: { minimum: false, maximum: "abc" }
+    });
+    expect(sortedAggregate).toMatchObject(sourceAggregate!);
   });
 
   it("rejects unknown aggregate columns and unsupported cursor pagination", () => {

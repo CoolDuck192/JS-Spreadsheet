@@ -108,6 +108,81 @@ describe("xlsxTables", () => {
     expect(worksheet.getCell("B2").value).toBeInstanceOf(Date);
   });
 
+  it("imports a custom totals formula with a single structured item specifier", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const metadata = readNativeTableXml(bytes).map((entry) => entry.name === "SalesTable"
+      ? {
+          ...entry,
+          totals: {
+            ...entry.totals,
+            Amount: {
+              ...entry.totals.Amount,
+              formula: "=COUNTA(SalesTable[#Data])"
+            }
+          }
+        }
+      : entry);
+
+    await expect(importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      metadata,
+      { idGenerator: sequencedIds("single-selector") }
+    )).resolves.toHaveLength(1);
+    expect(worksheet.getCell("F6").formula).toBe("COUNTA(A$2:F$5)");
+  });
+
+  it("degrades cross-table calculated-column metadata without aborting import", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const metadata = readNativeTableXml(bytes).map((entry) => entry.name === "SalesTable"
+      ? {
+          ...entry,
+          calculatedColumns: {
+            ...entry.calculatedColumns,
+            Amount: "=VLOOKUP(SalesTable[[#This Row],[Order ID]],Dim[#All],2,0)"
+          }
+        }
+      : entry);
+
+    const tables = await importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      metadata,
+      { idGenerator: sequencedIds("cross-table") }
+    );
+
+    expect(tables[0].columns.find((column) => column.name === "Amount")?.calculatedFormula).toBeUndefined();
+    expect(worksheet.getCell("F2").formula).toBe("D2*E2");
+    expect(worksheet.getCell("F5").formula).toBe("D5*E5");
+  });
+
+  it.each([
+    ["first", "F2", "D2*E2+1"],
+    ["later", "F4", "D4*E4+1"]
+  ])("treats a %s-row calculated-column formula exception as a per-cell override", async (
+    _label,
+    address,
+    formula
+  ) => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    worksheet.getCell(address).value = { formula };
+
+    const tables = await importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      readNativeTableXml(bytes),
+      { idGenerator: sequencedIds(`exception-${address}`) }
+    );
+
+    expect(tables[0].columns.find(
+      (column) => column.name === "Amount"
+    )?.calculatedFormula).toBeUndefined();
+    expect(worksheet.getCell(address).formula).toBe(formula);
+  });
+
   it("imports both independently authored tables with default headers and native filters", async () => {
     const { bytes, workbook } = await loadFixture(realFixturePath);
     const metadata = readNativeTableXml(bytes);
@@ -279,5 +354,21 @@ describe("xlsxTables", () => {
     await expect(importStructuredTablesFromWorksheet(worksheet, "sheet", [], {})).rejects.toMatchObject({
       code: "XLSX_TABLE_NAME_INVALID"
     });
+  });
+
+  it("rejects native table ranges outside Excel bounds before allocating row IDs", async () => {
+    const { bytes, workbook } = await loadFixture(generatedFixturePath);
+    const worksheet = workbook.getWorksheet("Sales")!;
+    const native = listWorksheetTables(worksheet)[0] as unknown as {
+      table: { tableRef: string };
+    };
+    native.table.tableRef = "A1048577:F1048582";
+
+    await expect(importStructuredTablesFromWorksheet(
+      worksheet,
+      "sheet-sales",
+      readNativeTableXml(bytes),
+      { idGenerator: sequencedIds("out-of-bounds") }
+    )).rejects.toMatchObject({ code: "XLSX_TABLE_RANGE_INVALID" });
   });
 });

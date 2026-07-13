@@ -34,6 +34,7 @@ export interface WorkbookExporter {
 export interface TokenProvider {
   prepare?(): void | Promise<void>;
   getAccessToken(scopes: readonly string[]): Promise<string>;
+  invalidateAccessToken?(scopes: readonly string[]): void | Promise<void>;
 }
 
 export type GoogleClientIdStorage = Readonly<{

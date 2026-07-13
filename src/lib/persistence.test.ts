@@ -18,7 +18,13 @@ import {
   setSheetProtection,
   setRowHeight
 } from "./workbook";
-import { loadWorkbook, saveWorkbook } from "./persistence";
+import {
+  loadWorkbook,
+  saveWorkbook,
+  WorkbookLoadError,
+  WORKBOOK_QUARANTINE_KEY_PREFIX,
+  WORKBOOK_STORAGE_KEY
+} from "./persistence";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -46,6 +52,12 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string): void {
     this.values.set(key, value);
   }
+}
+
+function loadStoredWorkbook(storage: Storage) {
+  const workbook = loadWorkbook(storage);
+  expect(workbook).not.toBeNull();
+  return workbook!;
 }
 
 describe("persistence", () => {
@@ -114,7 +126,7 @@ describe("persistence", () => {
       })
     );
 
-    const workbook = loadWorkbook(storage);
+    const workbook = loadStoredWorkbook(storage);
 
     expect(workbook.activeSheetId).toBe("sheet-1");
     expect(isSheetHidden(workbook, "sheet-2")).toBe(true);
@@ -139,7 +151,7 @@ describe("persistence", () => {
       })
     );
 
-    const workbook = loadWorkbook(storage);
+    const workbook = loadStoredWorkbook(storage);
 
     expect(workbook.sheets[0].columnWidths).toEqual({});
     expect(workbook.sheets[0].rowHeights).toEqual({});
@@ -188,7 +200,7 @@ describe("persistence", () => {
       })
     );
 
-    const workbook = loadWorkbook(storage);
+    const workbook = loadStoredWorkbook(storage);
 
     expect(workbook.sheets[0].autoFilterRange).toEqual({
       start: { row: 0, column: 0 },
@@ -216,33 +228,54 @@ describe("persistence", () => {
       })
     );
 
-    const workbook = loadWorkbook(storage);
+    const workbook = loadStoredWorkbook(storage);
 
     expect(workbook.activeSheetId).toBe("sheet-1");
     expect(workbook.sheets[0].cells.A1).toBe("still here");
   });
 
-  it("falls back to a blank workbook for invalid JSON", () => {
+  it("returns null when browser storage has no workbook", () => {
     const storage = new MemoryStorage();
-    storage.setItem("javascript-spreadsheet-workbook", "{nope");
 
-    const workbook = loadWorkbook(storage);
-
-    expect(workbook.sheets).toHaveLength(1);
-    expect(workbook.sheets[0].name).toBe("Sheet1");
+    expect(loadWorkbook(storage)).toBeNull();
   });
 
-  it("falls back to a blank workbook for unsupported versions", () => {
+  it("quarantines invalid JSON byte-for-byte and throws a typed error", () => {
     const storage = new MemoryStorage();
-    storage.setItem(
-      "javascript-spreadsheet-workbook",
-      JSON.stringify({ version: 99, activeSheetId: "x", sheets: [] })
-    );
+    const serialized = "{nope";
+    storage.setItem(WORKBOOK_STORAGE_KEY, serialized);
 
-    const workbook = loadWorkbook(storage);
+    let failure: unknown;
+    try {
+      loadWorkbook(storage);
+    } catch (error) {
+      failure = error;
+    }
 
-    expect(workbook.version).toBe(2);
-    expect(workbook.tables).toEqual([]);
-    expect(workbook.sheets).toHaveLength(1);
+    expect(failure).toBeInstanceOf(WorkbookLoadError);
+    const loadError = failure as WorkbookLoadError;
+    expect(loadError.reason).toBe("invalid-json");
+    expect(loadError.quarantineKey).toMatch(new RegExp(`^${WORKBOOK_QUARANTINE_KEY_PREFIX}`));
+    expect(storage.getItem(WORKBOOK_STORAGE_KEY)).toBe(serialized);
+    expect(storage.getItem(loadError.quarantineKey!)).toBe(serialized);
+  });
+
+  it("quarantines an unmigratable payload without changing the primary value", () => {
+    const storage = new MemoryStorage();
+    const serialized = JSON.stringify({ version: 99, activeSheetId: "x", sheets: [] });
+    storage.setItem(WORKBOOK_STORAGE_KEY, serialized);
+
+    let failure: unknown;
+    try {
+      loadWorkbook(storage);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(WorkbookLoadError);
+    const loadError = failure as WorkbookLoadError;
+    expect(loadError.reason).toBe("migration-failed");
+    expect(storage.getItem(WORKBOOK_STORAGE_KEY)).toBe(serialized);
+    expect(storage.getItem(loadError.quarantineKey!)).toBe(serialized);
   });
 });

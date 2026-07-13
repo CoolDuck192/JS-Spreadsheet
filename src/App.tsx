@@ -113,6 +113,8 @@ const INITIAL_SELECTION: CellRange = {
 const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 25;
+const PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE =
+  "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first.";
 const DEFAULT_SHEET_TAB_COLOR = "#2f7d9f";
 
 type RichClipboardState = {
@@ -836,8 +838,10 @@ function SpreadsheetWorkbook({
     }, `Selected ${formatCellAddress(coordinate)} in the spreadsheet`);
     if (result.status !== "committed") return;
     setOpenTableId(null);
-    gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
-    gridScrollRef.current?.focus({ preventScroll: true });
+    queueMicrotask(() => {
+      gridApiRef.current?.ensureCellVisible(coordinate.row, coordinate.column);
+      gridScrollRef.current?.focus({ preventScroll: true });
+    });
   }
 
   function applyFormatPainter(targetSelection: CellRange) {
@@ -1028,13 +1032,24 @@ function SpreadsheetWorkbook({
       return;
     }
 
-    dispatchCommand({
-      type: "range.sort",
-      sheetId: activeSheet.id,
-      range,
-      direction,
-      sortColumn: column
-    }, direction === "asc" ? `Sorted ${columnIndexToName(column)} A to Z` : `Sorted ${columnIndexToName(column)} Z to A`);
+    const tableSortCommand = structuredTableSortCommand(workbook, activeSheet.id, range, column, direction);
+    if (!tableSortCommand && getStructuredTableForSelection(workbook, activeSheet.id, range)) {
+      setStatus(PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE);
+      return;
+    }
+
+    dispatchCommand(
+      tableSortCommand ?? {
+        type: "range.sort",
+        sheetId: activeSheet.id,
+        range,
+        direction,
+        sortColumn: column
+      },
+      direction === "asc"
+        ? `Sorted ${columnIndexToName(column)} A to Z`
+        : `Sorted ${columnIndexToName(column)} Z to A`
+    );
   }
 
   function handleAutoSum(functionName: AutoFunctionName = "SUM") {
@@ -1370,15 +1385,36 @@ function SpreadsheetWorkbook({
   }
 
   function handleSort(direction: "asc" | "desc") {
-    dispatchCommand({
-      type: "range.sort",
-      sheetId: activeSheet.id,
-      range: selection,
+    const tableSortCommand = structuredTableSortCommand(
+      workbook,
+      activeSheet.id,
+      selection,
+      normalizeRange(selection).start.column,
       direction
-    }, direction === "asc" ? "Sorted A to Z" : "Sorted Z to A");
+    );
+    if (!tableSortCommand && getStructuredTableForSelection(workbook, activeSheet.id, selection)) {
+      setStatus(PARTIAL_STRUCTURED_TABLE_SORT_MESSAGE);
+      return;
+    }
+
+    dispatchCommand(
+      tableSortCommand ?? {
+        type: "range.sort",
+        sheetId: activeSheet.id,
+        range: selection,
+        direction
+      },
+      direction === "asc" ? "Sorted A to Z" : "Sorted Z to A"
+    );
   }
 
   function handleRemoveDuplicates() {
+    if (getStructuredTableForSelection(workbook, activeSheet.id, selection)) {
+      setStatus(
+        "Remove duplicates is not supported for structured tables. Convert the table to a range first."
+      );
+      return;
+    }
     const removedCount = countDuplicateRows(activeSheet, selection);
     if (removedCount === 0) {
       setStatus("No duplicate rows found");
@@ -3330,6 +3366,7 @@ function SpreadsheetWorkbook({
         />
         <StatusBar
           status={status}
+          persistence={sessionSnapshot.persistence}
           activeAddress={activeAddress}
           selectedCount={countSelectedCells(selection)}
           selectionSummary={selectionSummary}
@@ -4171,6 +4208,37 @@ function flaggedIndexes(flags: Record<string, boolean>): number[] {
     .map(([index]) => Number(index))
     .filter((index) => Number.isInteger(index) && index >= 0)
     .sort((left, right) => left - right);
+}
+
+function structuredTableSortCommand(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  sheetColumn: number,
+  direction: "asc" | "desc"
+): WorkbookCommand | null {
+  const table = findStructuredTableContainingRange(workbook, sheetId, range);
+  const column = table?.columns.find((candidate) => candidate.sheetColumn === sheetColumn);
+  return table && column
+    ? {
+        type: "table.sort",
+        tableId: table.id,
+        sorting: [{ columnId: column.id, direction }]
+      }
+    : null;
+}
+
+function findStructuredTableContainingRange(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange
+) {
+  const normalized = normalizeRange(range);
+  return workbook.tables.find((table) => table.sheetId === sheetId
+    && normalized.start.row >= table.range.start.row
+    && normalized.start.column >= table.range.start.column
+    && normalized.end.row <= table.range.end.row
+    && normalized.end.column <= table.range.end.column) ?? null;
 }
 
 function countDuplicateRows(sheet: SheetModel, selection: CellRange): number {

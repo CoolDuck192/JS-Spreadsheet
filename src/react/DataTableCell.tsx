@@ -84,7 +84,7 @@ export function DataTableEditor<TRow>({
   onDiagnostic
 }: Omit<CellEditorProps<TRow, unknown>, "column" | "onCommit"> & {
   column: ColumnDef<TRow>;
-  onCommit(move?: "up" | "down" | "left" | "right"): void;
+  onCommit(rawText: string, move?: "up" | "down" | "left" | "right"): void;
   onDiagnostic?(event: TableDiagnosticEvent): void;
 }) {
   if (column.editor) {
@@ -97,7 +97,7 @@ export function DataTableEditor<TRow>({
           cell={cell}
           rawText={rawText}
           onChange={onChange}
-          onCommit={() => onCommit()}
+          onCommit={() => onCommit(rawText)}
           onCancel={onCancel}
         />
       </DataTableExtensionBoundary>
@@ -108,16 +108,25 @@ export function DataTableEditor<TRow>({
     ? cell.metadata.validation.values
     : null;
   if (column.dataType === "boolean" || listValues) {
-    const values = listValues ?? ["true", "false"];
+    const values = (listValues ?? ["true", "false"]).map(String);
+    const valueIsListed = values.includes(rawText);
+    const displayedRawText = valueIsListed ? rawText : "";
     return (
       <select
         autoFocus
         aria-label={`Edit ${cell.rowId} ${columnLabel(column)}`}
-        value={rawText}
+        value={displayedRawText}
         onChange={(event) => onChange(event.currentTarget.value)}
-        onKeyDown={(event) => handleEditorKeyDown(event, onCommit, onCancel)}
+        onKeyDown={(event) => handleEditorKeyDown(
+          event,
+          (move) => onCommit(rawText, move),
+          onCancel
+        )}
       >
-        {values.map((value) => <option key={String(value)} value={String(value)}>{String(value)}</option>)}
+        {!valueIsListed && !values.includes("") ? <option value="">Blank</option> : null}
+        {values.map((value) => (
+          <option key={value} value={value}>{value || "Blank"}</option>
+        ))}
       </select>
     );
   }
@@ -128,7 +137,7 @@ export function DataTableEditor<TRow>({
       aria-label={`Edit ${cell.rowId} ${columnLabel(column)}`}
       value={rawText}
       onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.currentTarget.value)}
-      onKeyDown={(event) => handleEditorKeyDown(event, onCommit, onCancel)}
+      onKeyDown={(event) => handleEditorKeyDown(event, (move) => onCommit(rawText, move), onCancel)}
     />
   );
 }

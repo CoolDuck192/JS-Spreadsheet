@@ -1,8 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { createBlankWorkbook } from "../../lib/workbook";
+import { describe, expect, it, vi } from "vitest";
+import { createBlankWorkbook, defineNamedRange } from "../../lib/workbook";
 import { migrateWorkbookModel } from "./migrateWorkbook";
 
 describe("workbook model migration", () => {
+  it("keeps named-range deduplication locale-independent across commands and migration", () => {
+    const originalToLocaleLowerCase = String.prototype.toLocaleLowerCase;
+    const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return originalToLocaleLowerCase.call(this, "tr");
+      });
+    let workbook = createBlankWorkbook();
+    let migratedDuplicateFixture: ReturnType<typeof migrateWorkbookModel>;
+
+    try {
+      workbook = defineNamedRange(workbook, workbook.activeSheetId, "ID", cellRange());
+      workbook = defineNamedRange(workbook, workbook.activeSheetId, "id", cellRange());
+      const persisted = createBlankWorkbook();
+      migratedDuplicateFixture = migrateWorkbookModel({
+        ...persisted,
+        namedRanges: [
+          { name: "ID", sheetId: persisted.activeSheetId, range: cellRange() },
+          { name: "id", sheetId: persisted.activeSheetId, range: cellRange() }
+        ]
+      });
+    } finally {
+      localeLowerCase.mockRestore();
+    }
+
+    expect(workbook.namedRanges).toHaveLength(1);
+    expect(migratedDuplicateFixture!).toBeNull();
+  });
+
   it("migrates a valid version 1 workbook to version 2", () => {
     const current = createBlankWorkbook();
     const versionOneFixture = { ...current, version: 1 };
@@ -18,6 +46,26 @@ describe("workbook model migration", () => {
       columns: [{ id: "column-fixed" }],
       rowIds: ["row-fixed"]
     });
+  });
+
+  it("rejects persisted notIn table filters that Excel cannot serialize", () => {
+    const fixture = createVersionTwoFixture();
+    expect(migrateWorkbookModel({
+      ...fixture,
+      tables: [{
+        ...fixture.tables[0],
+        filter: {
+          kind: "set",
+          columnId: "column-fixed",
+          operator: "notIn",
+          values: [
+            { type: "string", value: "East" },
+            { type: "string", value: "West" },
+            { type: "string", value: "North" }
+          ]
+        }
+      }]
+    })).toBeNull();
   });
 
   it.each([

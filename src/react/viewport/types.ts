@@ -33,6 +33,7 @@ export type GridViewportCell = {
   ref: TableCellRef;
   ariaLabel: string;
   displayValue: string;
+  editValue?: string;
   editable: boolean;
   invalid: boolean;
   className?: string;

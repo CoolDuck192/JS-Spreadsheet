@@ -6,7 +6,10 @@ import type {
   TablePendingOperation
 } from "../core/types";
 import type { OptimisticCell, OptimisticOverlayStore } from "./OptimisticOverlayStore";
-import type { RemoteQueryController } from "./RemoteQueryController";
+import type {
+  RemoteQueryAcceptance,
+  RemoteQueryController
+} from "./RemoteQueryController";
 import type {
   RemoteMutation,
   RemoteMutationResult,
@@ -23,13 +26,27 @@ export type PreparedRemoteMutation = {
   | { kind: "cell-metadata"; metadata: OptimisticCell["metadata"] }
 );
 
+export type RemoteAuthoritativeMutationCell = {
+  storedValue: unknown;
+  evaluatedValue: unknown;
+  formula?: string;
+  metadata: OptimisticCell["metadata"];
+  rowVersion?: string;
+};
+
 export type RemoteMutationControllerOptions<TRow> = {
   source: RemoteTableSource<TRow>;
   queryController: RemoteQueryController<TRow>;
   overlays: OptimisticOverlayStore;
   getActiveQuery(): QueryRequest;
   onChange(): void;
+  readAuthoritativeCell?(
+    row: TRow,
+    rowId: string,
+    columnId: string
+  ): RemoteAuthoritativeMutationCell | null;
   onAcknowledged?(acknowledgement: RemoteMutationAcknowledgement): void;
+  onReconciled?(reconciliation: RemoteMutationReconciliation): void;
   limits?: { maxPendingOperations?: number; maxPendingCells?: number };
 };
 
@@ -37,6 +54,11 @@ export type RemoteMutationAcknowledgement = {
   operationId: string;
   revision: string;
   rowVersions: readonly { rowId: string; columnId: string; rowVersion?: string }[];
+};
+
+export type RemoteMutationReconciliation = {
+  operationId: string;
+  outcome: "conflict" | "superseded";
 };
 
 export type RemoteMutationExecutionOptions = {
@@ -55,7 +77,13 @@ type MutationBatch = {
   cancelled: boolean;
   cancelledAtQueryGeneration: number;
   authoritativeRefreshCompleted: boolean;
+  uncertainAtQueryGeneration: number;
+  acknowledgeable: boolean;
+  backpressureReleased: boolean;
+  resolvedMutationIds: Set<string>;
 };
+
+type MissingRowAuthority = "unknown" | "projected" | "complete";
 
 export type RemoteMutationCancellation = {
   markAuthoritativeRefreshCompleted(): void;
@@ -70,7 +98,12 @@ export class RemoteMutationController<TRow> {
   private readonly overlays: OptimisticOverlayStore;
   private readonly getActiveQuery: () => QueryRequest;
   private readonly onChange: () => void;
+  private readonly authoritativeCellReader:
+    | RemoteMutationControllerOptions<TRow>["readAuthoritativeCell"]
+    | undefined;
   private readonly onAcknowledged: ((acknowledgement: RemoteMutationAcknowledgement) => void) | undefined;
+  private readonly onReconciled: ((reconciliation: RemoteMutationReconciliation) => void) | undefined;
+  private readonly unsubscribeAcceptedQuery: () => void;
   private readonly maxPendingOperations: number;
   private readonly maxPendingCells: number;
   private readonly batches = new Map<string, MutationBatch>();
@@ -86,7 +119,12 @@ export class RemoteMutationController<TRow> {
     this.overlays = options.overlays;
     this.getActiveQuery = options.getActiveQuery;
     this.onChange = options.onChange;
+    this.authoritativeCellReader = options.readAuthoritativeCell;
     this.onAcknowledged = options.onAcknowledged;
+    this.onReconciled = options.onReconciled;
+    this.unsubscribeAcceptedQuery = this.queryController.subscribeAccepted((acceptance) => {
+      this.acceptAcceptedQuery(acceptance);
+    });
     this.maxPendingOperations = positiveLimit(
       options.limits?.maxPendingOperations,
       DEFAULT_MAX_PENDING_OPERATIONS,
@@ -157,7 +195,11 @@ export class RemoteMutationController<TRow> {
       status: "pending",
       cancelled: false,
       cancelledAtQueryGeneration: 0,
-      authoritativeRefreshCompleted: false
+      authoritativeRefreshCompleted: false,
+      uncertainAtQueryGeneration: 0,
+      acknowledgeable: true,
+      backpressureReleased: false,
+      resolvedMutationIds: new Set()
     };
     this.batches.set(operationId, batch);
     this.publish();
@@ -183,6 +225,7 @@ export class RemoteMutationController<TRow> {
       }
       for (const mutationId of batch.mutationIds) this.overlays.updateStatus(mutationId, "uncertain");
       batch.status = "uncertain";
+      batch.uncertainAtQueryGeneration = this.queryController.getDiagnostics().generation;
       this.publish();
       return { status: "pending", operationId };
     }
@@ -257,6 +300,7 @@ export class RemoteMutationController<TRow> {
       switch (result.status) {
         case "committed":
         case "corrected":
+          this.supersedeOlderUncertainOverlays(overlay);
           committedRows.push(result.row);
           this.queryController.applyCanonicalRows([result.row], result.revision, false);
           this.overlays.remove(result.clientMutationId);
@@ -377,10 +421,21 @@ export class RemoteMutationController<TRow> {
       return validationIssue("NO_QUERY", "A current source revision is required");
     }
     const newCellKeys = new Set(prepared.map((mutation) => cellKey(mutation.rowId, mutation.columnId)));
-    const existingCellKeys = new Set(this.overlays.values().map((overlay) => cellKey(overlay.rowId, overlay.columnId)));
+    const releasedOperations = new Set(
+      [...this.batches.values()]
+        .filter((batch) => batch.backpressureReleased)
+        .map((batch) => batch.operationId)
+    );
+    const backpressuredBatches = [...this.batches.values()]
+      .filter((batch) => !batch.backpressureReleased);
+    const existingCellKeys = new Set(
+      this.overlays.values()
+        .filter((overlay) => !releasedOperations.has(overlay.operationId))
+        .map((overlay) => cellKey(overlay.rowId, overlay.columnId))
+    );
     const additionalCells = [...newCellKeys].filter((key) => !existingCellKeys.has(key)).length;
-    return this.batches.size >= this.maxPendingOperations
-      || this.overlays.uniqueCellCount + additionalCells > this.maxPendingCells
+    return backpressuredBatches.length >= this.maxPendingOperations
+      || existingCellKeys.size + additionalCells > this.maxPendingCells
       ? validationIssue("REMOTE_MUTATION_BACKPRESSURE", "Remote mutation queue is full")
       : null;
   }
@@ -407,16 +462,155 @@ export class RemoteMutationController<TRow> {
     return this.overlays.values().some((overlay) => overlay.rowId === rowId);
   }
 
+  private acceptAcceptedQuery(acceptance: RemoteQueryAcceptance<TRow>): void {
+    const rows = acceptance.items.flatMap((item) => item.kind === "data" ? [item.original] : []);
+    this.reconcileUncertainBatches(
+      rows,
+      acceptance.revision,
+      acceptance.generation,
+      acceptedQueryProvesRowAbsence(acceptance) ? "complete" : "projected"
+    );
+  }
+
+  private reconcileUncertainBatches(
+    rows: readonly TRow[],
+    revision: string,
+    generation?: number,
+    missingRowAuthority: MissingRowAuthority = "unknown"
+  ): void {
+    if (this.destroyed) return;
+    const rowsById = new Map(rows.map((row) => [this.source.getRowId(row), row]));
+    let changed = false;
+
+    for (const batch of [...this.batches.values()]) {
+      if (
+        batch.status !== "uncertain"
+        || (generation !== undefined && generation <= batch.uncertainAtQueryGeneration)
+      ) continue;
+
+      const resolutions: Array<{
+        mutationId: string;
+        overlay: NonNullable<ReturnType<OptimisticOverlayStore["get"]>>;
+        attempt: PreparedRemoteMutation;
+        row: TRow;
+        authoritative: RemoteAuthoritativeMutationCell;
+      }> = [];
+      let authoritativeForWholeBatch = true;
+
+      for (const mutationId of batch.mutationIds) {
+        if (batch.resolvedMutationIds.has(mutationId)) continue;
+        const overlay = this.overlays.get(mutationId);
+        const attempt = this.attempts.get(mutationId);
+        if (!overlay || !attempt) {
+          batch.resolvedMutationIds.add(mutationId);
+          batch.acknowledgeable = false;
+          changed = true;
+          continue;
+        }
+
+        const latest = this.overlays.getLatest(overlay.rowId, overlay.columnId);
+        if (latest && latest.sequence > overlay.sequence) {
+          this.overlays.remove(mutationId);
+          this.attempts.delete(mutationId);
+          this.conflicts.delete(mutationId);
+          batch.resolvedMutationIds.add(mutationId);
+          batch.acknowledgeable = false;
+          changed = true;
+          continue;
+        }
+
+        const comparison = this.source.compareRevisions(revision, overlay.baseRevision);
+        if (comparison === "older" || comparison === "unknown") {
+          authoritativeForWholeBatch = false;
+          break;
+        }
+        const row = rowsById.get(overlay.rowId);
+        if (!row) {
+          if (missingRowAuthority === "complete") {
+            this.overlays.remove(mutationId);
+            this.attempts.delete(mutationId);
+            this.conflicts.delete(mutationId);
+            batch.resolvedMutationIds.add(mutationId);
+            batch.acknowledgeable = false;
+            changed = true;
+            continue;
+          }
+          if (missingRowAuthority === "projected" && !batch.backpressureReleased) {
+            // The row may simply be outside this projection. Preserve reconciliation state,
+            // but do not let an off-screen attempt permanently exhaust the bounded queue.
+            batch.backpressureReleased = true;
+            changed = true;
+          }
+          authoritativeForWholeBatch = false;
+          break;
+        }
+        const authoritative = this.readAuthoritativeCell(row, overlay.rowId, overlay.columnId);
+        if (!authoritative) {
+          authoritativeForWholeBatch = false;
+          break;
+        }
+        resolutions.push({ mutationId, overlay, attempt, row, authoritative });
+      }
+
+      if (!authoritativeForWholeBatch) continue;
+      let hasConflict = false;
+      const rowVersions = new Map<string, string | undefined>();
+      for (const resolution of resolutions) {
+        const { mutationId, overlay, attempt, row, authoritative } = resolution;
+        rowVersions.set(mutationId, authoritative.rowVersion);
+        batch.resolvedMutationIds.add(mutationId);
+        if (attemptMatchesAuthority(attempt, authoritative)) {
+          this.overlays.remove(mutationId);
+          this.attempts.delete(mutationId);
+          this.conflicts.delete(mutationId);
+        } else {
+          hasConflict = true;
+          this.overlays.updateStatus(mutationId, "conflict");
+          if (authoritative.rowVersion !== undefined) {
+            this.attempts.set(mutationId, { ...attempt, rowVersion: authoritative.rowVersion });
+          }
+          this.conflicts.set(mutationId, {
+            operationId: overlay.operationId,
+            rowId: overlay.rowId,
+            columnId: overlay.columnId,
+            attemptedValue: overlay.cell.evaluatedValue,
+            authoritativeValue: authoritative.evaluatedValue,
+            current: row,
+            revision
+          });
+        }
+        changed = true;
+      }
+
+      if (batch.resolvedMutationIds.size !== batch.mutationIds.length) continue;
+      this.batches.delete(batch.operationId);
+      if (batch.acknowledgeable && !hasConflict) {
+        this.notifyAcknowledged({
+          operationId: batch.operationId,
+          revision,
+          rowVersions: batch.cells.map((cell, index) => {
+            const rowVersion = rowVersions.get(batch.mutationIds[index]);
+            return { ...cell, ...(rowVersion === undefined ? {} : { rowVersion }) };
+          })
+        });
+      } else {
+        this.notifyReconciled({
+          operationId: batch.operationId,
+          outcome: hasConflict ? "conflict" : "superseded"
+        });
+      }
+      changed = true;
+    }
+
+    if (changed) this.publish();
+  }
+
   acceptAuthoritativeRows(rows: readonly TRow[], revision: string): void {
+    this.reconcileUncertainBatches(rows, revision);
     for (const row of rows) {
       const rowId = this.source.getRowId(row);
       for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
-        let authoritativeValue: unknown;
-        try {
-          authoritativeValue = this.source.readCell?.(row, overlay.columnId).evaluatedValue;
-        } catch {
-          authoritativeValue = undefined;
-        }
+        const authoritativeValue = this.readAuthoritativeCell(row, rowId, overlay.columnId)?.evaluatedValue;
         if (!Object.is(authoritativeValue, overlay.cell.evaluatedValue)) {
           this.overlays.updateStatus(overlay.clientMutationId, "conflict");
           this.conflicts.set(overlay.clientMutationId, {
@@ -436,10 +630,23 @@ export class RemoteMutationController<TRow> {
   }
 
   acceptAuthoritativeDeletions(rowIds: readonly string[], revision: string): void {
+    const affectedUncertainBatches = new Set<MutationBatch>();
+    let changed = false;
     for (const rowId of rowIds) {
       const current = this.queryController.getCanonicalRow(rowId);
-      if (!current) continue;
       for (const overlay of this.overlays.values().filter((candidate) => candidate.rowId === rowId)) {
+        const batch = this.batches.get(overlay.operationId);
+        if (batch?.status === "uncertain") {
+          this.overlays.remove(overlay.clientMutationId);
+          this.attempts.delete(overlay.clientMutationId);
+          this.conflicts.delete(overlay.clientMutationId);
+          batch.resolvedMutationIds.add(overlay.clientMutationId);
+          batch.acknowledgeable = false;
+          affectedUncertainBatches.add(batch);
+          changed = true;
+          continue;
+        }
+        if (!current) continue;
         this.overlays.updateStatus(overlay.clientMutationId, "conflict");
         this.conflicts.set(overlay.clientMutationId, {
           operationId: overlay.operationId,
@@ -450,10 +657,17 @@ export class RemoteMutationController<TRow> {
           current,
           revision
         });
+        changed = true;
       }
+    }
+    for (const batch of affectedUncertainBatches) {
+      if (batch.resolvedMutationIds.size !== batch.mutationIds.length) continue;
+      this.batches.delete(batch.operationId);
+      this.notifyReconciled({ operationId: batch.operationId, outcome: "superseded" });
     }
     this.queryController.deleteCanonicalRows(rowIds, revision, false);
     this.queryController.noteCurrentRevision(revision, false);
+    if (changed) this.publish();
   }
 
   abandonConflict(operationId: string, rowId: string): boolean {
@@ -517,6 +731,7 @@ export class RemoteMutationController<TRow> {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.unsubscribeAcceptedQuery();
     for (const batch of this.batches.values()) batch.abortController.abort();
     this.batches.clear();
     this.conflicts.clear();
@@ -524,6 +739,73 @@ export class RemoteMutationController<TRow> {
     this.reconciliationTombstones.clear();
     this.issues = [];
     this.overlays.clear();
+  }
+
+  private readAuthoritativeCell(
+    row: TRow,
+    rowId: string,
+    columnId: string
+  ): RemoteAuthoritativeMutationCell | null {
+    try {
+      if (this.authoritativeCellReader) {
+        return this.authoritativeCellReader(row, rowId, columnId);
+      }
+      if (!this.source.readCell) return null;
+      const cell = this.source.readCell(row, columnId);
+      return {
+        storedValue: cell.storedValue,
+        evaluatedValue: cell.evaluatedValue,
+        ...(cell.formula === undefined ? {} : { formula: cell.formula }),
+        metadata: cell.metadata ?? {},
+        ...(cell.rowVersion === undefined ? {} : { rowVersion: cell.rowVersion })
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private supersedeOlderUncertainOverlays(
+    current: NonNullable<ReturnType<OptimisticOverlayStore["get"]>>
+  ): void {
+    const affected = new Set<MutationBatch>();
+    for (const candidate of this.overlays.values()) {
+      if (
+        candidate.clientMutationId === current.clientMutationId
+        || (candidate.status !== "uncertain" && candidate.status !== "conflict")
+        || candidate.rowId !== current.rowId
+        || candidate.columnId !== current.columnId
+        || candidate.sequence >= current.sequence
+      ) continue;
+      const batch = this.batches.get(candidate.operationId);
+      this.overlays.remove(candidate.clientMutationId);
+      this.attempts.delete(candidate.clientMutationId);
+      this.conflicts.delete(candidate.clientMutationId);
+      if (!batch) continue;
+      batch.resolvedMutationIds.add(candidate.clientMutationId);
+      batch.acknowledgeable = false;
+      affected.add(batch);
+    }
+    for (const batch of affected) {
+      if (batch.resolvedMutationIds.size !== batch.mutationIds.length) continue;
+      this.batches.delete(batch.operationId);
+      this.notifyReconciled({ operationId: batch.operationId, outcome: "superseded" });
+    }
+  }
+
+  private notifyAcknowledged(acknowledgement: RemoteMutationAcknowledgement): void {
+    try {
+      this.onAcknowledged?.(acknowledgement);
+    } catch {
+      // Journal callbacks never alter remote mutation reconciliation.
+    }
+  }
+
+  private notifyReconciled(reconciliation: RemoteMutationReconciliation): void {
+    try {
+      this.onReconciled?.(reconciliation);
+    } catch {
+      // Journal callbacks never alter remote mutation reconciliation.
+    }
   }
 
   private removeBatch(batch: MutationBatch, silent: boolean): void {
@@ -545,7 +827,7 @@ export class RemoteMutationController<TRow> {
     const query = this.queryController.getSnapshot();
     const queryGeneration = this.queryController.getDiagnostics().generation;
     const authoritativeRefreshCompleted = batch.authoritativeRefreshCompleted
-      || (queryGeneration >= batch.cancelledAtQueryGeneration + 2 && query.status !== "loading");
+      || (queryGeneration >= batch.cancelledAtQueryGeneration + 2 && query.status === "ready");
     const protocolIssue = validateResults(batch.mutationIds, results);
     if (protocolIssue) {
       this.issues = [{ code: "REMOTE_MUTATION_PROTOCOL_ERROR", message: protocolIssue }];
@@ -584,6 +866,48 @@ export class RemoteMutationController<TRow> {
     batch.abortController.abort();
     this.batches.delete(operationId);
   }
+}
+
+function attemptMatchesAuthority(
+  attempt: PreparedRemoteMutation,
+  authoritative: RemoteAuthoritativeMutationCell
+): boolean {
+  if (attempt.kind === "cell-metadata") {
+    return structurallyEqual(authoritative.metadata, attempt.metadata);
+  }
+  if (attempt.formula !== undefined) {
+    return authoritative.formula !== undefined
+      && normalizeFormula(authoritative.formula) === normalizeFormula(attempt.formula);
+  }
+  if (authoritative.formula !== undefined) return false;
+  return Object.is(authoritative.storedValue, attempt.parsedValue)
+    || Object.is(authoritative.evaluatedValue, attempt.optimisticCell.evaluatedValue);
+}
+
+function normalizeFormula(formula: string): string {
+  const trimmed = formula.trim();
+  const expression = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  return `=${expression}`;
+}
+
+function structurallyEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((value, index) => structurallyEqual(value, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).filter((key) => left[key] !== undefined);
+  const rightKeys = Object.keys(right).filter((key) => right[key] !== undefined);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
+      && structurallyEqual(left[key], right[key]));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function validateResults<TRow>(
@@ -637,6 +961,15 @@ function queryIsProjected(query: QueryRequest): boolean {
     || query.grouping.length > 0
     || query.aggregates.length > 0
     || query.pagination.kind !== "none";
+}
+
+function acceptedQueryProvesRowAbsence<TRow>(acceptance: RemoteQueryAcceptance<TRow>): boolean {
+  return acceptance.completeness === "completeDataset"
+    && acceptance.query.filter === null
+    && acceptance.query.grouping.length === 0
+    && acceptance.query.aggregates.length === 0
+    && acceptance.query.pagination.kind === "none"
+    && acceptance.query.tree === undefined;
 }
 
 function positiveLimit(value: number | undefined, fallback: number, name: string): number {

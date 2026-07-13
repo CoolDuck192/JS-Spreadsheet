@@ -87,6 +87,14 @@ export function GridViewport({
   const getColumnKey = useCallback((index: number) => columns[index].id, [columns]);
   const getRowSize = useCallback((index: number) => rows[index].height, [rows]);
   const getColumnSize = useCallback((index: number) => columns[index].width, [columns]);
+  const pinnedTopInset = useMemo(
+    () => rows.reduce((total, row) => total + (row.pinned === "top" ? row.height : 0), 0),
+    [rows]
+  );
+  const pinnedLeftInset = useMemo(
+    () => columns.reduce((total, column) => total + (column.pinned === "left" ? column.width : 0), 0),
+    [columns]
+  );
   const virtualizer = useTwoAxisVirtualizer({
     scrollRef: rootRef,
     rowCount: rows.length,
@@ -99,6 +107,8 @@ export function GridViewport({
     columnOverscan,
     rowViewportInset: headerHeight,
     columnViewportInset: rowHeaderWidth,
+    rowViewportStartInset: pinnedTopInset,
+    columnViewportStartInset: pinnedLeftInset,
     scale,
     resetKey
   });
@@ -113,12 +123,22 @@ export function GridViewport({
     onInteraction,
     ensureCellVisible: virtualizer.ensureCellVisible,
     rootRef,
-    getInitialRawText: (cell) => getCell(cell.rowId, cell.columnId).displayValue,
+    getInitialRawText: (cell) => {
+      const viewportCell = getCell(cell.rowId, cell.columnId);
+      return viewportCell.editValue ?? viewportCell.displayValue;
+    },
     isCellEditable: (cell) => getCell(cell.rowId, cell.columnId).editable
   });
   const liveRegionId = gridLiveRegionDomId(idPrefix);
   const canvasWidth = rowHeaderWidth + virtualizer.totalWidth;
   const canvasHeight = headerHeight + virtualizer.totalHeight;
+  const gridTemplateColumns = useMemo(
+    () => [
+      ...(rowHeaderWidth > 0 ? [`${rowHeaderWidth}px`] : []),
+      ...columns.map((column) => `${column.width}px`)
+    ].join(" "),
+    [columns, rowHeaderWidth]
+  );
   const pinnedColumnOffsets = useMemo(() => createPinnedColumnOffsets(columns), [columns]);
   const pinnedRowOffsets = useMemo(() => createPinnedRowOffsets(rows), [rows]);
   const rowMeasurementsById = useMemo(
@@ -219,6 +239,9 @@ export function GridViewport({
     }
     onBeforeKeyDown?.(event);
     if (event.defaultPrevented) {
+      if (isNavigationKey(event.key)) {
+        interaction.requestFocusRestoration(false);
+      }
       return;
     }
     interaction.onKeyDown(event);
@@ -301,7 +324,14 @@ export function GridViewport({
             role="row"
             aria-label="Column headers"
             aria-rowindex={1}
-            style={{ position: "sticky", top: 0, zIndex: 3, height: headerHeight }}
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 3,
+              display: "grid",
+              gridTemplateColumns,
+              height: headerHeight
+            }}
           >
             {renderRowHeader ? (
               <div
@@ -312,6 +342,7 @@ export function GridViewport({
                   ...headerCellStyle(0, rowHeaderWidth, headerHeight),
                   position: "sticky",
                   left: 0,
+                  gridColumn: 1,
                   zIndex: 4
                 }}
               >
@@ -334,7 +365,8 @@ export function GridViewport({
                     headerCellStyle(rowHeaderWidth + measurement.start, measurement.size, headerHeight),
                     column,
                     rowHeaderWidth,
-                    pinnedColumnOffsets
+                    pinnedColumnOffsets,
+                    measurement.index
                   )}
                   onMouseDown={(event) => onColumnHeaderMouseDown?.(column, event)}
                   onMouseEnter={(event) => onColumnHeaderMouseEnter?.(column, event)}
@@ -363,13 +395,17 @@ export function GridViewport({
               aria-label={row.ariaLabel ?? `Row ${row.label}`}
               aria-rowindex={row.ariaRowIndex}
               data-row-kind={row.kind}
-              style={rowPositionStyle(
-                rowMeasurement,
-                row,
-                canvasWidth,
-                headerHeight,
-                pinnedRowOffsets
-              )}
+              style={{
+                ...rowPositionStyle(
+                  rowMeasurement,
+                  row,
+                  canvasWidth,
+                  headerHeight,
+                  pinnedRowOffsets
+                ),
+                display: "grid",
+                gridTemplateColumns
+              }}
             >
               {renderRowHeader ? (
                 <div
@@ -379,7 +415,7 @@ export function GridViewport({
                   aria-selected={rowHeaderState?.ariaSelected}
                   tabIndex={rowHeaderState?.tabIndex}
                   className={rowHeaderState?.className}
-                  style={rowHeaderCellStyle(rowMeasurement.size, rowHeaderWidth)}
+                  style={{ ...rowHeaderCellStyle(rowMeasurement.size, rowHeaderWidth), gridColumn: 1 }}
                   onMouseDown={(event) => onRowHeaderMouseDown?.(row, event)}
                   onMouseEnter={(event) => onRowHeaderMouseEnter?.(row, event)}
                   onClick={(event) => onRowHeaderClick?.(row, event)}
@@ -429,11 +465,19 @@ export function GridViewport({
                       cell.style,
                       column,
                       rowHeaderWidth,
-                      pinnedColumnOffsets
+                      pinnedColumnOffsets,
+                      columnMeasurement.index
                     )}
                     onPointerDown={
                       interactionEventMode === "pointer"
-                        ? (event) => handleCellDown(cell, event)
+                        ? (event) => {
+                            if (event.button === 0 && typeof event.currentTarget.setPointerCapture === "function") {
+                              try { event.currentTarget.setPointerCapture(event.pointerId); } catch {
+                                // Window-level release handling remains the fallback when capture is unavailable.
+                              }
+                            }
+                            handleCellDown(cell, event);
+                          }
                         : undefined
                     }
                     onMouseDown={
@@ -456,7 +500,11 @@ export function GridViewport({
                     onContextMenu={(event) => onCellContextMenu?.(cell.ref, event)}
                     onDoubleClick={() => {
                       if (cell.editable) {
-                        onInteraction({ type: "edit-start", cell: cell.ref, initialRawText: cell.displayValue });
+                        onInteraction({
+                          type: "edit-start",
+                          cell: cell.ref,
+                          initialRawText: cell.editValue ?? cell.displayValue
+                        });
                       } else {
                         onReadOnlyCellEditAttempt?.(cell.ref);
                       }
@@ -479,6 +527,14 @@ export function GridViewport({
             headerHeight={headerHeight}
             getCell={getCell}
             getCellRect={virtualizer.getCellRect}
+            pinnedColumnOffsets={pinnedColumnOffsets}
+            pinnedRowOffsets={pinnedRowOffsets}
+            scrollElement={rootRef.current}
+            scrollTop={rootRef.current?.scrollTop ?? 0}
+            scrollLeft={rootRef.current?.scrollLeft ?? 0}
+            viewportHeight={rootRef.current?.clientHeight ?? 0}
+            viewportWidth={rootRef.current?.clientWidth ?? 0}
+            scale={scale}
             renderEditor={renderEditor}
             onInteraction={onInteraction}
           />
@@ -492,6 +548,18 @@ export function GridViewport({
   );
 }
 
+function isNavigationKey(key: string): boolean {
+  return key === "ArrowUp"
+    || key === "ArrowDown"
+    || key === "ArrowLeft"
+    || key === "ArrowRight"
+    || key === "Home"
+    || key === "End"
+    || key === "PageUp"
+    || key === "PageDown"
+    || key === "Tab";
+}
+
 function EditorOverlay({
   editing,
   rows,
@@ -500,6 +568,14 @@ function EditorOverlay({
   headerHeight,
   getCell,
   getCellRect,
+  pinnedColumnOffsets,
+  pinnedRowOffsets,
+  scrollElement,
+  scrollTop,
+  scrollLeft,
+  viewportHeight,
+  viewportWidth,
+  scale,
   renderEditor,
   onInteraction
 }: {
@@ -510,9 +586,22 @@ function EditorOverlay({
   headerHeight: number;
   getCell: GridViewportProps["getCell"];
   getCellRect(rowIndex: number, columnIndex: number): { top: number; left: number; width: number; height: number };
+  pinnedColumnOffsets: ReadonlyMap<string, number>;
+  pinnedRowOffsets: ReadonlyMap<string, number>;
+  scrollElement: HTMLElement | null;
+  scrollTop: number;
+  scrollLeft: number;
+  viewportHeight: number;
+  viewportWidth: number;
+  scale: number;
   renderEditor: GridViewportProps["renderEditor"];
   onInteraction: GridViewportProps["onInteraction"];
 }) {
+  useLayoutEffect(() => {
+    if (!scrollElement) return;
+    scrollElement.scrollTop = scrollTop;
+    scrollElement.scrollLeft = scrollLeft;
+  }, [editing.columnId, editing.rowId, scrollElement, scrollLeft, scrollTop]);
   const rowIndex = rows.findIndex((row) => row.id === editing.rowId);
   const columnIndex = columns.findIndex((column) => column.id === editing.columnId);
   if (rowIndex < 0 || columnIndex < 0) {
@@ -522,17 +611,32 @@ function EditorOverlay({
   const column = columns[columnIndex];
   const cell = getCell(row.id, column.id);
   const rect = getCellRect(rowIndex, columnIndex);
+  const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const top = row.pinned === "top"
+    ? scrollTop / safeScale + headerHeight + (pinnedRowOffsets.get(row.id) ?? 0)
+    : row.pinned === "bottom"
+      ? scrollTop / safeScale + viewportHeight / safeScale - rect.height - (pinnedRowOffsets.get(row.id) ?? 0)
+      : headerHeight + rect.top;
+  const left = column.pinned === "left"
+    ? scrollLeft / safeScale + rowHeaderWidth + (pinnedColumnOffsets.get(column.id) ?? 0)
+    : column.pinned === "right"
+      ? scrollLeft / safeScale + viewportWidth / safeScale - rect.width - (pinnedColumnOffsets.get(column.id) ?? 0)
+      : rowHeaderWidth + rect.left;
   const context = { row, column, cell, selected: true, active: true, editing };
   return (
     <div
       data-grid-editor-overlay="true"
-      className={mergeClassNames("cell", "editing-cell", cell.className)}
+      className={mergeClassNames(
+        "js-spreadsheet-grid__cell",
+        "js-spreadsheet-grid__editing-cell",
+        cell.className
+      )}
       style={{
         ...cell.style,
         position: "absolute",
         zIndex: 8,
-        top: headerHeight + rect.top,
-        left: rowHeaderWidth + rect.left,
+        top,
+        left,
         width: cell.style?.width ?? rect.width,
         height: cell.style?.height ?? rect.height,
         minWidth: undefined,
@@ -670,18 +774,28 @@ function columnPositionStyle(
   base: CSSProperties,
   column: GridViewportColumn,
   rowHeaderWidth: number,
-  offsets: ReadonlyMap<string, number>
+  offsets: ReadonlyMap<string, number>,
+  columnIndex: number
 ): CSSProperties {
+  const gridColumn = columnIndex + (rowHeaderWidth > 0 ? 2 : 1);
   if (column.pinned === "left") {
     return {
       ...base,
       position: "sticky",
       left: rowHeaderWidth + (offsets.get(column.id) ?? 0),
+      gridColumn,
       zIndex: 4
     };
   }
   if (column.pinned === "right") {
-    return { ...base, position: "sticky", left: undefined, right: offsets.get(column.id) ?? 0, zIndex: 4 };
+    return {
+      ...base,
+      position: "sticky",
+      left: undefined,
+      right: offsets.get(column.id) ?? 0,
+      gridColumn,
+      zIndex: 4
+    };
   }
   return base;
 }
@@ -693,7 +807,8 @@ function cellPositionStyle(
   style: CSSProperties | undefined,
   column: GridViewportColumn,
   rowHeaderWidth: number,
-  offsets: ReadonlyMap<string, number>
+  offsets: ReadonlyMap<string, number>,
+  columnIndex: number
 ): CSSProperties {
   return columnPositionStyle(
     {
@@ -707,7 +822,8 @@ function cellPositionStyle(
     },
     column,
     rowHeaderWidth,
-    offsets
+    offsets,
+    columnIndex
   );
 }
 

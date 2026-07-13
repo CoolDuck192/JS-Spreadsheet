@@ -7,6 +7,7 @@ import {
 } from "../core/capabilities";
 import { createCommandIdFactory, type CommandIdFactory } from "../core/commandId";
 import { normalizeColumns } from "../core/columnHelper";
+import { coalesceTableCellMetadataUpdates } from "../core/metadata";
 import type { QueryRequest, QueryRow, TotalCount } from "../core/query";
 import { safeInvokeTableExtension } from "../core/safeInvoke";
 import type {
@@ -32,7 +33,8 @@ import {
 import {
   RemoteMutationController,
   type PreparedRemoteMutation,
-  type RemoteMutationAcknowledgement
+  type RemoteMutationAcknowledgement,
+  type RemoteMutationReconciliation
 } from "./RemoteMutationController";
 import {
   RemoteOperationJournal,
@@ -66,6 +68,9 @@ export type RemoteTableDiagnostics = {
   queryGeneration: number;
   cachedPages: number;
   cachedItems: number;
+  cachedGapPages: number;
+  cachedGapItems: number;
+  hasPageGaps: boolean;
   pendingMutations: number;
   conflicts: number;
   journalEntries: number;
@@ -92,6 +97,11 @@ export class RemoteSessionError extends Error {
 const GROUPING_PAGINATION_ISSUE: TableCellIssue = {
   code: "TABLE_GROUPING_PAGINATION_CONFLICT",
   message: "Grouping requires pagination kind none"
+};
+
+const PAGINATED_SOURCE_GROUPING_ISSUE: TableCellIssue = {
+  code: "TABLE_GROUPING_PAGINATION_CONFLICT",
+  message: "Grouping is unavailable for paginated remote sources"
 };
 
 export function createRemoteTableSession<
@@ -129,7 +139,7 @@ class RemoteTableSessionImpl<
   private destroyed = false;
   private needsQuery = true;
   private sourceChanged = false;
-  private invalidControlledState = false;
+  private invalidStateIssue: TableCellIssue | null = null;
   private invalidPublicationPending = false;
   private lastQuery: QueryRequest | null = null;
 
@@ -142,8 +152,8 @@ class RemoteTableSessionImpl<
     this.state = mergeState<TRow, TColumn>(defaultState(options.source), options.defaultState, options.state, this.columns);
     this.controlledStateKeys = new Set(Object.keys(options.state ?? {}) as Array<keyof TableViewState>);
     this.commandIdFactory = options.commandIdFactory ?? createCommandIdFactory();
-    this.invalidControlledState = hasGroupingPaginationConflict(this.state);
-    this.invalidPublicationPending = this.invalidControlledState;
+    this.invalidStateIssue = validateSourceViewState(this.state, options.source);
+    this.invalidPublicationPending = this.invalidStateIssue !== null;
   }
 
   updateOptions(options: RemoteTableSessionOptions<TRow, TColumn>): void {
@@ -162,17 +172,25 @@ class RemoteTableSessionImpl<
       this.needsQuery = true;
       projectionChanged = true;
     }
+    if (options.cache?.maxPages !== this.options.cache?.maxPages) {
+      this.sourceChanged = true;
+      this.needsQuery = true;
+      projectionChanged = true;
+    }
 
     const candidate = mergeControlledState<TRow, TColumn>(this.state, options.state, this.columns);
-    const invalid = hasGroupingPaginationConflict(candidate);
-    if (invalid) {
-      if (!this.invalidControlledState) this.invalidPublicationPending = true;
-      this.invalidControlledState = true;
+    const invalidIssue = validateSourceViewState(candidate, options.source);
+    if (invalidIssue) {
+      if (!this.invalidStateIssue) this.invalidPublicationPending = true;
+      this.invalidStateIssue = invalidIssue;
       this.needsQuery = false;
       projectionChanged = true;
     } else {
-      if (this.invalidControlledState) projectionChanged = true;
-      this.invalidControlledState = false;
+      if (this.invalidStateIssue) {
+        projectionChanged = true;
+        this.needsQuery = true;
+      }
+      this.invalidStateIssue = null;
       this.invalidPublicationPending = false;
       if (!stateEqual(candidate, this.state)) {
         if (!queryStateEqual(candidate, this.state)) this.needsQuery = true;
@@ -190,7 +208,7 @@ class RemoteTableSessionImpl<
   start(): void {
     if (this.destroyed) return;
     this.started = true;
-    if (this.invalidControlledState) {
+    if (this.invalidStateIssue) {
       if (this.invalidPublicationPending) {
         this.invalidPublicationPending = false;
         this.localRevision += 1;
@@ -203,7 +221,20 @@ class RemoteTableSessionImpl<
       this.teardownController();
       const source = this.options.source;
       const controller = new RemoteQueryController(source, {
-        maxCachedPages: this.options.cache?.maxPages
+        maxCachedPages: this.options.cache?.maxPages,
+        onCacheGap: (warning) => this.safeDiagnostic({
+          category: "remote",
+          commandId: warning.operationId,
+          metadata: {
+            code: "REMOTE_CACHE_WINDOW_GAP",
+            outcome: "warning",
+            mode: warning.mode,
+            maxPages: warning.maxPages,
+            cachedPages: warning.cachedPages,
+            omittedPages: warning.omittedPages,
+            omittedItems: warning.omittedItems
+          }
+        })
       });
       this.controller = controller;
       this.controllerSource = source;
@@ -212,6 +243,21 @@ class RemoteTableSessionImpl<
         queryController: controller,
         overlays: this.overlays,
         getActiveQuery: () => this.lastQuery ?? queryFromState(this.state),
+        readAuthoritativeCell: (row, rowId, columnId) => {
+          const authoritative = this.readAuthoritativeCell(row, rowId, columnId);
+          if ("issue" in authoritative) return null;
+          return {
+            storedValue: authoritative.cell.storedValue,
+            evaluatedValue: authoritative.cell.evaluatedValue,
+            ...(authoritative.cell.formula === undefined
+              ? {}
+              : { formula: authoritative.cell.formula }),
+            metadata: authoritative.cell.metadata,
+            ...(authoritative.rowVersion === undefined
+              ? {}
+              : { rowVersion: authoritative.rowVersion })
+          };
+        },
         onChange: () => {
           if (this.destroyed || this.controller !== controller) return;
           this.localRevision += 1;
@@ -219,6 +265,7 @@ class RemoteTableSessionImpl<
           this.publish();
         },
         onAcknowledged: (acknowledgement) => this.handleMutationAcknowledged(acknowledgement),
+        onReconciled: (reconciliation) => this.handleMutationReconciled(reconciliation),
         limits: this.options.mutationLimits
       });
       if (source.capabilities.subscription) {
@@ -262,14 +309,21 @@ class RemoteTableSessionImpl<
     const operationStates = {
       ...resolveTableOperationStates(this.options.source.capabilities, this.options.features ?? {})
     };
-    if (this.invalidControlledState) {
-      operationStates.pagination = {
+    if (this.options.source.paginationMode !== "none" && operationStates.group.enabled) {
+      operationStates.group = {
+        ...operationStates.group,
         enabled: false,
-        reason: GROUPING_PAGINATION_ISSUE.message
+        reason: PAGINATED_SOURCE_GROUPING_ISSUE.message
       };
     }
-    const baseIssues: TableCellIssue[] = this.invalidControlledState
-      ? [GROUPING_PAGINATION_ISSUE]
+    if (this.invalidStateIssue) {
+      operationStates.pagination = {
+        enabled: false,
+        reason: this.invalidStateIssue.message
+      };
+    }
+    const baseIssues: TableCellIssue[] = this.invalidStateIssue
+      ? [this.invalidStateIssue]
       : query.error
         ? [{ code: query.error.code, message: query.error.message }]
         : [];
@@ -283,8 +337,8 @@ class RemoteTableSessionImpl<
       completeness: query.completeness,
       state: this.state,
       selection: this.state.selection,
-      status: this.invalidControlledState
-        ? { phase: "error", message: GROUPING_PAGINATION_ISSUE.message }
+      status: this.invalidStateIssue
+        ? { phase: "error", message: this.invalidStateIssue.message }
         : query.error
           ? { phase: "error", message: query.error.message }
           : { phase: query.status },
@@ -298,6 +352,7 @@ class RemoteTableSessionImpl<
         && this.operationJournal.canUndo,
       canRedo: false,
       pageInfo: query.pageInfo,
+      pageGaps: query.pageGaps,
       getCell: (rowId, columnId) => this.readCell(rows, rowId, columnId),
       getRowIndex: (rowId) => rows.findIndex((row) => row.id === rowId),
       getColumnIndex: (columnId) => this.state.columnOrder.indexOf(columnId)
@@ -316,7 +371,8 @@ class RemoteTableSessionImpl<
     const commandId = this.commandIdFactory();
     if (this.destroyed) return unsupported("Remote table session is destroyed");
     const feature = featureForRemoteIntent(intent);
-    if (feature) {
+    const clearsGrouping = intent.type === "set-grouping" && intent.grouping.length === 0;
+    if (feature && !clearsGrouping) {
       const operation = this.getSnapshot().operationStates[feature];
       if (!operation.enabled) return unsupported(operation.reason ?? "Unsupported operation");
     }
@@ -405,6 +461,9 @@ class RemoteTableSessionImpl<
       queryGeneration: query?.generation ?? 0,
       cachedPages: query?.cachedPages ?? 0,
       cachedItems: query?.cachedItems ?? 0,
+      cachedGapPages: query?.cachedGapPages ?? 0,
+      cachedGapItems: query?.cachedGapItems ?? 0,
+      hasPageGaps: query?.hasPageGaps ?? false,
       pendingMutations: this.mutationController?.getDiagnostics().pendingOperations ?? 0,
       conflicts: this.mutationController?.getDiagnostics().conflicts ?? 0,
       journalEntries: this.operationJournal.size,
@@ -421,11 +480,17 @@ class RemoteTableSessionImpl<
   }
 
   private beginQuery(): void {
-    if (!this.started || !this.controller || this.invalidControlledState) return;
+    if (!this.started || !this.controller || this.invalidStateIssue) return;
     const query = queryFromState(this.state);
     if (query.pagination.kind !== this.options.source.paginationMode) {
-      this.invalidControlledState = true;
+      this.invalidStateIssue = paginationModeIssue(
+        query.pagination.kind,
+        this.options.source.paginationMode
+      );
+      this.invalidPublicationPending = false;
+      this.localRevision += 1;
       this.snapshot = null;
+      this.publish();
       return;
     }
     this.needsQuery = false;
@@ -461,9 +526,13 @@ class RemoteTableSessionImpl<
     >,
     commandId: string
   ): CommandResult {
-    const candidate = stateForIntent(this.state, intent);
+    const candidate = stateForIntent(this.state, intent, this.options.source.paginationMode);
     if (candidate instanceof RemoteSessionError) {
       return { status: "rejected", reason: "validation", issues: [{ code: candidate.code, message: candidate.message }] };
+    }
+    const stateIssue = validateSourceViewState(candidate, this.options.source);
+    if (stateIssue) {
+      return { status: "rejected", reason: "validation", issues: [stateIssue] };
     }
     const invalidColumn = validateViewStateColumns<TRow, TColumn>(candidate, this.columnsById);
     if (invalidColumn) {
@@ -477,6 +546,7 @@ class RemoteTableSessionImpl<
     const changedKeys = stateChangedKeys(before, candidate);
     const controlled = changedKeys.filter((key) => this.controlledStateKeys.has(key));
     const uncontrolled = changedKeys.filter((key) => !this.controlledStateKeys.has(key));
+    const awaitsControlledProjection = controlled.some(isQueryStateKey);
     if (controlled.length > 0) {
       const updater: TableStateUpdater = (hostState) => {
         let next = hostState;
@@ -491,10 +561,12 @@ class RemoteTableSessionImpl<
       let next = before;
       for (const key of uncontrolled) next = { ...next, [key]: candidate[key] };
       this.state = next;
+      this.invalidStateIssue = validateSourceViewState(this.state, this.options.source);
+      this.invalidPublicationPending = false;
       this.localRevision += 1;
       this.snapshot = null;
       this.publish();
-      if (!queryStateEqual(before, next)) {
+      if (!queryStateEqual(before, next) && !awaitsControlledProjection) {
         this.needsQuery = true;
         this.start();
       }
@@ -625,11 +697,7 @@ class RemoteTableSessionImpl<
     }
     const prepared: PreparedRemoteMutation[] = [];
     const journalChanges: RemoteOperationJournalChange[] = [];
-    const seen = new Set<string>();
-    for (const update of intent.updates) {
-      const key = `${update.rowId.length}:${update.rowId}${update.columnId}`;
-      if (seen.has(key)) return validationResult("TABLE_CELL_DUPLICATE", "A metadata batch may update each cell once");
-      seen.add(key);
+    for (const update of coalesceTableCellMetadataUpdates(intent.updates)) {
       const row = this.controller.getCanonicalRow(update.rowId);
       if (!row) return validationResult("TABLE_ROW_NOT_FOUND", "Row not found", update.rowId, update.columnId);
       if (!this.columnsById.has(update.columnId)) {
@@ -734,6 +802,23 @@ class RemoteTableSessionImpl<
     this.snapshot = null;
   }
 
+  private handleMutationReconciled(reconciliation: RemoteMutationReconciliation): void {
+    const compensatedOperationId = this.compensationTargets.get(reconciliation.operationId);
+    if (compensatedOperationId) {
+      this.compensationTargets.delete(reconciliation.operationId);
+      if (reconciliation.outcome === "conflict") {
+        this.compensationConflictTargets.set(
+          reconciliation.operationId,
+          compensatedOperationId
+        );
+      }
+      this.operationJournal.releaseCompensation(compensatedOperationId);
+    } else {
+      this.operationJournal.discardPending(reconciliation.operationId);
+    }
+    this.publishJournalChange();
+  }
+
   private undoRemote(commandId: string): CommandResult<TRow> {
     const controller = this.controller;
     const mutations = this.mutationController;
@@ -750,8 +835,8 @@ class RemoteTableSessionImpl<
     if (claim.kind === "pending") {
       const cancellation = mutations.cancelOperation(claim.entry.operationId);
       controller.invalidate();
-      void controller.refresh(`${commandId}:refresh`).then(() => {
-        cancellation?.markAuthoritativeRefreshCompleted();
+      void controller.refresh(`${commandId}:refresh`).then((accepted) => {
+        if (accepted) cancellation?.markAuthoritativeRefreshCompleted();
       }).catch(() => {});
       return { status: "pending", operationId: commandId };
     }
@@ -787,12 +872,14 @@ class RemoteTableSessionImpl<
     void mutations.execute(commandId, prepared, baseRevision === undefined ? {} : { baseRevision }).then((result) => {
       const retryableOperationId = this.compensationTargets.get(commandId);
       if (retryableOperationId) {
-        this.compensationTargets.delete(commandId);
-        if (result.status === "conflict") {
-          this.compensationConflictTargets.set(commandId, retryableOperationId);
+        if (result.status !== "pending") {
+          this.compensationTargets.delete(commandId);
+          if (result.status === "conflict") {
+            this.compensationConflictTargets.set(commandId, retryableOperationId);
+          }
+          this.operationJournal.releaseCompensation(retryableOperationId);
+          this.publishJournalChange();
         }
-        this.operationJournal.releaseCompensation(retryableOperationId);
-        this.publishJournalChange();
       }
       this.snapshot = null;
       this.refreshAfterInvalidation(commandId);
@@ -1230,7 +1317,8 @@ function stateForIntent<TRow>(
     | { type: "refresh" }
     | { type: "reload-authoritative" }
     | { type: "retry-with-revision" }
-  >
+  >,
+  paginationMode: RemoteTableSource<unknown>["paginationMode"]
 ): TableViewState | RemoteSessionError {
   switch (intent.type) {
     case "set-selection": return { ...state, selection: intent.selection };
@@ -1241,13 +1329,25 @@ function stateForIntent<TRow>(
         ? [...new Set([...state.expandedRowIds, intent.rowId])]
         : state.expandedRowIds.filter((id) => id !== intent.rowId)
     };
-    case "set-sorting": return { ...state, sorting: [...intent.sorting] };
-    case "set-filter": return { ...state, filter: intent.filter };
-    case "set-grouping": return {
+    case "set-sorting": return {
       ...state,
-      grouping: [...intent.grouping],
-      ...(intent.grouping.length > 0 ? { pagination: { kind: "none" } as const } : {})
+      sorting: [...intent.sorting],
+      pagination: paginationAtHead(state.pagination, paginationMode)
     };
+    case "set-filter": return {
+      ...state,
+      filter: intent.filter,
+      pagination: paginationAtHead(state.pagination, paginationMode)
+    };
+    case "set-grouping": {
+      return {
+        ...state,
+        grouping: [...intent.grouping],
+        ...(intent.grouping.length > 0
+          ? { pagination: { kind: "none" } as const }
+          : { pagination: paginationAtHead(state.pagination, paginationMode) })
+      };
+    }
     case "set-aggregates": return { ...state, aggregates: [...intent.aggregates] };
     case "set-pagination":
       return state.grouping.length > 0 && intent.pagination.kind !== "none"
@@ -1263,6 +1363,19 @@ function stateForIntent<TRow>(
       columnVisibility: { ...state.columnVisibility, [intent.columnId]: intent.visible }
     };
     case "set-column-pinning": return pinColumn(state, intent.columnId, intent.pin);
+  }
+}
+
+function paginationAtHead(
+  pagination: TableViewState["pagination"],
+  paginationMode: RemoteTableSource<unknown>["paginationMode"]
+): TableViewState["pagination"] {
+  if (pagination.kind !== paginationMode) return defaultPagination(paginationMode);
+  switch (pagination.kind) {
+    case "none": return { kind: "none" };
+    case "offset": return { kind: "offset", offset: 0, limit: pagination.limit };
+    case "cursor": return { kind: "cursor", limit: pagination.limit };
+    case "infinite": return { kind: "infinite", limit: pagination.limit };
   }
 }
 
@@ -1367,12 +1480,43 @@ function queryStateEqual(left: TableViewState, right: TableViewState): boolean {
   return stateEqual(queryFromState(left), queryFromState(right));
 }
 
+function isQueryStateKey(key: keyof TableViewState): boolean {
+  return key === "sorting"
+    || key === "filter"
+    || key === "grouping"
+    || key === "aggregates"
+    || key === "pagination";
+}
+
 function stateEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function hasGroupingPaginationConflict(state: TableViewState): boolean {
   return state.grouping.length > 0 && state.pagination.kind !== "none";
+}
+
+function validateSourceViewState<TRow>(
+  state: TableViewState,
+  source: RemoteTableSource<TRow>
+): TableCellIssue | null {
+  if (source.paginationMode !== "none" && state.grouping.length > 0) {
+    return PAGINATED_SOURCE_GROUPING_ISSUE;
+  }
+  if (hasGroupingPaginationConflict(state)) return GROUPING_PAGINATION_ISSUE;
+  return state.pagination.kind === source.paginationMode
+    ? null
+    : paginationModeIssue(state.pagination.kind, source.paginationMode);
+}
+
+function paginationModeIssue(
+  stateMode: TableViewState["pagination"]["kind"],
+  sourceMode: RemoteTableSource<unknown>["paginationMode"]
+): TableCellIssue {
+  return {
+    code: "TABLE_PAGINATION_MODE_MISMATCH",
+    message: `Pagination ${stateMode} is unsupported by ${sourceMode} source`
+  };
 }
 
 function validateOptions<TRow, TColumn extends ColumnDef<TRow, any>>(
@@ -1498,6 +1642,7 @@ function errorCode(error: unknown): string {
 function idleQuerySnapshot<TRow>(): RemoteQuerySnapshot<TRow> {
   return {
     status: "idle", items: [], revision: null, completeness: "loadedRows",
-    pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+    pageInfo: { kind: "none", total: { kind: "known", value: 0 } },
+    pageGaps: []
   };
 }

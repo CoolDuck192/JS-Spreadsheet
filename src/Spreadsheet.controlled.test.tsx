@@ -13,6 +13,12 @@ function workbookWith(value: string) {
   return setCellContent(workbook, workbook.activeSheetId, "A1", value);
 }
 
+async function openGoogleImport(user: ReturnType<typeof userEvent.setup>) {
+  const tabs = within(screen.getByRole("tablist", { name: "Ribbon tabs" }));
+  await user.click(tabs.getByRole("tab", { name: "File" }));
+  await user.click(screen.getByRole("button", { name: "Import Google Sheet" }));
+}
+
 describe("controlled Spreadsheet", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -162,7 +168,8 @@ describe("controlled Spreadsheet", () => {
     expect(onDiagnostic).toHaveBeenCalled();
   });
 
-  it("resolves direct, nested, and deprecated Google providers in order", async () => {
+  it("lazily resolves direct, nested, and deprecated Google providers in order", async () => {
+    const user = userEvent.setup();
     const direct = {
       prepare: vi.fn().mockResolvedValue(undefined),
       getAccessToken: vi.fn().mockResolvedValue("direct")
@@ -186,6 +193,12 @@ describe("controlled Spreadsheet", () => {
         }}
       />
     );
+    await act(async () => Promise.resolve());
+    expect(direct.prepare).not.toHaveBeenCalled();
+    expect(nestedFactory).not.toHaveBeenCalled();
+    expect(deprecatedFactory).not.toHaveBeenCalled();
+
+    await openGoogleImport(user);
     await waitFor(() => expect(direct.prepare).toHaveBeenCalledTimes(1));
     expect(nestedFactory).not.toHaveBeenCalled();
     expect(deprecatedFactory).not.toHaveBeenCalled();
@@ -200,32 +213,61 @@ describe("controlled Spreadsheet", () => {
         }}
       />
     );
+    await act(async () => Promise.resolve());
+    expect(nestedFactory).not.toHaveBeenCalled();
+    expect(deprecatedFactory).not.toHaveBeenCalled();
+
+    await openGoogleImport(user);
     await waitFor(() => expect(nestedFactory).toHaveBeenCalledTimes(1));
     expect(deprecatedFactory).not.toHaveBeenCalled();
     nestedView.unmount();
 
-    render(
+    const deprecatedView = render(
       <Spreadsheet
         storage={false}
         services={{ googleSheets: { clientId }, googleTokenProviderFactory: deprecatedFactory }}
       />
     );
+    await act(async () => Promise.resolve());
+    expect(deprecatedFactory).not.toHaveBeenCalled();
+
+    await openGoogleImport(user);
     await waitFor(() => expect(deprecatedFactory).toHaveBeenCalledTimes(1));
+    deprecatedView.unmount();
   });
 
-  it("caches a Google provider once per Spreadsheet instance", async () => {
+  it("lazily caches a Google provider once per Spreadsheet instance", async () => {
+    const user = userEvent.setup();
     const clientId = "123-abc.apps.googleusercontent.com";
-    const factory = vi.fn(() => ({
+    const firstProvider = {
       prepare: vi.fn().mockResolvedValue(undefined),
       getAccessToken: vi.fn().mockResolvedValue("token")
-    }));
+    };
+    const secondProvider = {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      getAccessToken: vi.fn().mockResolvedValue("token")
+    };
+    const factory = vi.fn()
+      .mockReturnValueOnce(firstProvider)
+      .mockReturnValueOnce(secondProvider);
     const first = render(
       <Spreadsheet
         storage={false}
         services={{ googleSheets: { clientId, tokenProviderFactory: factory } }}
       />
     );
+    await act(async () => Promise.resolve());
+    expect(factory).not.toHaveBeenCalled();
+
+    await openGoogleImport(user);
     await waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+    expect(firstProvider.prepare).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await openGoogleImport(user);
+    await waitFor(() => expect(factory).toHaveBeenCalledTimes(1));
+    expect(firstProvider.prepare).toHaveBeenCalledTimes(1);
+
     first.rerender(
       <Spreadsheet
         storage={false}
@@ -241,7 +283,12 @@ describe("controlled Spreadsheet", () => {
         services={{ googleSheets: { clientId, tokenProviderFactory: factory } }}
       />
     );
+    await act(async () => Promise.resolve());
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    await openGoogleImport(user);
     await waitFor(() => expect(factory).toHaveBeenCalledTimes(2));
+    expect(secondProvider.prepare).toHaveBeenCalledTimes(1);
   });
 
   it("keeps embedded Google setup storage-neutral unless the host opts in", async () => {

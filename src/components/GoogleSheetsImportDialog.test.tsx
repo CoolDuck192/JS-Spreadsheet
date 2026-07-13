@@ -33,8 +33,8 @@ function setupController(
     showSheetInput,
     storageBusy,
     canSaveClientId: clientIdEditable && !storageBusy,
-    canChangeClientId: clientIdSource === "stored" && !storageBusy,
-    canForgetClientId: clientIdSource === "stored" && !storageBusy,
+    canChangeClientId: ["stored", "session"].includes(clientIdSource) && !storageBusy,
+    canForgetClientId: ["stored", "session"].includes(clientIdSource) && !storageBusy,
     canImport: phase === "ready" && !storageBusy,
     canRetry: phase === "error" && !storageBusy,
     setClientIdDraft: vi.fn(),
@@ -163,7 +163,7 @@ describe("GoogleSheetsImportDialog", () => {
     expect(screen.getByRole("button", { name: "Import and replace workbook" })).toBeEnabled();
   });
 
-  it("offers Change and Forget only for a stored client ID", async () => {
+  it("offers Change and Forget for stored and session client IDs, but not managed IDs", async () => {
     const user = userEvent.setup();
     const changeClientId = vi.fn();
     const forgetClientId = vi.fn().mockResolvedValue(undefined);
@@ -184,6 +184,23 @@ describe("GoogleSheetsImportDialog", () => {
     await user.click(screen.getByRole("button", { name: "Forget client ID" }));
     expect(changeClientId).toHaveBeenCalledTimes(1);
     expect(forgetClientId).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <GoogleSheetsImportDialog
+        controller={setupController({
+          phase: "ready",
+          clientIdSource: "session",
+          clientIdDraft: CLIENT_ID,
+          changeClientId,
+          forgetClientId
+        })}
+        opener={dialogOpener()}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: "Change client ID" }));
+    await user.click(screen.getByRole("button", { name: "Forget client ID" }));
+    expect(changeClientId).toHaveBeenCalledTimes(2);
+    expect(forgetClientId).toHaveBeenCalledTimes(2);
 
     rerender(
       <GoogleSheetsImportDialog

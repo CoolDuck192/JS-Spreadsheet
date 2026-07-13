@@ -284,6 +284,15 @@ export function RemoteEmployeesTable() {
 }
 ```
 
+`cache.maxPages` bounds materialized pages in every pagination mode. For
+cursor and infinite sources, crossing the limit keeps the newest page window
+and records the omitted prefix in `snapshot.pageGaps` instead of presenting
+the retained tail as a complete list. Each gap reports omitted page and item
+counts; row numbering remains anchored to those omitted items. The first
+overflow of each materialized cache window also emits a sanitized `remote` diagnostic with
+code `REMOTE_CACHE_WINDOW_GAP`. Cursor tokens, row IDs, requests, and row data
+are never included in that diagnostic.
+
 The endpoint paths and JSON envelopes above are examples; the callbacks may
 adapt any API. Their returned values must satisfy `QueryResult` and
 `RemoteMutationResult`. Every normalized data item needs a nonblank stable ID

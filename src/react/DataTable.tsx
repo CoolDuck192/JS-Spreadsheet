@@ -169,6 +169,12 @@ function DataTableSurface<TRow>({
   const defaultActiveCell = viewportRows[0] && viewportColumns[0]
     ? { rowId: viewportRows[0].id, columnId: viewportColumns[0].id }
     : null;
+  const viewportSelection = useMemo(
+    () => selectionWithinViewport(snapshot.selection, viewportRows, viewportColumns)
+      ? snapshot.selection
+      : null,
+    [snapshot.selection, viewportColumns, viewportRows]
+  );
 
   const reportDiagnostic = useCallback((event: TableDiagnosticEvent) => {
     try {
@@ -248,10 +254,9 @@ function DataTableSurface<TRow>({
         await run({ type: "set-selection", selection: interaction.selection });
         return;
       case "edit-start": {
-        const cell = snapshot.getCell(interaction.cell.rowId, interaction.cell.columnId);
         setEditing({
           ...interaction.cell,
-          rawText: cell.formula ?? (cell.storedValue === null || cell.storedValue === undefined ? "" : String(cell.storedValue))
+          rawText: interaction.initialRawText
         });
         setIssue("");
         return;
@@ -376,16 +381,18 @@ function DataTableSurface<TRow>({
     }
   }
 
-  function reorderColumn(sourceId: string, targetId: string) {
+  async function reorderColumn(sourceId: string, targetId: string) {
     const order = orderedColumns.map((column) => column.id);
     const sourceIndex = order.indexOf(sourceId);
     const targetIndex = order.indexOf(targetId);
     if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
     order.splice(sourceIndex, 1);
-    const insertionIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const insertionIndex = targetIndex;
     order.splice(insertionIndex, 0, sourceId);
-    void run({ type: "set-column-order", columnIds: order });
-    setAnnouncement(`${columnLabel(columnsById.get(sourceId)!)} moved to position ${insertionIndex + 1}`);
+    const result = await run({ type: "set-column-order", columnIds: order });
+    if (result.status === "committed" && result.changed) {
+      setAnnouncement(`${columnLabel(columnsById.get(sourceId)!)} moved to position ${insertionIndex + 1}`);
+    }
   }
 
   function updateInlineFilter(column: ColumnDef<TRow>, value: string) {
@@ -491,8 +498,8 @@ function DataTableSurface<TRow>({
         columns={viewportColumns}
         ariaColumnCount={orderedColumns.length + 1}
         getCell={(rowId, columnId) => createViewportCell(snapshot, rowId, columnId, columnsById)}
-        selection={snapshot.selection}
-        activeCell={snapshot.selection?.focus ?? defaultActiveCell}
+        selection={viewportSelection}
+        activeCell={viewportSelection?.focus ?? defaultActiveCell}
         editing={editing}
         onInteraction={(interaction) => void handleInteraction(interaction)}
         scrollRef={scrollRef}
@@ -500,7 +507,7 @@ function DataTableSurface<TRow>({
         onColumnHeaderDragOver={(_column, event) => event.preventDefault()}
         onColumnHeaderDrop={(column, event) => {
           event.preventDefault();
-          if (draggedColumnId.current) reorderColumn(draggedColumnId.current, column.id);
+          if (draggedColumnId.current) void reorderColumn(draggedColumnId.current, column.id);
           draggedColumnId.current = null;
         }}
         retainedRowIds={editing ? [editing.rowId] : []}
@@ -534,7 +541,7 @@ function DataTableSurface<TRow>({
               cell={snapshot.getCell(row.id, column.id)}
               rawText={editorState.rawText}
               onChange={(rawText) => setEditing((current) => current ? { ...current, rawText } : current)}
-              onCommit={(move) => void commitEdit({ rowId: row.id, columnId: column.id }, editorState.rawText, move)}
+              onCommit={(rawText, move) => void commitEdit({ rowId: row.id, columnId: column.id }, rawText, move)}
               onCancel={() => setEditing(null)}
               onDiagnostic={reportDiagnostic}
             />
@@ -549,7 +556,7 @@ function DataTableSurface<TRow>({
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                if (draggedColumnId.current) reorderColumn(draggedColumnId.current, column.id);
+                if (draggedColumnId.current) void reorderColumn(draggedColumnId.current, column.id);
                 draggedColumnId.current = null;
               }}
             >
@@ -570,6 +577,7 @@ function DataTableSurface<TRow>({
               <button
                 type="button"
                 aria-label={`Column options for ${label}`}
+                aria-haspopup="dialog"
                 aria-expanded={openColumnMenu?.columnId === column.id}
                 onClick={(event) => {
                   const trigger = event.currentTarget;
@@ -693,18 +701,23 @@ function createViewportRows<TRow>(
   rowHeight: number | "auto",
   measured: Readonly<Record<string, number>>
 ): GridViewportRow[] {
-  const offset = snapshot.pageInfo.kind === "offset" ? snapshot.pageInfo.offset : 0;
+  const gapOffset = snapshot.pageGaps
+    ?.filter((gap) => gap.at === 0)
+    .reduce((count, gap) => count + gap.omittedItems, 0) ?? 0;
+  const offset = snapshot.pageInfo.kind === "offset" ? snapshot.pageInfo.offset : gapOffset;
   let dataPosition = 0;
   let aggregatePosition = 0;
   return snapshot.rows.map((row, index) => {
-    const number = offset + dataPosition + 1;
+    const currentDataPosition = dataPosition;
+    if (row.kind === "data") dataPosition += 1;
+    const number = offset + currentDataPosition + 1;
     const ariaRowIndex = snapshot.state.grouping.length > 0
       ? index + 2
       : row.kind === "data"
-        ? offset + dataPosition++ + 2
-      : row.kind === "aggregate" && snapshot.totalRowCount.kind === "known"
-        ? snapshot.totalRowCount.value + aggregatePosition++ + 2
-        : index + 2;
+        ? offset + currentDataPosition + 2
+        : row.kind === "aggregate" && snapshot.totalRowCount.kind === "known"
+          ? snapshot.totalRowCount.value + aggregatePosition++ + 2
+          : index + 2;
     const label = row.kind === "data"
       ? String(number)
       : row.kind === "group"
@@ -731,6 +744,20 @@ function tableAriaRowCount<TRow>(snapshot: TableViewSnapshot<TRow, ColumnDef<TRo
   return snapshot.totalRowCount.value + aggregateRows + 1;
 }
 
+function selectionWithinViewport(
+  selection: TableSelection | null,
+  rows: readonly GridViewportRow[],
+  columns: readonly GridViewportColumn[]
+): boolean {
+  if (!selection) return false;
+  const rowIds = new Set(rows.map((row) => row.id));
+  const columnIds = new Set(columns.map((column) => column.id));
+  return rowIds.has(selection.anchor.rowId)
+    && rowIds.has(selection.focus.rowId)
+    && columnIds.has(selection.anchor.columnId)
+    && columnIds.has(selection.focus.columnId);
+}
+
 function createViewportCell<TRow>(
   snapshot: TableViewSnapshot<TRow, ColumnDef<TRow>>,
   rowId: string,
@@ -744,6 +771,8 @@ function createViewportCell<TRow>(
     ref: { rowId, columnId },
     ariaLabel: `${rowId} ${columnLabel(column)}`,
     displayValue: cell.displayValue,
+    editValue: cell.formula
+      ?? (cell.storedValue === null || cell.storedValue === undefined ? "" : String(cell.storedValue)),
     editable: cell.editable,
     invalid: cell.issues.length > 0,
     className: cell.metadata.readOnly ? "js-spreadsheet-data-table__cell--readonly" : undefined,

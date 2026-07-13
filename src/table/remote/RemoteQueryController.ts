@@ -1,5 +1,10 @@
 import { serializeQueryRequest, type QueryRequest, type QueryResult, type QueryRow } from "../core/query";
-import { RemotePageCache, RemotePageCacheError } from "./RemotePageCache";
+import type { TablePageGap } from "../core/types";
+import {
+  RemotePageCache,
+  RemotePageCacheError,
+  type RemotePageRecoveryWindow
+} from "./RemotePageCache";
 import type { RemoteTableSource } from "./types";
 
 export type RemoteQuerySnapshot<TRow> = {
@@ -8,7 +13,25 @@ export type RemoteQuerySnapshot<TRow> = {
   revision: string | null;
   completeness: QueryResult<TRow>["completeness"];
   pageInfo: QueryResult<TRow>["pageInfo"];
+  pageGaps: readonly TablePageGap[];
   error?: { code: string; message: string; retryable: boolean };
+};
+
+export type RemoteCacheGapWarning = {
+  operationId: string;
+  mode: "cursor" | "infinite";
+  maxPages: number;
+  cachedPages: number;
+  omittedPages: number;
+  omittedItems: number;
+};
+
+export type RemoteQueryAcceptance<TRow> = {
+  generation: number;
+  revision: string;
+  query: QueryRequest;
+  items: readonly QueryRow<TRow>[];
+  completeness: QueryResult<TRow>["completeness"];
 };
 
 export type RemoteTableErrorCode =
@@ -28,20 +51,31 @@ export class RemoteQueryController<TRow> {
   private abortController: AbortController | null = null;
   private snapshot: RemoteQuerySnapshot<TRow> = emptySnapshot();
   private readonly listeners = new Set<() => void>();
+  private readonly acceptanceListeners = new Set<(acceptance: RemoteQueryAcceptance<TRow>) => void>();
   private readonly cache: RemotePageCache<TRow>;
+  private readonly onCacheGap?: (warning: RemoteCacheGapWarning) => void;
   private destroyed = false;
   private lastQuery: QueryRequest | null = null;
+  private recoveryWindow: RemotePageRecoveryWindow | null = null;
   private queryFamily: string | null = null;
   private currentRevision: string | null = null;
 
   constructor(
     private readonly source: RemoteTableSource<TRow>,
-    options: { maxCachedPages?: number } = {}
+    options: {
+      maxCachedPages?: number;
+      onCacheGap?: (warning: RemoteCacheGapWarning) => void;
+    } = {}
   ) {
     this.cache = new RemotePageCache(options.maxCachedPages);
+    this.onCacheGap = options.onCacheGap;
   }
 
-  async load(query: QueryRequest, operationId: string): Promise<void> {
+  async load(
+    query: QueryRequest,
+    operationId: string,
+    preserveRecoveryWindow = false
+  ): Promise<boolean> {
     this.assertActive();
     if (query.pagination.kind !== this.source.paginationMode) {
       throw new RemoteTableError(
@@ -55,6 +89,7 @@ export class RemoteQueryController<TRow> {
       this.cache.clear();
       this.queryFamily = family;
     }
+    if (!preserveRecoveryWindow) this.recoveryWindow = null;
     this.lastQuery = query;
     const generation = ++this.generation;
     this.abortController?.abort();
@@ -69,48 +104,123 @@ export class RemoteQueryController<TRow> {
         generation,
         operationId
       });
-      if (!this.isCurrent(generation, abortController)) return;
+      if (!this.isCurrent(generation, abortController)) return false;
 
       if (this.currentRevision !== null) {
         const order = this.source.compareRevisions(result.revision, this.currentRevision);
         if (order === "older") {
-          this.publish({ ...before, status: before.revision === null ? "idle" : "ready", error: undefined });
-          return;
+          const cached = this.cache.combine();
+          if (cached) {
+            this.publish({
+              status: "ready",
+              ...cached,
+              pageGaps: this.cache.getPageGaps(),
+              error: undefined
+            });
+          } else {
+            this.publish({
+              ...before,
+              status: "error",
+              error: before.error ?? {
+                code: "REMOTE_STALE_RESPONSE",
+                message: "The remote response is older than the current revision; retry required.",
+                retryable: true
+              }
+            });
+          }
+          return false;
         }
         if (order === "unknown") {
           this.cache.clear();
           this.publish({
-            ...before,
+            ...this.snapshot,
             status: "error",
             items: [],
+            pageGaps: [],
             error: {
               code: "REVISION_ORDER_UNKNOWN",
               message: "The source could not order this response; refresh required.",
               retryable: true
             }
           });
-          return;
+          return false;
         }
       }
 
       if (query.pagination.kind === "offset" || query.pagination.kind === "none") {
         this.cache.clear();
       }
-      this.cache.put(query, result);
+      const cacheResult = this.cache.put(query, result);
       const combined = this.cache.combine() ?? result;
       this.currentRevision = result.revision;
-      this.publish({ status: "ready", ...combined, error: undefined });
+      this.publishAcceptance({
+        generation,
+        revision: result.revision,
+        query,
+        items: result.items,
+        completeness: result.completeness
+      });
+      this.publish({
+        status: "ready",
+        ...combined,
+        pageGaps: this.cache.getPageGaps(),
+        error: undefined
+      });
+      if (cacheResult.gapCreated) {
+        try {
+          this.onCacheGap?.({
+            operationId,
+            mode: cacheResult.mode,
+            maxPages: cacheResult.maxPages,
+            cachedPages: this.cache.size,
+            omittedPages: cacheResult.gap.omittedPages,
+            omittedItems: cacheResult.gap.omittedItems
+          });
+        } catch {
+          // Host diagnostics never alter query state.
+        }
+      }
+      return true;
     } catch (error) {
-      if (!this.isCurrent(generation, abortController)) return;
+      if (!this.isCurrent(generation, abortController)) return false;
       if (error instanceof RemotePageCacheError) this.cache.clear();
-      this.publish({ ...before, status: "error", error: normalizeRemoteError(error) });
+      this.publish({ ...this.snapshot, status: "error", error: normalizeRemoteError(error) });
+      return false;
     }
   }
 
-  async refresh(operationId: string): Promise<void> {
+  async refresh(operationId: string): Promise<boolean> {
     this.assertActive();
     if (!this.lastQuery) throw new RemoteTableError("NO_QUERY");
-    await this.load(this.lastQuery, operationId);
+    const recoveringInvalidation = this.snapshot.error?.code === "REMOTE_INVALIDATED";
+    const recoveryWindow = this.recoveryWindow
+      ?? (isAccumulatedQuery(this.lastQuery) ? this.cache.getRecoveryWindow() : null);
+    this.recoveryWindow = recoveryWindow;
+    if (recoveryWindow) {
+      this.cache.clear();
+      let recoveryQuery = recoveryWindow.headQuery;
+      let accepted = false;
+      for (let index = 0; index < recoveryWindow.pageCount; index += 1) {
+        const generationBeforeLoad = this.generation;
+        accepted = await this.load(recoveryQuery, `${operationId}:${index + 1}`, true);
+        if (!accepted) {
+          if (this.generation === generationBeforeLoad + 1) {
+            this.recoveryWindow = mergeRecoveryWindows(this.recoveryWindow, recoveryWindow);
+            if (recoveringInvalidation) {
+              this.cache.clear();
+              this.publishInvalidated();
+            }
+          }
+          return false;
+        }
+        const nextQuery = nextAccumulatedQuery(recoveryQuery, this.snapshot.pageInfo);
+        if (!nextQuery) break;
+        recoveryQuery = nextQuery;
+      }
+      this.recoveryWindow = null;
+      return accepted;
+    }
+    return this.load(this.lastQuery, operationId);
   }
 
   getSnapshot = (): RemoteQuerySnapshot<TRow> => this.snapshot;
@@ -119,12 +229,19 @@ export class RemoteQueryController<TRow> {
     generation: number;
     cachedPages: number;
     cachedItems: number;
+    cachedGapPages: number;
+    cachedGapItems: number;
+    hasPageGaps: boolean;
     destroyed: boolean;
   } {
+    const pageGaps = this.cache.getPageGaps();
     return {
       generation: this.generation,
       cachedPages: this.cache.size,
       cachedItems: this.cache.combine()?.items.length ?? 0,
+      cachedGapPages: pageGaps.reduce((count, gap) => count + gap.omittedPages, 0),
+      cachedGapItems: pageGaps.reduce((count, gap) => count + gap.omittedItems, 0),
+      hasPageGaps: pageGaps.length > 0,
       destroyed: this.destroyed
     };
   }
@@ -133,6 +250,14 @@ export class RemoteQueryController<TRow> {
     if (this.destroyed) return () => {};
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  subscribeAccepted = (
+    listener: (acceptance: RemoteQueryAcceptance<TRow>) => void
+  ): (() => void) => {
+    if (this.destroyed) return () => {};
+    this.acceptanceListeners.add(listener);
+    return () => this.acceptanceListeners.delete(listener);
   };
 
   getCanonicalRow(rowId: string): TRow | undefined {
@@ -173,7 +298,16 @@ export class RemoteQueryController<TRow> {
     this.generation += 1;
     this.abortController?.abort();
     this.abortController = null;
+    const cachedRecoveryWindow = this.lastQuery?.pagination.kind === "cursor"
+      || this.lastQuery?.pagination.kind === "infinite"
+      ? this.cache.getRecoveryWindow()
+      : null;
+    this.recoveryWindow = mergeRecoveryWindows(this.recoveryWindow, cachedRecoveryWindow);
     this.cache.clear();
+    this.publishInvalidated();
+  }
+
+  private publishInvalidated(): void {
     this.publish({
       ...emptySnapshot<TRow>(),
       status: "error",
@@ -192,14 +326,21 @@ export class RemoteQueryController<TRow> {
     this.generation += 1;
     this.abortController?.abort();
     this.abortController = null;
+    this.recoveryWindow = null;
     this.cache.clear();
     this.listeners.clear();
+    this.acceptanceListeners.clear();
   }
 
   private publishFromCache(): void {
     const combined = this.cache.combine();
     if (!combined) return;
-    this.publish({ status: "ready", ...combined, error: undefined });
+    this.publish({
+      status: "ready",
+      ...combined,
+      pageGaps: this.cache.getPageGaps(),
+      error: undefined
+    });
   }
 
   private publish(next: RemoteQuerySnapshot<TRow>): void {
@@ -207,6 +348,13 @@ export class RemoteQueryController<TRow> {
     this.snapshot = next;
     for (const listener of [...this.listeners]) {
       try { listener(); } catch { /* Host listeners are isolated. */ }
+    }
+  }
+
+  private publishAcceptance(acceptance: RemoteQueryAcceptance<TRow>): void {
+    if (this.destroyed) return;
+    for (const listener of [...this.acceptanceListeners]) {
+      try { listener(acceptance); } catch { /* Reconciliation listeners are isolated. */ }
     }
   }
 
@@ -247,7 +395,8 @@ function emptySnapshot<TRow>(): RemoteQuerySnapshot<TRow> {
     items: [],
     revision: null,
     completeness: "loadedRows",
-    pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+    pageInfo: { kind: "none", total: { kind: "known", value: 0 } },
+    pageGaps: []
   };
 }
 
@@ -266,4 +415,35 @@ function queryFamilyKey(query: QueryRequest): string {
       return serializeQueryRequest({ ...query, pagination });
     }
   }
+}
+
+function isAccumulatedQuery(query: QueryRequest): boolean {
+  return query.pagination.kind === "cursor" || query.pagination.kind === "infinite";
+}
+
+function mergeRecoveryWindows(
+  existing: RemotePageRecoveryWindow | null,
+  candidate: RemotePageRecoveryWindow | null
+): RemotePageRecoveryWindow | null {
+  if (!existing) return candidate;
+  if (!candidate) return existing;
+  return {
+    headQuery: existing.headQuery,
+    pageCount: Math.max(existing.pageCount, candidate.pageCount)
+  };
+}
+
+function nextAccumulatedQuery(
+  query: QueryRequest,
+  pageInfo: QueryResult<unknown>["pageInfo"]
+): QueryRequest | null {
+  if (query.pagination.kind === "cursor") {
+    if (pageInfo.kind !== "cursor" || pageInfo.nextCursor === undefined) return null;
+    return { ...query, pagination: { ...query.pagination, cursor: pageInfo.nextCursor } };
+  }
+  if (query.pagination.kind === "infinite") {
+    if (pageInfo.kind !== "infinite" || pageInfo.nextCursor === undefined) return null;
+    return { ...query, pagination: { ...query.pagination, after: pageInfo.nextCursor } };
+  }
+  return null;
 }

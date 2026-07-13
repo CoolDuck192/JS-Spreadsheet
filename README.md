@@ -29,8 +29,11 @@ A standalone browser spreadsheet built with Vite, React, TypeScript, and HyperFo
 Prerequisites:
 
 - Git
-- **Node.js 22.13 or newer** (the pinned pnpm 11 requires it — on Node 20 `pnpm` fails with `ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`)
+- **Node.js 22.13 or newer to develop or build this repository** (the pinned pnpm 11 requires it — on Node 20 `pnpm` fails with `ERR_UNKNOWN_BUILTIN_MODULE: node:sqlite`)
 - pnpm 11 via corepack (no separate install needed)
+
+This Node version is a repository-tooling requirement, not a runtime engine
+requirement for applications consuming the built browser package.
 
 Clone the repository:
 

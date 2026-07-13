@@ -145,6 +145,18 @@ describe("DataTable remote lifecycle surfaces", () => {
       pagination: { kind: "infinite", after: "more", limit: 50 }
     });
   });
+
+  it("keeps row numbering anchored after an accumulated prefix gap", () => {
+    const { session } = createSession({
+      state: { kind: "infinite" },
+      pageInfo: { kind: "infinite", loadedCount: 1, total: { kind: "unknown" } },
+      pageGaps: [{ kind: "evicted-pages", at: 0, omittedPages: 1, omittedItems: 50 }]
+    });
+
+    render(<DataTable aria-label="Gapped salaries" session={session} />);
+
+    expect(screen.getByRole("row", { name: "Row 51" })).toHaveAttribute("aria-rowindex", "52");
+  });
 });
 
 type SnapshotOverrides = {
@@ -153,6 +165,7 @@ type SnapshotOverrides = {
   conflicts?: TableViewSnapshot<Row, ColumnDef<Row>>["conflicts"];
   pendingOperations?: TableViewSnapshot<Row, ColumnDef<Row>>["pendingOperations"];
   pageInfo?: TableViewSnapshot<Row, ColumnDef<Row>>["pageInfo"];
+  pageGaps?: TableViewSnapshot<Row, ColumnDef<Row>>["pageGaps"];
   totalRowCount?: TableViewSnapshot<Row, ColumnDef<Row>>["totalRowCount"];
   state?: { kind: "cursor" | "infinite" };
 };

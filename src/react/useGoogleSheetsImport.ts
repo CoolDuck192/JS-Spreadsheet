@@ -192,6 +192,12 @@ export function useGoogleSheetsImport(options: Readonly<{
       }
     }
 
+    if (!open) {
+      return () => {
+        active = false;
+      };
+    }
+
     let preparation: GoogleTokenProviderPreparation;
     try {
       preparation = providerRuntime.resolve(authSource);
@@ -244,6 +250,7 @@ export function useGoogleSheetsImport(options: Readonly<{
     clientIdConfiguration.editingClientId,
     clientIdConfiguration.storageStatus,
     notifyError,
+    open,
     originAssessment,
     preparationAttempt,
     providerRuntime,
@@ -415,6 +422,9 @@ export function useGoogleSheetsImport(options: Readonly<{
     setOperation({ phase: "authorizing" });
 
     const trackedProvider: TokenProvider = {
+      invalidateAccessToken(scopes) {
+        return provider.invalidateAccessToken?.(scopes);
+      },
       getAccessToken(scopes) {
         let pendingToken: Promise<string>;
         try {
@@ -545,9 +555,13 @@ export function useGoogleSheetsImport(options: Readonly<{
       : {}),
     canSaveClientId: clientIdEditable && !storageBusy,
     canChangeClientId:
-      clientIdSource === "stored" && !storageBusy && !configurationActionPending,
+      (clientIdSource === "stored" || clientIdSource === "session") &&
+      !storageBusy &&
+      !configurationActionPending,
     canForgetClientId:
-      clientIdSource === "stored" && !storageBusy && !configurationActionPending,
+      (clientIdSource === "stored" || clientIdSource === "session") &&
+      !storageBusy &&
+      !configurationActionPending,
     canImport:
       readiness === "ready" && operation === null && !storageBusy && !importPendingRef.current,
     canRetry,

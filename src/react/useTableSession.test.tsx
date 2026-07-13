@@ -1,9 +1,13 @@
-import { StrictMode, type ReactNode } from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { Activity, StrictMode, type ReactNode } from "react";
+import { renderToString } from "react-dom/server";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ColumnDef } from "./tableTypes";
 import * as localSessionModule from "../table/local/RecordTableSession";
-import { createLocalRecordTableSession } from "../table/local/RecordTableSession";
+import {
+  createLocalRecordTableSession,
+  type RecordTableSession
+} from "../table/local/RecordTableSession";
 import { useTableSession } from "./useTableSession";
 import { useTableSnapshot } from "./useTableSnapshot";
 
@@ -64,12 +68,142 @@ describe("useTableSession", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
+  it("does not publish controlled-state corrections during an abandoned render", () => {
+    const onStateChange = vi.fn();
+    function Probe() {
+      useTableSession({
+        ...options([{ id: "1", name: "Ada" }]),
+        state: {
+          grouping: [{ columnId: "name" }],
+          pagination: { kind: "offset", offset: 0, limit: 25 }
+        },
+        onStateChange
+      });
+      return null;
+    }
+
+    renderToString(<Probe />);
+
+    expect(onStateChange).not.toHaveBeenCalled();
+  });
+
+  it("publishes one controlled-state correction after a StrictMode commit", async () => {
+    let rendering = false;
+    const calledDuringRender: boolean[] = [];
+    const onStateChange = vi.fn(() => { calledDuringRender.push(rendering); });
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+
+    renderHook(() => {
+      rendering = true;
+      try {
+        return useTableSession({
+          ...options([{ id: "1", name: "Ada" }]),
+          state: {
+            grouping: [{ columnId: "name" }],
+            pagination: { kind: "offset", offset: 0, limit: 25 }
+          },
+          onStateChange
+        });
+      } finally {
+        rendering = false;
+      }
+    }, { wrapper });
+
+    await waitFor(() => expect(onStateChange).toHaveBeenCalledTimes(1));
+    expect(calledDuringRender).toEqual([false]);
+  });
+
   it("destroys an owned session after real unmount", async () => {
     const { result, unmount } = renderHook(() => useTableSession(options([{ id: "1", name: "Ada" }])));
     const destroy = vi.spyOn(result.current, "destroy");
 
     unmount();
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
+  });
+
+  it("preserves edits, metadata, view state, and history when Activity effects are restored", async () => {
+    let current!: RecordTableSession<Employee, ColumnDef<Employee>>;
+    const stableOptions = options([{ id: "1", name: "Ada" }]);
+    function Probe() {
+      current = useTableSession(stableOptions);
+      useTableSnapshot(current);
+      return null;
+    }
+
+    const view = render(<Activity mode="visible"><Probe /></Activity>);
+    const facade = current;
+    await act(async () => {
+      await current.dispatch({
+        type: "edit-cells",
+        edits: [{ rowId: "1", columnId: "name", rawText: "Grace" }]
+      });
+      await current.dispatch({
+        type: "update-cell-metadata",
+        updates: [{ rowId: "1", columnId: "name", patch: { comment: "keep me" } }]
+      });
+      await current.dispatch({
+        type: "set-selection",
+        selection: {
+          anchor: { rowId: "1", columnId: "name" },
+          focus: { rowId: "1", columnId: "name" }
+        }
+      });
+      await current.dispatch({ type: "resize-column", columnId: "name", width: 240 });
+    });
+    expect(current.getSnapshot().canUndo).toBe(true);
+
+    view.rerender(<Activity mode="hidden"><Probe /></Activity>);
+    await act(async () => Promise.resolve());
+    view.rerender(<Activity mode="visible"><Probe /></Activity>);
+
+    expect(current).toBe(facade);
+    expect(current.getSnapshot().getCell("1", "name")).toMatchObject({
+      storedValue: "Grace",
+      metadata: { comment: "keep me" }
+    });
+    expect(current.getSnapshot().selection).toEqual({
+      anchor: { rowId: "1", columnId: "name" },
+      focus: { rowId: "1", columnId: "name" }
+    });
+    expect(current.getSnapshot().state.columnWidths.name).toBe(240);
+    expect(current.getSnapshot().canUndo).toBe(true);
+
+    await act(async () => { await current.undo(); });
+    expect(current.getSnapshot().getCell("1", "name")).toMatchObject({
+      storedValue: "Grace",
+      metadata: {}
+    });
+    await act(async () => { await current.undo(); });
+    expect(current.getSnapshot().getCell("1", "name").storedValue).toBe("Ada");
+  });
+
+  it("destroys a session revived by a hidden render when the subtree unmounts before reveal", async () => {
+    let current!: RecordTableSession<Employee, ColumnDef<Employee>>;
+    let renderCount = 0;
+    const stableOptions = options([{ id: "1", name: "Ada" }]);
+    function Probe({ marker }: { marker: number }) {
+      renderCount += 1;
+      current = useTableSession(stableOptions);
+      return <span>{marker}</span>;
+    }
+
+    const view = render(<Activity mode="visible"><Probe marker={0} /></Activity>);
+    const facade = current;
+    const destroy = vi.spyOn(facade, "destroy");
+    view.rerender(<Activity mode="hidden"><Probe marker={0} /></Activity>);
+    await act(async () => Promise.resolve());
+    expect(destroy).toHaveBeenCalledTimes(1);
+
+    const rendersBeforeRevival = renderCount;
+    view.rerender(<Activity mode="hidden"><Probe marker={1} /></Activity>);
+    await waitFor(() => expect(renderCount).toBeGreaterThan(rendersBeforeRevival));
+    view.unmount();
+    await act(async () => Promise.resolve());
+
+    expect(destroy).toHaveBeenCalledTimes(2);
+    await expect(facade.dispatch({ type: "set-selection", selection: null })).resolves.toMatchObject({
+      status: "rejected"
+    });
   });
 
   it("never destroys a supplied table session", async () => {

@@ -42,25 +42,9 @@ export function buildLocalRowModel<TRow>(
   resolveValue?: LocalValueResolver<TRow>,
   getSubRows?: (row: TRow) => readonly TRow[] | undefined
 ): LocalRowModel<TRow> {
-  if (request.grouping.length > 0 && request.pagination.kind !== "none") {
-    throw new Error("Grouping requires pagination kind none");
-  }
-  if (getSubRows && request.grouping.length > 0) {
-    throw new Error("Tree expansion cannot be combined with grouping");
-  }
-  if (getSubRows && request.pagination.kind !== "none") {
-    throw new Error("Tree expansion requires pagination kind none");
-  }
-  if (request.pagination.kind === "cursor") {
-    throw new Error("Local tables do not support cursor pagination");
-  }
-  if (request.pagination.kind === "infinite") {
-    throw new Error("Local tables do not support infinite pagination");
-  }
-
   const normalizedColumns = normalizeColumns(columns) as readonly AnyColumn<TRow>[];
   const columnsById = new Map(normalizedColumns.map((column) => [column.id, column]));
-  validateRequestColumns(request, columnsById);
+  validateLocalQueryStructure(request, columnsById, getSubRows !== undefined);
 
   const dataRowsById = new Map<string, TRow>();
   const roots = normalizeRows(rows, undefined, 0);
@@ -310,6 +294,38 @@ export function buildLocalRowModel<TRow>(
   }
 }
 
+export function validateLocalQueryRequest<TRow>(
+  columns: readonly AnyColumn<TRow>[],
+  request: QueryRequest,
+  treeSource: boolean
+): void {
+  const columnsById = new Map(columns.map((column) => [column.id, column]));
+  validateLocalQueryStructure(request, columnsById, treeSource);
+}
+
+function validateLocalQueryStructure<TRow>(
+  request: QueryRequest,
+  columns: ReadonlyMap<string, AnyColumn<TRow>>,
+  treeSource: boolean
+): void {
+  if (request.grouping.length > 0 && request.pagination.kind !== "none") {
+    throw new Error("Grouping requires pagination kind none");
+  }
+  if (treeSource && request.grouping.length > 0) {
+    throw new Error("Tree expansion cannot be combined with grouping");
+  }
+  if (treeSource && request.pagination.kind !== "none") {
+    throw new Error("Tree expansion requires pagination kind none");
+  }
+  if (request.pagination.kind === "cursor") {
+    throw new Error("Local tables do not support cursor pagination");
+  }
+  if (request.pagination.kind === "infinite") {
+    throw new Error("Local tables do not support infinite pagination");
+  }
+  validateRequestColumns(request, columns);
+}
+
 function validateRequestColumns<TRow>(
   request: QueryRequest,
   columns: ReadonlyMap<string, AnyColumn<TRow>>
@@ -366,7 +382,7 @@ function compareCategories(left: unknown, right: unknown, nulls?: "first" | "las
 }
 
 function valueCategory(value: unknown, nulls?: "first" | "last"): number {
-  if (value === null) return nulls === "first" ? 0 : 3;
+  if (value === null || value === undefined) return nulls === "first" ? 0 : 3;
   if (value === "") return 3;
   if (isEvaluationError(value)) return 2;
   return 1;
@@ -388,7 +404,7 @@ function isEvaluationError(value: unknown): value is { kind: "error"; code: stri
 
 function toQueryScalar<TRow>(value: unknown, column: AnyColumn<TRow>): QueryScalar {
   if (isEvaluationError(value)) return { type: "error", value: value.code };
-  if (value === null) return { type: "null" };
+  if (value === null || value === undefined) return { type: "null" };
   if (typeof value === "number") return { type: "number", value };
   if (typeof value === "boolean") return { type: "boolean", value };
   if (column.dataType === "date") return { type: "date", value: String(value) };

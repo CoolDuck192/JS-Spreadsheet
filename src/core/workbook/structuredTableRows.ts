@@ -7,19 +7,26 @@ import type {
 import type { TableSort } from "../../table/core/query";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { compareDeterministicText } from "../../lib/filters";
-import { formatCellAddress, parseCellAddress } from "../../lib/addressing";
+import { formatCellAddress } from "../../lib/addressing";
+import { structuredFormulaToA1 } from "../../lib/structuredFormula";
 import {
+  rewriteFormulaForRectangularRowMove,
   rewriteFormulaForRectangularRowEdit,
+  rewriteRowIntervalForRectangularRowMove,
+  rewriteRowIntervalForRectangularEdit,
   translateFormulaReferences,
-  translateFormulaRowsWithinColumns
+  translateFormulaRowsWithinColumns,
+  type FormulaRewriteResult
 } from "../../lib/formulaReferences";
 import {
   getStructuredTable,
   getStructuredTableBodyRange,
-  reduceStructuredTableCommand,
+  regenerateStructuredTableTotals,
+  resizeStructuredTableMetadata,
   type StructuredTableCommandServices,
   type StructuredTableReduction
 } from "./structuredTables";
+import { migrateTableSort } from "./migrateWorkbook";
 
 export type TableCellPlanes = Pick<
   SheetModel,
@@ -69,14 +76,13 @@ export function insertStructuredTableRows(
     operation: "insert"
   }]);
   if (rewritten.status === "rejected") return rewritten;
-  const resized = reduceStructuredTableCommand(rewritten.workbook, {
-    type: "table.resize",
-    tableId,
-    range: {
-      start: { ...table.range.start },
-      end: { ...table.range.end, row: newBottom }
-    }
-  }, services);
+  const resized = resizeStructuredTableMetadata(rewritten.workbook, tableId, {
+    start: { ...table.range.start },
+    end: { ...table.range.end, row: newBottom }
+  }, services, {
+    start: { row: table.range.end.row + 1, column: table.range.start.column },
+    end: { row: newBottom, column: table.range.end.column }
+  });
   if (resized.status === "rejected") return resized;
   const resizedTable = getStructuredTable(resized.workbook, tableId)!;
   const generatedIds = resizedTable.rowIds.slice(table.rowIds.length);
@@ -97,7 +103,9 @@ export function insertStructuredTableRows(
     ...table.rowIds.slice(insertionIndex)
   ];
   next = replaceTable(next, { ...resizedTable, rowIds });
-  next = regenerateCalculatedColumns(next, getStructuredTable(next, tableId)!);
+  const nextTable = getStructuredTable(next, tableId)!;
+  next = regenerateCalculatedColumns(next, nextTable);
+  next = regenerateStructuredTableTotals(next, nextTable);
   return { status: "committed", workbook: next };
 }
 
@@ -162,16 +170,26 @@ export function setStructuredTableCalculatedColumn(
   if (formula !== undefined && !formula.startsWith("=")) {
     return rejected(workbook, "TABLE_FORMULA_INVALID", "Calculated column formulas must begin with equals");
   }
+  let normalizedFormula = formula;
+  if (formula !== undefined) {
+    const body = getStructuredTableBodyRange(table);
+    const anchorBodyRow = body?.start.row ?? table.range.start.row + Number(table.headerRow);
+    const translated = structuredFormulaToA1(formula, table, anchorBodyRow);
+    if (!translated.ok) {
+      return { status: "rejected", workbook, issues: [translated.issue] };
+    }
+    normalizedFormula = translated.formula;
+  }
   const current = table.columns[columnIndex].calculatedFormula;
-  if (current === formula) return { status: "unchanged", workbook };
+  if (current === normalizedFormula) return { status: "unchanged", workbook };
   const columns = table.columns.map((column, index) => {
     if (index !== columnIndex) return column;
     const { calculatedFormula: _current, ...base } = column;
-    return formula === undefined ? base : { ...base, calculatedFormula: formula };
+    return normalizedFormula === undefined ? base : { ...base, calculatedFormula: normalizedFormula };
   });
   const nextTable = { ...table, columns };
   let next = replaceTable(workbook, nextTable);
-  if (formula !== undefined) next = regenerateCalculatedColumns(next, nextTable);
+  if (normalizedFormula !== undefined) next = regenerateCalculatedColumns(next, nextTable);
   return { status: "committed", workbook: next };
 }
 
@@ -183,12 +201,16 @@ export function sortStructuredTableRows(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return rejected(workbook, "TABLE_NOT_FOUND", "Structured table does not exist");
-  if (sorting.some((sort) => !table.columns.some((column) => column.id === sort.columnId))) {
-    return rejected(workbook, "TABLE_COLUMN_NOT_FOUND", "Sort column does not belong to the table");
+  const migratedSorting = migrateTableSort(
+    sorting,
+    new Set(table.columns.map((column) => column.id))
+  );
+  if (!migratedSorting) {
+    return rejected(workbook, "TABLE_SORT_INVALID", "Structured table sort is invalid");
   }
   const body = getStructuredTableBodyRange(table);
   if (!body || table.rowIds.length < 2) {
-    const nextTable = { ...table, sort: sorting.map((sort) => ({ ...sort })) };
+    const nextTable = { ...table, sort: migratedSorting };
     return { status: "committed", workbook: replaceTable(workbook, nextTable) };
   }
   const records = table.rowIds.map((rowId, index) => ({
@@ -197,7 +219,7 @@ export function sortStructuredTableRows(
     originalIndex: index
   }));
   records.sort((left, right) => {
-    for (const sort of sorting) {
+    for (const sort of migratedSorting) {
       const column = table.columns.find((candidate) => candidate.id === sort.columnId)!;
       const leftValue = services.getCellEvaluation(
         table.sheetId,
@@ -223,7 +245,7 @@ export function sortStructuredTableRows(
   const nextTable = {
     ...table,
     rowIds: records.map(({ rowId }) => rowId),
-    sort: sorting.map((sort) => ({ ...sort }))
+    sort: migratedSorting
   };
   next = replaceTable(next, nextTable);
   next = regenerateCalculatedColumns(next, nextTable);
@@ -253,88 +275,238 @@ function regenerateCalculatedColumns(workbook: WorkbookModel, table: StructuredT
 }
 
 type RowMapping = { sourceRow: number; targetRow: number };
-type RectangularEdit = { row: number; count: number; operation: "insert" | "delete" };
+export type RectangularEdit = { row: number; count: number; operation: "insert" | "delete" };
+export type RectangularRowMove = {
+  sourceRow: number;
+  targetRow: number;
+  columnStart: number;
+  columnEnd: number;
+};
+export type RewriteWorkbookForRowEditsOptions = {
+  rewriteCalculatedFormulaMetadata?: boolean;
+};
 type RewriteOutcome =
   | { status: "committed"; workbook: WorkbookModel }
   | { status: "rejected"; workbook: WorkbookModel; issues: readonly { code: string; message: string }[] };
 
-function rewriteWorkbookForRowEdits(
+export function rewriteWorkbookForRowEdits(
   workbook: WorkbookModel,
   table: StructuredTable,
-  edits: readonly RectangularEdit[]
+  edits: readonly RectangularEdit[],
+  options: RewriteWorkbookForRowEditsOptions = {}
 ): RewriteOutcome {
   let candidate = workbook;
+  let tableRowEnd = table.range.end.row;
   const editedSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId)!;
+  const sheetOrder = workbook.sheets.map((sheet) => sheet.name);
   for (const edit of edits) {
-    const sheets: SheetModel[] = [];
-    for (const sheet of candidate.sheets) {
-      let cells: SheetModel["cells"] | undefined;
-      for (const [address, value] of Object.entries(sheet.cells)) {
-        if (typeof value !== "string" || !value.startsWith("=")) continue;
-        let coordinate: { row: number; column: number };
-        try {
-          coordinate = parseCellAddress(address);
-        } catch {
-          continue;
-        }
-        // The totals row is included because insert/delete remapping moves it with the table body.
-        const isInsideTableDataOrTotals = sheet.id === table.sheetId
-          && coordinate.row >= table.range.start.row + Number(table.headerRow)
-          && coordinate.row <= table.range.end.row
-          && coordinate.column >= table.range.start.column
-          && coordinate.column <= table.range.end.column;
-        const rewritten = rewriteFormulaForRectangularRowEdit(value, {
-          formulaSheetId: sheet.name,
+    const rewritten = rewriteWorkbookFormulaReferences(candidate, {
+      rewriteFormula(value, formulaSheet) {
+        return rewriteFormulaForRectangularRowEdit(value, {
+          formulaSheetId: formulaSheet.name,
           editedSheetId: editedSheet.name,
+          sheetOrder,
           tableColumnStart: table.range.start.column,
           tableColumnEnd: table.range.end.column,
+          tableRowEnd,
           row: edit.row,
           count: edit.count,
           operation: edit.operation,
           sheetBounds: { rowCount: editedSheet.rowCount, columnCount: editedSheet.columnCount }
         });
-        if (!rewritten.ok) {
-          if (isInsideTableDataOrTotals) continue;
-          return { status: "rejected", workbook, issues: [rewritten.issue] };
-        }
-        if (rewritten.formula !== value) {
-          cells ??= { ...sheet.cells };
-          cells[address] = rewritten.formula;
-        }
-      }
-      sheets.push(cells ? { ...sheet, cells } : sheet);
+      },
+      rewriteNamedRange(namedRange) {
+        return rewriteNamedRange(namedRange, table, edit, tableRowEnd);
+      },
+      rewriteCalculatedFormulaMetadata: options.rewriteCalculatedFormulaMetadata ?? false,
+      namedRangeIssueMessage: (name) =>
+        `Named range ${name} cannot represent this rectangular row edit`
+    });
+    if (rewritten.status === "rejected") {
+      return { ...rewritten, workbook };
     }
-    const namedRanges = [] as WorkbookModel["namedRanges"];
-    for (const namedRange of candidate.namedRanges) {
-      const rewritten = rewriteNamedRange(namedRange, table, edit);
-      if (rewritten === "unsupported") {
-        return {
-          status: "rejected",
-          workbook,
-          issues: [{
-            code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
-            message: `Named range ${namedRange.name} cannot represent this rectangular row edit`
-          }]
-        };
-      }
-      namedRanges.push(rewritten);
-    }
-    candidate = { ...candidate, sheets, namedRanges };
+    candidate = rewritten.workbook;
+    tableRowEnd += edit.operation === "insert" ? edit.count : -edit.count;
   }
   return { status: "committed", workbook: candidate };
+}
+
+export function rewriteWorkbookForRowMove(
+  workbook: WorkbookModel,
+  table: StructuredTable,
+  move: RectangularRowMove,
+  options: RewriteWorkbookForRowEditsOptions = {}
+): RewriteOutcome {
+  const editedSheet = workbook.sheets.find((sheet) => sheet.id === table.sheetId)!;
+  const sheetOrder = workbook.sheets.map((sheet) => sheet.name);
+  const generatedTotals = new Set(table.columns
+    .filter((column) => column.totalsFunction && column.totalsFunction !== "none")
+    .map((column) => formatCellAddress({ row: move.sourceRow, column: column.sheetColumn })));
+  return rewriteWorkbookFormulaReferences(workbook, {
+    rewriteFormula(value, formulaSheet, address) {
+      if (formulaSheet.id === table.sheetId && address && generatedTotals.has(address)) {
+        return { ok: true, formula: value };
+      }
+      return rewriteFormulaForRectangularRowMove(value, {
+        formulaSheetId: formulaSheet.name,
+        editedSheetId: editedSheet.name,
+        sheetOrder,
+        tableColumnStart: move.columnStart,
+        tableColumnEnd: move.columnEnd,
+        sourceRow: move.sourceRow,
+        targetRow: move.targetRow
+      });
+    },
+    rewriteNamedRange(namedRange) {
+      return rewriteNamedRangeForRowMove(namedRange, table.sheetId, move);
+    },
+    rewriteCalculatedFormulaMetadata: options.rewriteCalculatedFormulaMetadata ?? false,
+    namedRangeIssueMessage: (name) =>
+      `Named range ${name} cannot represent this rectangular row move`
+  });
+}
+
+type WorkbookFormulaReferenceRewrite = {
+  rewriteFormula(
+    formula: string,
+    formulaSheet: SheetModel,
+    address?: string
+  ): FormulaRewriteResult;
+  rewriteNamedRange(
+    namedRange: WorkbookModel["namedRanges"][number]
+  ): WorkbookModel["namedRanges"][number] | "unsupported";
+  rewriteCalculatedFormulaMetadata: boolean;
+  namedRangeIssueMessage(name: string): string;
+};
+
+function rewriteWorkbookFormulaReferences(
+  workbook: WorkbookModel,
+  rewrite: WorkbookFormulaReferenceRewrite
+): RewriteOutcome {
+  const sheets: SheetModel[] = [];
+  for (const sheet of workbook.sheets) {
+    let cells: SheetModel["cells"] | undefined;
+    for (const [address, value] of Object.entries(sheet.cells)) {
+      if (typeof value !== "string" || !value.startsWith("=")) continue;
+      const rewritten = rewrite.rewriteFormula(value, sheet, address);
+      if (!rewritten.ok) {
+        return { status: "rejected", workbook, issues: [rewritten.issue] };
+      }
+      if (rewritten.formula !== value) {
+        cells ??= { ...sheet.cells };
+        cells[address] = rewritten.formula;
+      }
+    }
+    sheets.push(cells ? { ...sheet, cells } : sheet);
+  }
+
+  let tables: StructuredTable[] | undefined;
+  const tableCount = rewrite.rewriteCalculatedFormulaMetadata ? workbook.tables.length : 0;
+  for (let tableIndex = 0; tableIndex < tableCount; tableIndex += 1) {
+    const candidateTable = workbook.tables[tableIndex];
+    const formulaSheet = workbook.sheets.find((sheet) => sheet.id === candidateTable.sheetId)!;
+    let columns: Array<StructuredTable["columns"][number]> | undefined;
+    for (let columnIndex = 0; columnIndex < candidateTable.columns.length; columnIndex += 1) {
+      const column = candidateTable.columns[columnIndex];
+      let nextColumn = column;
+      if (column.calculatedFormula) {
+        const rewritten = rewrite.rewriteFormula(column.calculatedFormula, formulaSheet);
+        if (!rewritten.ok) {
+          return { status: "rejected", workbook, issues: [rewritten.issue] };
+        }
+        if (rewritten.formula !== column.calculatedFormula) {
+          nextColumn = { ...column, calculatedFormula: rewritten.formula };
+        }
+      }
+      if (nextColumn !== column && !columns) {
+        columns = candidateTable.columns.slice(0, columnIndex);
+      }
+      columns?.push(nextColumn);
+    }
+    const nextTable = columns ? { ...candidateTable, columns } : candidateTable;
+    if (nextTable !== candidateTable && !tables) {
+      tables = workbook.tables.slice(0, tableIndex);
+    }
+    tables?.push(nextTable);
+  }
+
+  let namedRanges: WorkbookModel["namedRanges"] | undefined;
+  for (let index = 0; index < workbook.namedRanges.length; index += 1) {
+    const namedRange = workbook.namedRanges[index];
+    const rewritten = rewrite.rewriteNamedRange(namedRange);
+    if (rewritten === "unsupported") {
+      return {
+        status: "rejected",
+        workbook,
+        issues: [{
+          code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+          message: rewrite.namedRangeIssueMessage(namedRange.name)
+        }]
+      };
+    }
+    if (rewritten !== namedRange && !namedRanges) {
+      namedRanges = workbook.namedRanges.slice(0, index);
+    }
+    namedRanges?.push(rewritten);
+  }
+
+  return {
+    status: "committed",
+    workbook: {
+      ...workbook,
+      sheets,
+      ...(tables ? { tables } : {}),
+      ...(namedRanges ? { namedRanges } : {})
+    }
+  };
+}
+
+function rewriteNamedRangeForRowMove(
+  namedRange: WorkbookModel["namedRanges"][number],
+  editedSheetId: string,
+  move: RectangularRowMove
+): WorkbookModel["namedRanges"][number] | "unsupported" {
+  if (namedRange.sheetId !== editedSheetId) return namedRange;
+  const range = namedRange.range;
+  const overlapsColumns = range.start.column <= move.columnEnd
+    && range.end.column >= move.columnStart;
+  if (!overlapsColumns) return namedRange;
+  const interval = rewriteRowIntervalForRectangularRowMove(
+    range.start.row,
+    range.end.row,
+    move
+  );
+  if (!interval) return "unsupported";
+  if (interval.start === range.start.row && interval.end === range.end.row) return namedRange;
+  const whollyInside = range.start.column >= move.columnStart
+    && range.end.column <= move.columnEnd;
+  if (!whollyInside) return "unsupported";
+  return {
+    ...namedRange,
+    range: {
+      start: { ...range.start, row: interval.start },
+      end: { ...range.end, row: interval.end }
+    }
+  };
 }
 
 function rewriteNamedRange(
   namedRange: WorkbookModel["namedRanges"][number],
   table: StructuredTable,
-  edit: RectangularEdit
+  edit: RectangularEdit,
+  tableRowEnd: number
 ): WorkbookModel["namedRanges"][number] | "unsupported" {
   if (namedRange.sheetId !== table.sheetId) return namedRange;
   const range = namedRange.range;
   const overlapsColumns = range.start.column <= table.range.end.column
     && range.end.column >= table.range.start.column;
   if (!overlapsColumns) return namedRange;
-  const interval = rewriteInterval(range.start.row, range.end.row, edit);
+  const interval = rewriteInterval(
+    range.start.row,
+    range.end.row,
+    edit,
+    tableRowEnd
+  );
   if (interval === "unchanged") return namedRange;
   const whollyInside = range.start.column >= table.range.start.column
     && range.end.column <= table.range.end.column;
@@ -351,23 +523,15 @@ function rewriteNamedRange(
 function rewriteInterval(
   start: number,
   end: number,
-  edit: RectangularEdit
+  edit: RectangularEdit,
+  tableRowEnd: number
 ): { start: number; end: number } | null | "unchanged" {
-  if (edit.operation === "insert") {
-    if (end < edit.row) return "unchanged";
-    if (start >= edit.row) return { start: start + edit.count, end: end + edit.count };
-    return { start, end: end + edit.count };
-  }
-  const deleteEnd = edit.row + edit.count - 1;
-  if (end < edit.row) return "unchanged";
-  if (start > deleteEnd) return { start: start - edit.count, end: end - edit.count };
-  const survivesAbove = start < edit.row;
-  const survivesBelow = end > deleteEnd;
-  if (!survivesAbove && !survivesBelow) return null;
-  return {
-    start: survivesAbove ? start : edit.row,
-    end: survivesBelow ? end - edit.count : edit.row - 1
-  };
+  const interval = rewriteRowIntervalForRectangularEdit(start, end, {
+    ...edit,
+    tableRowEnd
+  });
+  if (interval?.start === start && interval.end === end) return "unchanged";
+  return interval;
 }
 
 function contiguousDeletionEdits(rows: readonly number[]): RectangularEdit[] {
@@ -422,7 +586,12 @@ function remapTableRows(
     formats: remap(sheet.formats),
     validations: remap(sheet.validations),
     comments: remap(sheet.comments),
-    hyperlinks: remap(sheet.hyperlinks)
+    hyperlinks: remap(sheet.hyperlinks),
+    protection: {
+      ...sheet.protection,
+      lockedCells: remap(sheet.protection.lockedCells),
+      unlockedCells: remap(sheet.protection.unlockedCells)
+    }
   };
   return {
     ...workbook,

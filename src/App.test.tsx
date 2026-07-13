@@ -4,6 +4,7 @@ import { HyperFormula } from "hyperformula";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { Spreadsheet } from "./App";
 import { createWorkbookSession } from "./core/workbook/WorkbookSession";
+import { WORKBOOK_STORAGE_KEY } from "./lib/persistence";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
@@ -25,6 +26,50 @@ describe("App", () => {
 
     expect(root).toHaveClass("js-spreadsheet-standalone");
     expect(root).toHaveStyle({ height: "100dvh", minHeight: 0 });
+  });
+
+  it("shows a recovery warning when the stored workbook cannot be opened", async () => {
+    localStorage.setItem(WORKBOOK_STORAGE_KEY, "{invalid workbook");
+
+    render(<App />);
+
+    const alert = await screen.findByRole("alert", { name: /Workbook storage status/ });
+    expect(alert).toHaveTextContent(
+      "Stored workbook could not be opened. A recovery copy was preserved, and autosave is paused."
+    );
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Ready");
+  });
+
+  it("keeps command feedback visible beside a sanitized autosave alert and clears it after recovery", async () => {
+    const user = userEvent.setup();
+    let resolveRecovery!: () => void;
+    const recovery = new Promise<void>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    const save = vi.fn()
+      .mockRejectedValueOnce(new Error("secret quota detail"))
+      .mockReturnValueOnce(recovery);
+    render(<Spreadsheet storage={{ load: () => null, save }} />);
+
+    await editCell(user, "A1", "unsaved");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Workbook could not be saved");
+    expect(alert).toHaveAccessibleName("Workbook storage status: Workbook could not be saved");
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Saved");
+    expect(screen.getByLabelText("Status").firstElementChild).not.toBe(alert);
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent("secret quota detail");
+
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Zoom 125%");
+    expect(screen.getByRole("alert")).toBe(alert);
+
+    await editCell(user, "A2", "saved");
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toBe(alert);
+    await act(async () => resolveRecovery());
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Status").firstElementChild).toHaveTextContent("Saved");
   });
 
   it("always opens standalone Google setup and stores only the normalized public client ID", async () => {
@@ -1232,7 +1277,7 @@ describe("App", () => {
     }));
   });
 
-  it("includes the contextual Table tab in ribbon keyboard navigation and restores Home when it disappears", async () => {
+  it("keeps grid focus when the contextual Table tab disappears after a cell selection", async () => {
     const user = userEvent.setup();
     render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
 
@@ -1245,6 +1290,17 @@ describe("App", () => {
     await user.click(screen.getByRole("gridcell", { name: "H10" }));
     expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Home" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("gridcell", { name: "H10" })).toHaveFocus();
+  });
+
+  it("restores Home focus when a focused contextual control tears down the Table tab", async () => {
+    const user = userEvent.setup();
+    render(<Spreadsheet defaultWorkbook={structuredTableWorkbook()} storage={false} />);
+
+    await openRibbonTab(user, "Table");
+    await user.click(screen.getByRole("button", { name: "Convert to range" }));
+
+    expect(screen.queryByRole("tab", { name: "Table" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Home" })).toHaveFocus();
   });
 
@@ -1263,6 +1319,9 @@ describe("App", () => {
 
     expect(screen.queryByRole("dialog", { name: "Workbook table table-sales" })).not.toBeInTheDocument();
     expect(screen.getByRole("gridcell", { name: "B2 10" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => {
+      expect(screen.getByRole("grid", { name: "Spreadsheet grid" })).toHaveFocus();
+    });
   });
 
   it("opens saved workbooks with stale active sheet ids", () => {
@@ -1686,15 +1745,27 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: "Filter" })).toBeInTheDocument();
   });
 
-  it("keeps keyboard navigation active after selecting a cell with the mouse", async () => {
+  it("moves DOM focus with the active cell through repeated keyboard navigation", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(screen.getByRole("gridcell", { name: "A1" }));
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("gridcell", { name: "A3" })).toHaveFocus();
+
     await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("gridcell", { name: "B3" })).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
 
     expect(screen.getByLabelText("Formula input")).toHaveValue("");
-    expect(screen.getByLabelText("Name box")).toHaveValue("B1");
+    expect(screen.getByLabelText("Name box")).toHaveValue("B4");
+    expect(screen.getByRole("gridcell", { name: "B4" })).toHaveFocus();
   });
 
   it("extends the selection with Shift+Arrow keys", async () => {
@@ -1944,6 +2015,128 @@ describe("App", () => {
 
     expect(screen.getByRole("gridcell", { name: "A1 Delta" })).toHaveTextContent("Delta");
     expect(screen.getByRole("gridcell", { name: "B1 4" })).toHaveTextContent("4");
+  });
+
+  it("sorts a structured table from the ribbon through the row-id-aware command", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A2 West" }));
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "A2 East" })).toHaveTextContent("East");
+    expect(screen.getByRole("gridcell", { name: "B2 8" })).toHaveTextContent("8");
+    expect(screen.getByRole("gridcell", { name: "A3 West" })).toHaveTextContent("West");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: {
+        type: "table.sort",
+        tableId: "table-sales",
+        sorting: [{ columnId: "sales-region", direction: "asc" }]
+      },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("sorts a structured AutoFilter column through the row-id-aware command", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    const workbook = structuredTableWorkbook();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      autoFilterRange: workbook.tables[0].range
+    };
+    render(<Spreadsheet defaultWorkbook={workbook} storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("button", { name: "Open AutoFilter menu for Sales" }));
+    await user.click(within(screen.getByRole("menu", { name: "AutoFilter menu for Sales" }))
+      .getByRole("menuitem", { name: "Sort A to Z" }));
+
+    expect(screen.getByRole("gridcell", { name: "B2 8" })).toHaveTextContent("8");
+    expect(screen.getByRole("gridcell", { name: "B3 10" })).toHaveTextContent("10");
+    expect(onCommandResult).toHaveBeenCalledWith(expect.objectContaining({
+      command: {
+        type: "table.sort",
+        tableId: "table-sales",
+        sorting: [{ columnId: "sales-value", direction: "asc" }]
+      },
+      result: expect.objectContaining({ status: "committed" })
+    }));
+  });
+
+  it("explains why a partially overlapping structured-table selection cannot be sorted", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    selectRange("A2 West", "C3");
+    await user.click(screen.getByRole("button", { name: "Sort A to Z" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.sort" })
+    }));
+  });
+
+  it("explains why a partially overlapping AutoFilter range cannot be sorted", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    const workbook = structuredTableWorkbook();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      autoFilterRange: {
+        start: { ...workbook.tables[0].range.start },
+        end: { row: workbook.tables[0].range.end.row, column: 2 }
+      }
+    };
+    render(<Spreadsheet defaultWorkbook={workbook} storage={false} onCommandResult={onCommandResult} />);
+
+    await user.click(screen.getByRole("button", { name: "Open AutoFilter menu for Region" }));
+    await user.click(within(screen.getByRole("menu", { name: "AutoFilter menu for Region" }))
+      .getByRole("menuitem", { name: "Sort A to Z" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Sort is not supported for selections that partially overlap a structured table. Select only cells within the table or convert it to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.sort" })
+    }));
+  });
+
+  it("explains how to remove duplicates when the selection is inside a structured table", async () => {
+    const user = userEvent.setup();
+    const onCommandResult = vi.fn();
+    render(
+      <Spreadsheet
+        defaultWorkbook={structuredTableWorkbook()}
+        storage={false}
+        onCommandResult={onCommandResult}
+      />
+    );
+
+    await user.click(screen.getByRole("gridcell", { name: "A2 West" }));
+    await user.click(screen.getByRole("button", { name: "Remove duplicates" }));
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Remove duplicates is not supported for structured tables. Convert the table to a range first."
+    );
+    expect(onCommandResult).not.toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({ type: "range.removeDuplicates" })
+    }));
   });
 
   it("sorts formula rows by evaluated values and keeps moved formulas relative", async () => {

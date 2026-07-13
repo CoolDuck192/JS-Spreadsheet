@@ -11,7 +11,7 @@ test("keeps the rightmost column menu inside desktop and narrow viewports", asyn
 
     const trigger = page.getByRole("button", { name: "Column options for Active", exact: true });
     await trigger.click();
-    const menu = page.getByRole("menu", { name: "Active column menu", exact: true });
+    const menu = page.getByRole("dialog", { name: "Active column menu", exact: true });
     await expect(menu).toBeVisible();
     const box = await menu.boundingBox();
     expect(box).not.toBeNull();
@@ -28,7 +28,7 @@ test("keeps the rightmost column menu inside desktop and narrow viewports", asyn
 test("keeps focus on a grid cell that light-dismisses a column menu", async ({ page }) => {
   await page.goto("/datatable");
   await page.getByRole("button", { name: "Column options for Employee", exact: true }).click();
-  const menu = page.getByRole("menu", { name: "Employee column menu", exact: true });
+  const menu = page.getByRole("dialog", { name: "Employee column menu", exact: true });
   const cell = page
     .getByRole("grid", { name: "Employee directory", exact: true })
     .locator('[role="gridcell"][tabindex="0"]');

@@ -53,21 +53,40 @@ describe("structuredFormula", () => {
   it("imports headers, totals, data, all, and adjacent column ranges", () => {
     expect(
       expectFormula(structuredFormulaToA1("=SalesTable[[#Headers],[Region]]", salesTable, 1))
-    ).toBe("=C1");
+    ).toBe("=C$1");
     expect(
       expectFormula(structuredFormulaToA1("=SalesTable[[#Totals],[Amount]]", salesTable, 1))
-    ).toBe("=F6");
+    ).toBe("=F$6");
     expect(
       expectFormula(structuredFormulaToA1("=SUM(SalesTable[[#Data],[Amount]])", salesTable, 1))
-    ).toBe("=SUM(F2:F5)");
+    ).toBe("=SUM(F$2:F$5)");
     expect(
       expectFormula(structuredFormulaToA1("=SUM(SalesTable[[#All],[Amount]])", salesTable, 1))
-    ).toBe("=SUM(F1:F6)");
+    ).toBe("=SUM(F$1:F$6)");
     expect(
       expectFormula(
         structuredFormulaToA1("=SUM(SalesTable[[#Data],[Units]:[Amount]])", salesTable, 1)
       )
-    ).toBe("=SUM(D2:F5)");
+    ).toBe("=SUM(D$2:F$5)");
+  });
+
+  it("imports single item specifiers without treating them as column names", () => {
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Headers]", salesTable, 1))).toBe("=A$1:G$1");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Data]", salesTable, 1))).toBe("=A$2:G$5");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#Totals]", salesTable, 1))).toBe("=A$6:G$6");
+    expect(expectFormula(structuredFormulaToA1("=SalesTable[#All]", salesTable, 1))).toBe("=A$1:G$6");
+
+    const escapedSelectorColumn: StructuredTable = {
+      ...salesTable,
+      range: { ...salesTable.range, end: { ...salesTable.range.end, column: 7 } },
+      columns: [
+        ...salesTable.columns,
+        { id: "selector-column", name: "#Data", sheetColumn: 7 }
+      ]
+    };
+    expect(expectFormula(
+      structuredFormulaToA1("=SalesTable['#Data]", escapedSelectorColumn, 1)
+    )).toBe("=H$2:H$5");
   });
 
   it("decodes and re-encodes escaped right brackets, pound signs, and apostrophes in headers", () => {
@@ -96,6 +115,52 @@ describe("structuredFormula", () => {
     expect(expectFormula(a1FormulaToStructured("=SUM(F1:F6)", salesTable, 1))).toBe(
       "=SUM(SalesTable[[#All],[Amount]])"
     );
+  });
+
+  it("distinguishes a locked one-row data selector from an unlocked current row", () => {
+    const oneRowTable: StructuredTable = {
+      id: "one-row-table",
+      name: "Calculated",
+      sheetId: "sheet-1",
+      range: {
+        start: { row: 0, column: 2 },
+        end: { row: 1, column: 2 }
+      },
+      headerRow: true,
+      totalsRow: false,
+      columns: [{ id: "quantity", name: "Quantity", sheetColumn: 2 }],
+      rowIds: ["row-1"]
+    };
+
+    expect(expectFormula(a1FormulaToStructured("=SUM(C2)", oneRowTable, 1))).toBe(
+      "=SUM(Calculated[@Quantity])"
+    );
+    expect(expectFormula(a1FormulaToStructured("=SUM(C$2)", oneRowTable, 1))).toBe(
+      "=SUM(Calculated[[#Data],[Quantity]])"
+    );
+    expect(expectFormula(a1FormulaToStructured("=SUM(C2:C$2)", oneRowTable, 1))).toBe(
+      "=SUM(C2:C$2)"
+    );
+  });
+
+  it.each([
+    ["an A1-shaped sheet name", "='A1'!B2+C2", "='A1'!B2+SalesTable[@Region]"],
+    ["an escaped apostrophe in a sheet name", "='Sheet''s'!B2+C2", "='Sheet''s'!B2+SalesTable[@Region]"]
+  ])("preserves %s while exporting local A1 references", (_label, formula, expected) => {
+    expect(expectFormula(a1FormulaToStructured(formula, salesTable, 1))).toBe(expected);
+  });
+
+  it("skips a quoted A1 qualifier when the same local range key is recognized", () => {
+    expect(expectFormula(a1FormulaToStructured("='A1'!B2+A1", salesTable, 1))).toBe(
+      "='A1'!B2+SalesTable[[#Headers],[Order ID]]"
+    );
+  });
+
+  it.each([
+    ["=OtherTable[Net'#Amount]+C2", "=OtherTable[Net'#Amount]+SalesTable[@Region]"],
+    ["=OtherTable[Net''Amount]+C2", "=OtherTable[Net''Amount]+SalesTable[@Region]"]
+  ])("preserves structured-reference apostrophe escapes in %s", (formula, expected) => {
+    expect(expectFormula(a1FormulaToStructured(formula, salesTable, 1))).toBe(expected);
   });
 
   it("round-trips an equivalent structured formula from the first body row", () => {

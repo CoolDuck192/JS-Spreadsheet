@@ -33,6 +33,7 @@ function StatefulViewport({
   withRowHeaders = true,
   onColumnHeaderContextMenu,
   onRegisterApi,
+  interactionEventMode = "pointer",
   initialSelection = {
     anchor: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" },
     focus: { rowId: viewportRows[0]?.id ?? "", columnId: viewportColumns[0]?.id ?? "" }
@@ -47,6 +48,7 @@ function StatefulViewport({
   withRowHeaders?: boolean;
   onColumnHeaderContextMenu?: GridViewportProps["onColumnHeaderContextMenu"];
   onRegisterApi?: GridViewportProps["onRegisterApi"];
+  interactionEventMode?: GridViewportProps["interactionEventMode"];
   initialSelection?: TableSelection | null;
 }) {
   const [selection, setSelection] = useState<TableSelection | null>(initialSelection);
@@ -82,6 +84,7 @@ function StatefulViewport({
         renderRowHeader={withRowHeaders ? (row) => row.label : undefined}
         onColumnHeaderContextMenu={onColumnHeaderContextMenu}
         onRegisterApi={onRegisterApi}
+        interactionEventMode={interactionEventMode}
         announce={`${viewportRows.length} rows loaded`}
       />
       <output data-testid={`${idPrefix}-last-interaction`}>{JSON.stringify(lastInteraction)}</output>
@@ -237,6 +240,39 @@ describe("GridViewport", () => {
     expect(screen.getByRole("gridcell", { name: "Grace Salary" })).toHaveAttribute("aria-invalid", "true");
   });
 
+  it("keeps pinned columns in their natural grid slots", () => {
+    const pinnedColumns: readonly GridViewportColumn[] = [
+      { ...columns[0], pinned: "left" },
+      { ...columns[1], pinned: "left" },
+      { ...columns[2], pinned: "right" }
+    ];
+    render(<StatefulViewport viewportColumns={pinnedColumns} />);
+
+    expect(screen.getByRole("row", { name: "Column headers" })).toHaveStyle({
+      display: "grid",
+      gridTemplateColumns: "56px 120px 100px 90px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Name" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "2",
+      left: "56px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Salary" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "3",
+      left: "176px"
+    });
+    expect(screen.getByRole("columnheader", { name: "Active" })).toHaveStyle({
+      position: "sticky",
+      gridColumn: "4",
+      right: "0px"
+    });
+    expect(screen.getByRole("gridcell", { name: "Ada Active" })).toHaveStyle({
+      gridColumn: "4",
+      right: "0px"
+    });
+  });
+
   it("forwards native context-menu events from column headers", () => {
     const contexts: Array<{ column: string; x: number; y: number }> = [];
     render(
@@ -303,6 +339,99 @@ describe("GridViewport", () => {
     });
   });
 
+  it("captures pointer drags and ends them when release happens outside the grid", () => {
+    render(<StatefulViewport />);
+    const adaName = screen.getByRole("gridcell", { name: "Ada Name" });
+    const graceSalary = screen.getByRole("gridcell", { name: "Grace Salary" });
+    const linActive = screen.getByRole("gridcell", { name: "Lin Active" });
+    const setPointerCapture = vi.fn();
+    Object.defineProperty(adaName, "setPointerCapture", { configurable: true, value: setPointerCapture });
+
+    fireEvent.pointerDown(adaName, { pointerId: 7 });
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    fireEvent.pointerEnter(linActive);
+    const releasedSelection = readLastInteraction("people").selection;
+    fireEvent.pointerUp(window, { pointerId: 7 });
+    fireEvent.pointerEnter(graceSalary);
+
+    expect(readLastInteraction("people").selection).toEqual(releasedSelection);
+  });
+
+  it("ends legacy mouse drags when mouseup happens outside the grid", () => {
+    render(<StatefulViewport interactionEventMode="mouse" />);
+    const adaName = screen.getByRole("gridcell", { name: "Ada Name" });
+    const graceSalary = screen.getByRole("gridcell", { name: "Grace Salary" });
+    const linActive = screen.getByRole("gridcell", { name: "Lin Active" });
+
+    fireEvent.mouseDown(adaName);
+    fireEvent.mouseEnter(linActive);
+    const releasedSelection = readLastInteraction("people").selection;
+    fireEvent.mouseUp(window);
+    fireEvent.mouseEnter(graceSalary);
+
+    expect(readLastInteraction("people").selection).toEqual(releasedSelection);
+  });
+
+  it("keeps scroll position when selecting and editing a pinned cell", () => {
+    const pinnedRows: readonly GridViewportRow[] = [
+      { ...rows[0], pinned: "top" },
+      ...rows.slice(1)
+    ];
+    const pinnedColumns: readonly GridViewportColumn[] = [
+      { ...columns[0], pinned: "left" },
+      ...columns.slice(1)
+    ];
+    render(<StatefulViewport viewportRows={pinnedRows} viewportColumns={pinnedColumns} />);
+    const grid = screen.getByRole("grid", { name: "People grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 240 },
+      scrollLeft: { configurable: true, writable: true, value: 180 }
+    });
+    const pinnedCell = screen.getByRole("gridcell", { name: "Ada Name" });
+
+    fireEvent.pointerDown(pinnedCell);
+    expect({ top: grid.scrollTop, left: grid.scrollLeft }).toEqual({ top: 240, left: 180 });
+
+    fireEvent.doubleClick(pinnedCell);
+    const overlay = screen.getByRole("textbox", { name: "Edit Ada Name" }).parentElement;
+    expect(overlay).toHaveStyle({ top: "268px", left: "236px" });
+    expect({ top: grid.scrollTop, left: grid.scrollLeft }).toEqual({ top: 240, left: 180 });
+  });
+
+  it("scrolls upward targets below the pinned-row band", () => {
+    const pinnedRows: readonly GridViewportRow[] = Array.from({ length: 100 }, (_, index) => ({
+      id: `pinned-band-row-${index}`,
+      label: `Pinned band row ${index}`,
+      height: index === 0 ? 32 : 28,
+      kind: "data",
+      ariaRowIndex: index + 2,
+      ...(index === 0 ? { pinned: "top" as const } : {})
+    }));
+    let api: Parameters<NonNullable<GridViewportProps["onRegisterApi"]>>[0] | null = null;
+    render(
+      <StatefulViewport
+        ariaLabel="Pinned band grid"
+        viewportRows={pinnedRows}
+        onRegisterApi={(next) => { api = next; }}
+        initialSelection={null}
+      />
+    );
+    const grid = screen.getByRole("grid", { name: "Pinned band grid" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 280 },
+      clientWidth: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 1_500 },
+      scrollLeft: { configurable: true, writable: true, value: 0 }
+    });
+
+    act(() => api?.ensureCellVisible("pinned-band-row-50", "salary"));
+
+    const targetStart = 32 + 49 * 28;
+    expect(grid.scrollTop).toBe(targetStart - 32);
+  });
+
   it("navigates by keyboard and keeps exactly one roving tab stop", () => {
     render(<StatefulViewport />);
     const grid = screen.getByRole("grid", { name: "People grid" });
@@ -330,6 +459,11 @@ describe("GridViewport", () => {
     const editor = screen.getByRole("textbox", { name: "Edit Ada Name" });
     expect(editor).toHaveValue("Ada Name");
     expect(editor.parentElement).toHaveAttribute("data-grid-editor-overlay", "true");
+    expect(editor.parentElement).toHaveClass(
+      "js-spreadsheet-grid__cell",
+      "js-spreadsheet-grid__editing-cell"
+    );
+    expect(editor.parentElement).not.toHaveClass("cell", "editing-cell");
     expect(editor.parentElement).toHaveStyle({ top: "28px", left: "56px", width: "120px", height: "32px" });
     fireEvent.change(editor, { target: { value: "Ada Lovelace" } });
     fireEvent.keyDown(editor, { key: "Enter" });

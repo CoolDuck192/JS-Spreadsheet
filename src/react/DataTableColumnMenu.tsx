@@ -67,17 +67,20 @@ export function DataTableColumnMenu<TRow>({
     let closed = false;
     let shown = false;
 
-    const close = (restoreFocus = true, hide = true) => {
+    const hide = () => {
+      if (!shown) return;
+      shown = false;
+      try {
+        menu.hidePopover();
+      } catch {
+        // The browser may already have light-dismissed the popover.
+      }
+    };
+
+    const close = (restoreFocus = true, shouldHide = true) => {
       if (closed) return;
       closed = true;
-      if (hide && shown) {
-        shown = false;
-        try {
-          menu.hidePopover();
-        } catch {
-          // The browser may already have light-dismissed the popover.
-        }
-      }
+      if (shouldHide) hide();
       if (restoreFocus && anchor.isConnected) anchor.focus();
       onClose(anchor);
     };
@@ -149,7 +152,7 @@ export function DataTableColumnMenu<TRow>({
       view.removeEventListener("resize", handleResize);
       observer.disconnect();
       closeRef.current = () => {};
-      close(false);
+      hide();
     };
   }, [anchor, onClose]);
 
@@ -200,7 +203,9 @@ export function DataTableColumnMenu<TRow>({
     next.splice(index, 1);
     next.splice(target, 0, column.id);
     const result = await run({ type: "set-column-order", columnIds: next });
-    if (result.status === "committed") onAnnouncement(`${label} moved to position ${target + 1}`);
+    if (result.status === "committed" && result.changed) {
+      onAnnouncement(`${label} moved to position ${target + 1}`);
+    }
   }
 
   return (
@@ -208,7 +213,7 @@ export function DataTableColumnMenu<TRow>({
       ref={menuRef}
       popover="auto"
       className="js-spreadsheet-data-table__column-menu"
-      role="menu"
+      role="dialog"
       aria-label={`${label} column menu`}
       style={{ position: "fixed", top: position.top, left: position.left }}
       onKeyDown={(event) => {

@@ -41,6 +41,7 @@ corepack pnpm exec vite preview --host 0.0.0.0 --port 4173 --strictPort
 
 ```bash
 corepack pnpm test                     # unit tests (Vitest, jsdom)
+corepack pnpm run test:perf            # performance benchmarks
 corepack pnpm exec playwright install  # once, downloads browsers
 ```
 
@@ -54,7 +55,11 @@ E2E_BASE_URL=http://192.168.6.232:4173 corepack pnpm run test:e2e
 When `E2E_BASE_URL` is set, Playwright does not start its configured development
 server.
 
-The 100k-row engine benchmark lives at `src/lib/formulaEngine.perf.test.ts`. On slow or contended CI runners, set `SKIP_PERF_ASSERT=1` to keep its correctness checks but skip the wall-clock thresholds.
+Performance benchmarks do not run as part of `pnpm test`; run them explicitly with
+`corepack pnpm run test:perf`. The 100k-row engine benchmark lives at
+`src/lib/formulaEngine.perf.test.ts`. On slow or contended CI runners, run
+`SKIP_PERF_ASSERT=1 corepack pnpm run test:perf` to keep its correctness checks but
+skip the wall-clock thresholds.
 
 ## First five minutes in the app
 

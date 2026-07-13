@@ -35,6 +35,7 @@ export type UseGridInteractionOptions = {
 
 export type GridInteractionBindings = {
   onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void;
+  requestFocusRestoration(ensureVisible?: boolean): void;
   onCellPointerDown(cell: TableCellRef, extend: boolean): void;
   onCellPointerEnter(cell: TableCellRef): void;
   onPointerUp(): void;
@@ -62,6 +63,7 @@ export function useGridInteraction({
   const draggingRef = useRef(false);
   const dragAnchorRef = useRef<TableCellRef | null>(null);
   const focusPendingRef = useRef(false);
+  const ensureFocusVisibleRef = useRef(false);
   const previousEditingRef = useRef<GridEditorState | null>(editing);
   const activeCell = resolveActiveCell(
     controlledActiveCell ?? selection?.focus ?? null,
@@ -70,20 +72,26 @@ export function useGridInteraction({
   );
   const activeDescendantId = activeCell ? gridCellDomId(idPrefix, activeCell) : undefined;
 
+  const requestFocusRestoration = useCallback((ensureVisible = true) => {
+    focusPendingRef.current = true;
+    ensureFocusVisibleRef.current = ensureVisible;
+  }, []);
+
   const emitSelection = useCallback(
-    (nextSelection: TableSelection) => {
-      focusPendingRef.current = true;
+    (nextSelection: TableSelection, ensureVisible = true) => {
+      requestFocusRestoration(ensureVisible);
       const rowIndex = rowIndexById.get(nextSelection.focus.rowId);
       const columnIndex = columnIndexById.get(nextSelection.focus.columnId);
-      if (rowIndex !== undefined && columnIndex !== undefined) {
+      if (ensureVisible && rowIndex !== undefined && columnIndex !== undefined) {
         ensureCellVisible(rowIndex, columnIndex);
       }
-      if (!document.getElementById(gridCellDomId(idPrefix, nextSelection.focus))) {
+      const targetId = gridCellDomId(idPrefix, nextSelection.focus);
+      if (!rootRef.current?.querySelector(`[id="${targetId}"]`)) {
         rootRef.current?.focus({ preventScroll: true });
       }
       onInteraction({ type: "selection-change", selection: nextSelection });
     },
-    [columnIndexById, ensureCellVisible, idPrefix, onInteraction, rootRef, rowIndexById]
+    [columnIndexById, ensureCellVisible, idPrefix, onInteraction, requestFocusRestoration, rootRef, rowIndexById]
   );
 
   const moveSelection = useCallback(
@@ -203,7 +211,7 @@ export function useGridInteraction({
       const next = reduceGridInteraction(state, { type: "pointer-down", cell, extend }, model);
       draggingRef.current = true;
       dragAnchorRef.current = next.selection.anchor;
-      emitSelection(next.selection);
+      emitSelection(next.selection, false);
     },
     [activeCell, editing, emitSelection, model, selection]
   );
@@ -214,7 +222,7 @@ export function useGridInteraction({
       if (!draggingRef.current || !anchor) {
         return;
       }
-      emitSelection({ anchor, focus: { ...cell } });
+      emitSelection({ anchor, focus: { ...cell } }, false);
     },
     [emitSelection]
   );
@@ -225,8 +233,20 @@ export function useGridInteraction({
   }, []);
 
   useLayoutEffect(() => {
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    window.addEventListener("mouseup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("mouseup", onPointerUp);
+    };
+  }, [onPointerUp]);
+
+  useLayoutEffect(() => {
     if (previousEditingRef.current && !editing) {
       focusPendingRef.current = true;
+      ensureFocusVisibleRef.current = true;
     }
     previousEditingRef.current = editing;
     if (editing) {
@@ -237,13 +257,15 @@ export function useGridInteraction({
     }
     const rowIndex = rowIndexById.get(activeCell.rowId);
     const columnIndex = columnIndexById.get(activeCell.columnId);
-    if (rowIndex !== undefined && columnIndex !== undefined) {
+    if (ensureFocusVisibleRef.current && rowIndex !== undefined && columnIndex !== undefined) {
       ensureCellVisible(rowIndex, columnIndex);
     }
-    const activeElement = document.getElementById(gridCellDomId(idPrefix, activeCell));
+    const activeId = gridCellDomId(idPrefix, activeCell);
+    const activeElement = rootRef.current?.querySelector(`[id="${activeId}"]`);
     if (activeElement instanceof HTMLElement) {
       activeElement.focus({ preventScroll: true });
       focusPendingRef.current = false;
+      ensureFocusVisibleRef.current = false;
     } else {
       rootRef.current?.focus({ preventScroll: true });
     }
@@ -251,6 +273,7 @@ export function useGridInteraction({
 
   return {
     onKeyDown,
+    requestFocusRestoration,
     onCellPointerDown,
     onCellPointerEnter,
     onPointerUp,

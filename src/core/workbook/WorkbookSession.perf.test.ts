@@ -62,6 +62,38 @@ describe("WorkbookSession at 100,000 rows", () => {
       session.destroy();
     }
 
+    const bulkSession = createWorkbookSession({
+      workbook,
+      formulaEngineFactory: createRawProjection
+    });
+    try {
+      const bulkClearStarted = performance.now();
+      const bulkClear = bulkSession.dispatch({
+        type: "range.clear",
+        sheetId,
+        range: {
+          start: { row: 0, column: 0 },
+          end: { row: LARGE_ROW_COUNT - 1, column: 0 }
+        },
+        mode: "contents"
+      });
+      const bulkClearMs = performance.now() - bulkClearStarted;
+      expect(bulkClear).toEqual({ status: "committed", revision: "1", changed: true });
+      expect(getCellContent(bulkSession.getSnapshot().workbook, sheetId, "A1")).toBeNull();
+      expect(getCellContent(
+        bulkSession.getSnapshot().workbook,
+        sheetId,
+        `A${LARGE_ROW_COUNT}`
+      )).toBeNull();
+      // eslint-disable-next-line no-console
+      console.log(`table-free-100k-content-clear=${Math.round(bulkClearMs)}ms`);
+      if (!process.env.SKIP_PERF_ASSERT) {
+        expect(bulkClearMs).toBeLessThan(10_000);
+      }
+    } finally {
+      bulkSession.destroy();
+    }
+
     const historyStarted = performance.now();
     const historySession = createWorkbookSession({
       workbook,

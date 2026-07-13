@@ -81,6 +81,38 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("allows row insertion past existing read-only cells but protects the expansion band", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-ada", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({ type: "insert-rows", count: 1 }))
+      .toMatchObject({ status: "committed", changed: true });
+    expect(table.getSnapshot().rowCount).toBe(3);
+    expect(table.getSnapshot().getCell("row-ada", "column-score").editable).toBe(false);
+    parent.destroy();
+
+    const protectedBandParent = createWorkbookSession({ workbook: workbookFixture() });
+    const protectedBandTable = protectedBandParent.table("table-people");
+    expect(protectedBandParent.dispatch({
+      type: "range.readOnly.set",
+      sheetId: "sheet-1",
+      range: { start: { row: 3, column: 1 }, end: { row: 3, column: 1 } },
+      readOnly: true
+    })).toMatchObject({ status: "committed" });
+
+    expect(await protectedBandTable.dispatch({ type: "insert-rows", count: 1 }))
+      .toMatchObject({
+        status: "rejected",
+        issues: [{ code: "TABLE_PROTECTED" }]
+      });
+    expect(protectedBandTable.getSnapshot().rowCount).toBe(2);
+    protectedBandParent.destroy();
+  });
+
   it("reads current values lazily and retains column definitions across value-only revisions", () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
@@ -137,6 +169,43 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("keeps read-only metadata attached to stable row IDs through sorting", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-grace", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({
+      type: "set-sorting",
+      sorting: [{ columnId: "column-score", direction: "desc" }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(table.getSnapshot().getCell("row-grace", "column-score").editable).toBe(false);
+    expect(table.getSnapshot().getCell("row-ada", "column-score").editable).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B2")).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B3")).toBe(false);
+    parent.destroy();
+  });
+
+  it("keeps read-only metadata attached to stable row IDs through deletion", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{ rowId: "row-grace", columnId: "column-score", patch: { readOnly: true } }]
+    })).toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({ type: "delete-rows", rowIds: ["row-ada"] }))
+      .toMatchObject({ status: "committed" });
+
+    expect(table.getSnapshot().getCell("row-grace", "column-score").editable).toBe(false);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B2")).toBe(true);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "B3")).toBe(false);
+    parent.destroy();
+  });
+
   it("validates metadata IDs before dispatch and commits a valid metadata batch once", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
@@ -188,6 +257,99 @@ describe("WorkbookTableSession", () => {
     parent.destroy();
   });
 
+  it("orders combined read-only metadata patches atomically", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    let publications = 0;
+    parent.subscribe(() => { publications += 1; });
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { formula: "=B2", readOnly: true }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(1);
+    expect(getCellContent(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe("=B2");
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe(true);
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { readOnly: false, format: { bold: true }, comment: "unlocked" }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(2);
+    expect(getCellReadOnly(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe(false);
+    expect(getCellFormat(parent.getSnapshot().workbook, "sheet-1", "A2")).toMatchObject({ bold: true });
+    expect(getCellComment(parent.getSnapshot().workbook, "sheet-1", "A2")).toBe("unlocked");
+    parent.destroy();
+  });
+
+  it("replaces workbook table formats so omitted fields are cleared", async () => {
+    const workbook = workbookFixture();
+    workbook.sheets[0] = {
+      ...workbook.sheets[0],
+      formats: { A2: { backgroundColor: "#eaf7f2", bold: true } }
+    };
+    const parent = createWorkbookSession({ workbook });
+    const table = parent.table("table-people");
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [{
+        rowId: "row-ada",
+        columnId: "column-name",
+        patch: { format: { bold: true } }
+      }]
+    })).toMatchObject({ status: "committed", changed: true });
+    expect(getCellFormat(parent.getSnapshot().workbook, "sheet-1", "A2"))
+      .toEqual({ bold: true });
+
+    parent.destroy();
+  });
+
+  it("applies repeated metadata targets with deterministic last-write-wins semantics", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    let publications = 0;
+    parent.subscribe(() => { publications += 1; });
+
+    expect(await table.dispatch({
+      type: "update-cell-metadata",
+      updates: [
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { comment: "first", format: { bold: true } }
+        },
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { comment: "last", validation: { kind: "textLength", min: 1 } }
+        },
+        {
+          rowId: "row-ada", columnId: "column-name",
+          patch: { format: { italic: true }, formula: "=B2", readOnly: true }
+        }
+      ]
+    })).toMatchObject({ status: "committed", changed: true });
+
+    const workbook = parent.getSnapshot().workbook;
+    expect(publications).toBe(1);
+    expect(getCellComment(workbook, "sheet-1", "A2")).toBe("last");
+    expect(getCellFormat(workbook, "sheet-1", "A2")).toMatchObject({ italic: true });
+    expect(getCellFormat(workbook, "sheet-1", "A2").bold).not.toBe(true);
+    expect(getCellValidation(workbook, "sheet-1", "A2")).toMatchObject({
+      type: "textLength", min: 1
+    });
+    expect(getCellContent(workbook, "sheet-1", "A2")).toBe("=B2");
+    expect(getCellReadOnly(workbook, "sheet-1", "A2")).toBe(true);
+    parent.destroy();
+  });
+
   it("routes selection, clearing, resizing, visibility, and replacement through stable IDs", async () => {
     const parent = createWorkbookSession({ workbook: workbookFixture() });
     const table = parent.table("table-people");
@@ -230,6 +392,42 @@ describe("WorkbookTableSession", () => {
     expect(parent.table("table-people")).toBe(table);
     expect(table.getSnapshot().getCell("row-ada", "column-score").storedValue).toBe(99);
 
+    parent.destroy();
+  });
+
+  it("preserves a local null selection after a replacement selection is rejected", async () => {
+    const parent = createWorkbookSession({ workbook: workbookFixture() });
+    const table = parent.table("table-people");
+    const worksheetSelection = {
+      anchor: { rowId: "row-ada", columnId: "column-name" },
+      focus: { rowId: "row-ada", columnId: "column-name" }
+    } as const;
+    expect(await table.dispatch({ type: "set-selection", selection: worksheetSelection }))
+      .toMatchObject({ status: "committed" });
+    expect(await table.dispatch({ type: "set-selection", selection: null }))
+      .toMatchObject({ status: "committed" });
+
+    expect(await table.dispatch({
+      type: "set-selection",
+      selection: {
+        anchor: { rowId: "missing", columnId: "column-name" },
+        focus: { rowId: "missing", columnId: "column-name" }
+      }
+    })).toMatchObject({ status: "rejected", reason: "validation" });
+    expect(parent.dispatch({
+      type: "cell.set",
+      sheetId: "sheet-1",
+      address: "D1",
+      input: "unrelated"
+    })).toMatchObject({ status: "committed" });
+    expect(table.getSnapshot().selection).toBeNull();
+
+    let publications = 0;
+    table.subscribe(() => { publications += 1; });
+    expect(await table.dispatch({ type: "set-selection", selection: worksheetSelection }))
+      .toMatchObject({ status: "committed", changed: true });
+    expect(publications).toBe(1);
+    expect(table.getSnapshot().selection).toEqual(worksheetSelection);
     parent.destroy();
   });
 

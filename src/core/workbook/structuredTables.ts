@@ -12,14 +12,16 @@ import type {
 } from "../../types";
 import type { ComputedCellValue } from "../../lib/formulaEngine";
 import { formatCellAddress } from "../../lib/addressing";
-import { translateFormulaReferences } from "../../lib/formulaReferences";
 import { getCellContent, getCellReadOnly, setCellContent, setCellFormat } from "../../lib/workbook";
 import { parseCellInput } from "../values/parseCellInput";
 import type { FilterExpression, TableSort } from "../../table/core/query";
 import { normalizeExcelTableNameKey, validateExcelTableName } from "./tableNames";
+import { isSupportedTableAggregate, migrateTableFilter } from "./migrateWorkbook";
 import {
   deleteStructuredTableRows,
   insertStructuredTableRows,
+  rewriteWorkbookForRowEdits,
+  rewriteWorkbookForRowMove,
   setStructuredTableCalculatedColumn,
   sortStructuredTableRows
 } from "./structuredTableRows";
@@ -109,6 +111,105 @@ export function getStructuredTableBodyRange(table: StructuredTable): CellRange |
       };
 }
 
+export function regenerateStructuredTableTotals(
+  workbook: WorkbookModel,
+  table: StructuredTable
+): WorkbookModel {
+  if (!table.totalsRow) return workbook;
+  let next = workbook;
+  for (const column of table.columns) {
+    const aggregate = column.totalsFunction;
+    if (!aggregate || aggregate === "none") continue;
+    next = setRawCell(
+      next,
+      table.sheetId,
+      { row: table.range.end.row, column: column.sheetColumn },
+      totalsFormula(table, column, aggregate)
+    );
+  }
+  return next;
+}
+
+export function reconcileStructuredTableContentWrites(
+  workbook: WorkbookModel,
+  sheetId: string,
+  coordinates: readonly CellCoord[]
+): StructuredTableReduction {
+  const touched = new Set(coordinates.map((coordinate) => `${coordinate.row}:${coordinate.column}`));
+  const headerNames = new Map<string, readonly string[]>();
+
+  for (const table of workbook.tables) {
+    if (table.sheetId !== sheetId || !table.headerRow) continue;
+    const headerTouched = table.columns.some((column) =>
+      touched.has(`${table.range.start.row}:${column.sheetColumn}`)
+    );
+    if (!headerTouched) continue;
+
+    const names: string[] = [];
+    const normalizedNames = new Set<string>();
+    for (const column of table.columns) {
+      const value = getCellContent(
+        workbook,
+        sheetId,
+        formatCellAddress({ row: table.range.start.row, column: column.sheetColumn })
+      );
+      if (typeof value !== "string" || value.trim().length === 0) {
+        return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be nonblank and unique");
+      }
+      const normalized = normalizeStructuredTableHeader(value);
+      if (normalizedNames.has(normalized)) {
+        return reject(workbook, "TABLE_HEADER_INVALID", "Table headers must be nonblank and unique");
+      }
+      normalizedNames.add(normalized);
+      names.push(value);
+    }
+    headerNames.set(table.id, names);
+  }
+
+  let changed = false;
+  const tables = workbook.tables.map((table) => {
+    if (table.sheetId !== sheetId) return table;
+    const names = headerNames.get(table.id);
+    const totalsTouched = table.totalsRow && table.columns.some((column) =>
+      touched.has(`${table.range.end.row}:${column.sheetColumn}`)
+    );
+    if (!names && !totalsTouched) return table;
+
+    const columns = table.columns.map((column, index) => {
+      let next = column;
+      const name = names?.[index];
+      if (name !== undefined && name !== column.name) {
+        next = { ...next, name };
+      }
+      if (table.totalsRow && touched.has(`${table.range.end.row}:${column.sheetColumn}`)) {
+        const value = getCellContent(
+          workbook,
+          sheetId,
+          formatCellAddress({ row: table.range.end.row, column: column.sheetColumn })
+        );
+        const totalsLabel = index === 0
+          && typeof value === "string"
+          && !value.startsWith("=")
+          && value.trim().length > 0
+          ? value
+          : undefined;
+        if (next.totalsFunction !== undefined || next.totalsLabel !== totalsLabel) {
+          const { totalsFunction: _function, totalsLabel: _label, ...base } = next;
+          next = totalsLabel === undefined ? base : { ...base, totalsLabel };
+        }
+      }
+      return next;
+    });
+
+    if (columns.every((column, index) => column === table.columns[index])) return table;
+    changed = true;
+    return { ...table, columns };
+  });
+
+  return changed
+    ? { status: "committed", workbook: { ...workbook, tables } }
+    : { status: "unchanged", workbook };
+}
 export function reduceStructuredTableCommand(
   workbook: WorkbookModel,
   command: StructuredTableCommand,
@@ -249,11 +350,49 @@ function resizeTable(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  const resized = resizeStructuredTableMetadata(workbook, tableId, requestedRange, services);
+  if (resized.status !== "committed" || !table.totalsRow) return resized;
+  const resizedTable = getStructuredTable(resized.workbook, tableId)!;
+  if (resizedTable.range.end.row === table.range.end.row) return resized;
+
+  const commonColumnEnd = Math.min(table.range.end.column, resizedTable.range.end.column);
+  const rewritten = rewriteWorkbookForRowMove(resized.workbook, table, {
+    sourceRow: table.range.end.row,
+    targetRow: resizedTable.range.end.row,
+    columnStart: table.range.start.column,
+    columnEnd: commonColumnEnd
+  }, { rewriteCalculatedFormulaMetadata: true });
+  if (rewritten.status === "rejected") return { ...rewritten, workbook };
+  const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+
+  let next = rotateTableTotalsRow(
+    rewritten.workbook,
+    table.sheetId,
+    {
+      start: { ...table.range.start },
+      end: { row: rewrittenTable.range.end.row, column: commonColumnEnd }
+    },
+    table.range.end.row,
+    rewrittenTable.range.end.row
+  );
+  next = regenerateStructuredTableTotals(next, rewrittenTable);
+  return { status: "committed", workbook: next };
+}
+
+export function resizeStructuredTableMetadata(
+  workbook: WorkbookModel,
+  tableId: string,
+  requestedRange: CellRange,
+  services: StructuredTableCommandServices,
+  readOnlyRange: CellRange = requestedRange
+): StructuredTableReduction {
+  const table = getStructuredTable(workbook, tableId);
+  if (!table) return tableNotFound(workbook);
   const range = cloneRange(requestedRange);
   if (range.start.row !== table.range.start.row || range.start.column !== table.range.start.column) {
     return reject(workbook, "TABLE_RANGE_BLOCKED", "Table resize must preserve its top-left cell");
   }
-  const issue = validateRange(workbook, table.sheetId, range, table.id);
+  const issue = validateRange(workbook, table.sheetId, range, table.id, readOnlyRange);
   if (issue) return { status: "rejected", workbook, issues: [issue] };
   const height = range.end.row - range.start.row + 1;
   if (height < Number(table.headerRow) + Number(table.totalsRow)) {
@@ -326,21 +465,51 @@ function setHeaderRow(workbook: WorkbookModel, tableId: string, enabled: boolean
     if (!rowSliceIsEmpty(workbook, table.sheetId, table.range.end.row + 1, table.range)) {
       return reject(workbook, "TABLE_RANGE_BLOCKED", "Enabling headers would overwrite populated cells");
     }
-    let next = shiftTableSlice(workbook, table, table.range.start.row, table.range.end.row, 1);
-    for (const column of table.columns) {
+    const rewritten = rewriteWorkbookForRowEdits(workbook, table, [{
+      row: table.range.start.row,
+      count: 1,
+      operation: "insert"
+    }], { rewriteCalculatedFormulaMetadata: true });
+    if (rewritten.status === "rejected") return rewritten;
+    const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+    let next = shiftTableSlice(
+      rewritten.workbook,
+      rewrittenTable,
+      table.range.start.row,
+      table.range.end.row,
+      1
+    );
+    for (const column of rewrittenTable.columns) {
       next = setRawCell(next, table.sheetId, { row: table.range.start.row, column: column.sheetColumn }, column.name);
     }
-    return commitTable(next, { ...table, range, headerRow: true });
+    const nextTable = { ...rewrittenTable, range, headerRow: true };
+    next = regenerateStructuredTableTotals(next, nextTable);
+    return commitTable(next, nextTable);
   }
 
   if (table.range.end.row - 1 < table.range.start.row) {
     return reject(workbook, "TABLE_RANGE_BLOCKED", "A table must retain at least one physical row");
   }
 
-  let next = shiftTableSlice(workbook, table, table.range.start.row + 1, table.range.end.row, -1);
+  const rewritten = rewriteWorkbookForRowEdits(workbook, table, [{
+    row: table.range.start.row,
+    count: 1,
+    operation: "delete"
+  }], { rewriteCalculatedFormulaMetadata: true });
+  if (rewritten.status === "rejected") return rewritten;
+  const rewrittenTable = getStructuredTable(rewritten.workbook, tableId)!;
+  let next = shiftTableSlice(
+    rewritten.workbook,
+    rewrittenTable,
+    table.range.start.row + 1,
+    table.range.end.row,
+    -1
+  );
   next = clearRowSlice(next, table.sheetId, table.range.end.row, table.range);
   const range = { ...cloneRange(table.range), end: { ...table.range.end, row: table.range.end.row - 1 } };
-  return commitTable(next, { ...table, range, headerRow: false });
+  const nextTable = { ...rewrittenTable, range, headerRow: false };
+  next = regenerateStructuredTableTotals(next, nextTable);
+  return commitTable(next, nextTable);
 }
 
 function setTotalsRow(workbook: WorkbookModel, tableId: string, enabled: boolean): StructuredTableReduction {
@@ -373,6 +542,9 @@ function setTotalsFunction(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  if (!isSupportedTableAggregate(aggregate)) {
+    return reject(workbook, "TABLE_TOTALS_FUNCTION_INVALID", "Totals function is invalid");
+  }
   const columnIndex = table.columns.findIndex((column) => column.id === columnId);
   if (columnIndex < 0) return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Structured table column does not exist");
   if (!table.totalsRow && aggregate !== "none") {
@@ -426,13 +598,34 @@ function setFilter(
 ): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
-  const columnIds = new Set(table.columns.map((column) => column.id));
-  if (filter && !everyFilterColumn(filter, columnIds)) {
-    return reject(workbook, "TABLE_COLUMN_NOT_FOUND", "Filter column does not belong to the table");
+  if (hasUnsupportedNotInCardinality(filter)) {
+    return reject(
+      workbook,
+      "TABLE_FILTER_INVALID",
+      "Excel table filters require one or two excluded values"
+    );
   }
-  if (JSON.stringify(table.filter) === JSON.stringify(filter)) return { status: "unchanged", workbook };
+  const columnIds = new Set(table.columns.map((column) => column.id));
+  const migratedFilter = migrateTableFilter(filter, columnIds);
+  if (migratedFilter === null) {
+    return reject(workbook, "TABLE_FILTER_INVALID", "Structured table filter is invalid");
+  }
+  if (JSON.stringify(table.filter) === JSON.stringify(migratedFilter)) {
+    return { status: "unchanged", workbook };
+  }
   const { filter: _current, ...base } = table;
-  return commitTable(workbook, filter === undefined ? base : { ...base, filter });
+  return commitTable(workbook, migratedFilter === undefined ? base : { ...base, filter: migratedFilter });
+}
+
+function hasUnsupportedNotInCardinality(filter: FilterExpression | undefined): boolean {
+  if (!filter) return false;
+  if (filter.kind === "logical") {
+    return Array.isArray(filter.operands) && filter.operands.some(hasUnsupportedNotInCardinality);
+  }
+  if (filter.kind === "not") return hasUnsupportedNotInCardinality(filter.operand);
+  return filter.kind === "set"
+    && filter.operator === "notIn"
+    && (!Array.isArray(filter.values) || filter.values.length === 0 || filter.values.length > 2);
 }
 
 function editCells(
@@ -517,7 +710,8 @@ function validateRange(
   workbook: WorkbookModel,
   sheetId: string,
   range: CellRange,
-  ownTableId?: string
+  ownTableId?: string,
+  readOnlyRange: CellRange = range
 ): TableIssue | null {
   const sheet = workbook.sheets.find((candidate) => candidate.id === sheetId);
   if (!sheet || !validRange(range)
@@ -531,8 +725,8 @@ function validateRange(
     return issue("TABLE_MERGE_CONFLICT", "Table range intersects a merged cell");
   }
   if (sheet.protection.isProtected) return issue("TABLE_PROTECTED", "Protected sheets cannot change tables");
-  for (let row = range.start.row; row <= range.end.row; row += 1) {
-    for (let column = range.start.column; column <= range.end.column; column += 1) {
+  for (let row = readOnlyRange.start.row; row <= readOnlyRange.end.row; row += 1) {
+    for (let column = readOnlyRange.start.column; column <= readOnlyRange.end.column; column += 1) {
       if (getCellReadOnly(workbook, sheetId, formatCellAddress({ row, column }))) {
         return issue("TABLE_PROTECTED", "Table range contains a locked cell");
       }
@@ -570,7 +764,7 @@ function shiftTableSlice(
 ): WorkbookModel {
   const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === table.sheetId);
   const sheet = workbook.sheets[sheetIndex];
-  const cells = shiftAddressRecord(sheet.cells, table.range, startRow, endRow, rowOffset, true);
+  const cells = shiftAddressRecord(sheet.cells, table.range, startRow, endRow, rowOffset);
   const formats = shiftAddressRecord(sheet.formats, table.range, startRow, endRow, rowOffset);
   const validations = shiftAddressRecord(sheet.validations, table.range, startRow, endRow, rowOffset);
   const comments = shiftAddressRecord(sheet.comments, table.range, startRow, endRow, rowOffset);
@@ -587,13 +781,70 @@ function shiftTableSlice(
   };
 }
 
+function rotateTableTotalsRow(
+  workbook: WorkbookModel,
+  sheetId: string,
+  range: CellRange,
+  sourceRow: number,
+  targetRow: number
+): WorkbookModel {
+  const sheetIndex = workbook.sheets.findIndex((sheet) => sheet.id === sheetId);
+  const sheet = workbook.sheets[sheetIndex];
+  const firstRow = Math.min(sourceRow, targetRow);
+  const lastRow = Math.max(sourceRow, targetRow);
+  const mappings: Array<{ sourceRow: number; targetRow: number }> = [];
+  if (targetRow > sourceRow) {
+    for (let row = sourceRow + 1; row <= targetRow; row += 1) {
+      mappings.push({ sourceRow: row, targetRow: row - 1 });
+    }
+  } else {
+    for (let row = targetRow; row < sourceRow; row += 1) {
+      mappings.push({ sourceRow: row, targetRow: row + 1 });
+    }
+  }
+  mappings.push({ sourceRow, targetRow });
+
+  const rotate = <T>(record: Readonly<Record<string, T>>): Record<string, T> => {
+    const next = { ...record };
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        delete next[formatCellAddress({ row, column })];
+      }
+    }
+    for (const mapping of mappings) {
+      for (let column = range.start.column; column <= range.end.column; column += 1) {
+        const sourceAddress = formatCellAddress({ row: mapping.sourceRow, column });
+        if (!Object.prototype.hasOwnProperty.call(record, sourceAddress)) continue;
+        next[formatCellAddress({ row: mapping.targetRow, column })] = record[sourceAddress];
+      }
+    }
+    return next;
+  };
+  const nextSheet: typeof sheet = {
+    ...sheet,
+    cells: rotate(sheet.cells),
+    formats: rotate(sheet.formats),
+    validations: rotate(sheet.validations),
+    comments: rotate(sheet.comments),
+    hyperlinks: rotate(sheet.hyperlinks),
+    protection: {
+      ...sheet.protection,
+      lockedCells: rotate(sheet.protection.lockedCells),
+      unlockedCells: rotate(sheet.protection.unlockedCells)
+    }
+  };
+  return {
+    ...workbook,
+    sheets: workbook.sheets.map((candidate, index) => index === sheetIndex ? nextSheet : candidate)
+  };
+}
+
 function shiftAddressRecord<T>(
   record: Readonly<Record<string, T>>,
   tableRange: CellRange,
   startRow: number,
   endRow: number,
-  rowOffset: number,
-  translateFormulas = false
+  rowOffset: number
 ): Record<string, T> {
   const next = { ...record };
   const sources: Array<{ source: string; target: string; value: T }> = [];
@@ -604,11 +855,7 @@ function shiftAddressRecord<T>(
       delete next[source];
       delete next[target];
       if (Object.prototype.hasOwnProperty.call(record, source)) {
-        let value = record[source];
-        if (translateFormulas && typeof value === "string" && value.startsWith("=")) {
-          value = translateFormulaReferences(value, { rowOffset, columnOffset: 0 }) as T;
-        }
-        sources.push({ source, target, value });
+        sources.push({ source, target, value: record[source] });
       }
     }
   }

@@ -1,7 +1,10 @@
 import type { TableIssue } from "../core/commands/types";
 import type { CellRange, StructuredTable, StructuredTableColumn } from "../types";
 import { columnIndexToName } from "./addressing";
-import { extractFormulaReferences } from "./formulaReferences";
+import {
+  extractFormulaReferences,
+  findSingleQuotedFormulaQualifierEnd
+} from "./formulaReferences";
 
 export type StructuredFormulaResult =
   | { ok: true; formula: string }
@@ -17,6 +20,7 @@ type ParsedStructuredReference = {
 
 type ParsedA1Reference = {
   range: CellRange;
+  rowLock: "locked" | "unlocked" | "mixed";
   endIndex: number;
 };
 
@@ -81,11 +85,20 @@ export function a1FormulaToStructured(
   let result = "";
   let cursor = 0;
   while (cursor < formula.length) {
-    if (formula[cursor] === '"') {
+    const character = formula[cursor];
+    if (character === '"') {
       const end = skipDoubleQuotedText(formula, cursor);
       result += formula.slice(cursor, end);
       cursor = end;
       continue;
+    }
+    if (character === "'") {
+      const end = findSingleQuotedFormulaQualifierEnd(formula, cursor);
+      if (end !== undefined) {
+        result += formula.slice(cursor, end);
+        cursor = end;
+        continue;
+      }
     }
 
     const reference = parseLocalA1ReferenceAt(formula, cursor);
@@ -95,7 +108,12 @@ export function a1FormulaToStructured(
       continue;
     }
 
-    const structured = a1RangeToStructured(reference.range, table, anchorBodyRow);
+    const structured = a1RangeToStructured(
+      reference.range,
+      table,
+      anchorBodyRow,
+      reference.rowLock
+    );
     result += structured ?? formula.slice(cursor, reference.endIndex);
     cursor = reference.endIndex;
   }
@@ -107,7 +125,10 @@ function validateTableGeometry(table: StructuredTable, anchorBodyRow: number): s
   if (table.columns.length === 0) return "A structured table must contain at least one column";
   if (!Number.isInteger(anchorBodyRow)) return "The formula anchor must be an integer body row";
   const { bodyStart, bodyEnd } = tableRows(table);
-  if (anchorBodyRow < bodyStart || anchorBodyRow > bodyEnd) {
+  const validBodyAnchor = bodyStart <= bodyEnd
+    ? anchorBodyRow >= bodyStart && anchorBodyRow <= bodyEnd
+    : anchorBodyRow === bodyStart;
+  if (!validBodyAnchor) {
     return "The formula anchor must be inside the table body";
   }
   const seen = new Set<number>();
@@ -163,6 +184,8 @@ function parseStructuredReference(
   }
 
   if (!trimmed.startsWith("[")) {
+    const selector = parseSelector(trimmed);
+    if (selector) return resolveStructuredColumns(selector, [], table);
     const columnName = decodeStructuredHeader(trimmed);
     return resolveStructuredColumns("data", [columnName], table);
   }
@@ -278,16 +301,19 @@ function structuredReferenceAddress(
   }
   if (startRow > endRow) return { message: "The table has no body rows" };
 
-  const start = formatA1(reference.startColumn.sheetColumn, startRow);
-  const end = formatA1(reference.endColumn.sheetColumn, endRow);
+  const lockRow = reference.selector !== "thisRow";
+  const start = formatA1(reference.startColumn.sheetColumn, startRow, lockRow);
+  const end = formatA1(reference.endColumn.sheetColumn, endRow, lockRow);
   return start === end ? start : `${start}:${end}`;
 }
 
 function a1RangeToStructured(
   range: CellRange,
   table: StructuredTable,
-  anchorBodyRow: number
+  anchorBodyRow: number,
+  rowLock: ParsedA1Reference["rowLock"]
 ): string | undefined {
+  if (rowLock === "mixed") return undefined;
   const startRow = Math.min(range.start.row, range.end.row);
   const endRow = Math.max(range.start.row, range.end.row);
   const startColumnIndex = Math.min(range.start.column, range.end.column);
@@ -298,8 +324,9 @@ function a1RangeToStructured(
 
   const { bodyStart, bodyEnd } = tableRows(table);
   let selector: StructuredSelector | undefined;
-  if (startRow === anchorBodyRow && endRow === anchorBodyRow) selector = "thisRow";
-  else if (table.headerRow && startRow === table.range.start.row && endRow === startRow) selector = "headers";
+  if (rowLock === "unlocked" && startRow === anchorBodyRow && endRow === anchorBodyRow) {
+    selector = "thisRow";
+  } else if (table.headerRow && startRow === table.range.start.row && endRow === startRow) selector = "headers";
   else if (table.totalsRow && startRow === table.range.end.row && endRow === startRow) selector = "totals";
   else if (startRow === bodyStart && endRow === bodyEnd) selector = "data";
   else if (startRow === table.range.start.row && endRow === table.range.end.row) selector = "all";
@@ -389,6 +416,9 @@ function parseLocalA1ReferenceAt(formula: string, index: number): ParsedA1Refere
       start: { row: start.row, column: start.column },
       end: { row: end.row, column: end.column }
     },
+    rowLock: start.rowLocked === end.rowLocked
+      ? start.rowLocked ? "locked" : "unlocked"
+      : "mixed",
     endIndex: cursor
   };
 }
@@ -396,20 +426,26 @@ function parseLocalA1ReferenceAt(formula: string, index: number): ParsedA1Refere
 function parseA1CellAt(
   formula: string,
   index: number
-): { row: number; column: number; endIndex: number } | null {
+): { row: number; column: number; rowLocked: boolean; endIndex: number } | null {
   let cursor = index;
   if (formula[cursor] === "$") cursor += 1;
   const columnStart = cursor;
   while (isAsciiLetter(formula[cursor] ?? "")) cursor += 1;
   if (cursor === columnStart) return null;
   const columnName = formula.slice(columnStart, cursor).toUpperCase();
-  if (formula[cursor] === "$") cursor += 1;
+  const rowLocked = formula[cursor] === "$";
+  if (rowLocked) cursor += 1;
   const rowStart = cursor;
   while (isAsciiDigit(formula[cursor] ?? "")) cursor += 1;
   if (cursor === rowStart || formula[rowStart] === "0") return null;
   const column = columnNameToIndexSafely(columnName);
   if (column === undefined || column > 16_383) return null;
-  return { row: Number(formula.slice(rowStart, cursor)) - 1, column, endIndex: cursor };
+  return {
+    row: Number(formula.slice(rowStart, cursor)) - 1,
+    column,
+    rowLocked,
+    endIndex: cursor
+  };
 }
 
 function columnNameToIndexSafely(name: string): number | undefined {
@@ -470,8 +506,8 @@ function tableRows(table: StructuredTable): { bodyStart: number; bodyEnd: number
   };
 }
 
-function formatA1(column: number, row: number): string {
-  return `${columnIndexToName(column)}${row + 1}`;
+function formatA1(column: number, row: number, lockRow = false): string {
+  return `${columnIndexToName(column)}${lockRow ? "$" : ""}${row + 1}`;
 }
 
 function rangeKey(range: CellRange): string {

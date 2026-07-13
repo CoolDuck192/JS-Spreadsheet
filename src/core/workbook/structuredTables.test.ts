@@ -39,6 +39,42 @@ describe("structured table metadata", () => {
     expect(getStructuredTableBodyRange(table)).toEqual(range(1, 0, 3, 2));
   });
 
+  it("rejects notIn filters that exceed Excel's two-criterion limit", () => {
+    const { workbook, services } = tableFixture(2, 3);
+    const created = commit(workbook, {
+      type: "table.create",
+      sheetId: workbook.activeSheetId,
+      range: range(0, 0, 2, 1),
+      name: "Filtered",
+      headerRow: true,
+      totalsRow: false
+    }, services);
+    const table = created.tables[0];
+    const result = reduceStructuredTableCommand(created, {
+      type: "table.setFilter",
+      tableId: table.id,
+      filter: {
+        kind: "set",
+        columnId: table.columns[0].id,
+        operator: "notIn",
+        values: [
+          { type: "string", value: "East" },
+          { type: "string", value: "West" },
+          { type: "string", value: "North" }
+        ]
+      }
+    }, services);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      workbook: created,
+      issues: [{
+        code: "TABLE_FILTER_INVALID",
+        message: "Excel table filters require one or two excluded values"
+      }]
+    });
+  });
+
   it.each(["", " Sales", "R", "A1", "XFD1048576", "R1C1", "x".repeat(256)])(
     "rejects invalid table name %s atomically",
     (name) => {
@@ -147,6 +183,312 @@ describe("structured table metadata", () => {
     }, services, "TABLE_RANGE_BLOCKED");
   });
 
+  it("moves a totals row and its cell metadata when a table grows", () => {
+    const workbook = totalsResizeFixture({ A7: "middle", B7: 50, A8: "tail", B8: 99 });
+    const services = deterministicServices();
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, services);
+
+    expect(getCellContent(resized, "sheet-1", "A8")).toBe("Total");
+    expect(getCellContent(resized, "sheet-1", "B8")).toBe("=SUBTOTAL(109,B2:B7)");
+    expect(resized.sheets[0].formats.B8).toEqual({ bold: true });
+    expect(resized.sheets[0].validations.B8).toEqual({ type: "number", min: 0 });
+    expect(resized.sheets[0].comments.B8).toBe("generated total");
+    expect(resized.sheets[0].hyperlinks.B8).toBe("https://example.com/total");
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe("middle");
+    expect(getCellContent(resized, "sheet-1", "B6")).toBe(50);
+    expect(getCellContent(resized, "sheet-1", "A7")).toBe("tail");
+    expect(getCellContent(resized, "sheet-1", "B7")).toBe(99);
+  });
+
+  it("rewrites moved and external formulas when a totals row moves down during resize", () => {
+    const base = totalsResizeFixture({
+      D1: "=B6*2",
+      A7: "=A7*2",
+      B7: 50,
+      A8: "tail",
+      B8: 99
+    });
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [
+        base.sheets[0],
+        {
+          ...base.sheets[0],
+          id: "sheet-summary",
+          name: "Summary",
+          cells: { A1: "=Sheet1!B6*2" }
+        }
+      ],
+      namedRanges: [{
+        name: "CurrentTotal",
+        sheetId: "sheet-1",
+        range: range(5, 1, 5, 1)
+      }],
+      tables: [{
+        ...base.tables[0],
+        columns: base.tables[0].columns.map((column) =>
+          column.id === "column-amount" ? { ...column, calculatedFormula: "=B6*2" } : column
+        )
+      }]
+    };
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices());
+
+    expect(getCellContent(resized, "sheet-1", "D1")).toBe("=B8*2");
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe("=A6*2");
+    expect(getCellContent(resized, "sheet-summary", "A1")).toBe("=Sheet1!B8*2");
+    expect(resized.namedRanges[0].range).toEqual(range(7, 1, 7, 1));
+    expect(resized.tables[0].columns[1].calculatedFormula).toBe("=B8*2");
+  });
+
+  it("keeps outside-band targets when a formula moves up during growth", () => {
+    const workbook = totalsResizeFixture({
+      A7: "=A9+$A9+A$9+$A$9+A6+$A$6+Sheet1!B9+A1+SUM(A1:B2)"
+    });
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices());
+
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe(
+      "=A9+$A9+A$9+$A$9+A8+$A$8+Sheet1!B9+A1+SUM(A1:B2)"
+    );
+  });
+
+  it("keeps a physically moved external-only body formula and rejects an affected mixed formula atomically", () => {
+    const formula = "='[Book.xlsx]Data'!D3";
+    const workbook = totalsResizeFixture({ A7: formula });
+    const command: StructuredTableCommand = {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    };
+
+    const resized = commit(workbook, command, deterministicServices());
+    expect(getCellContent(resized, "sheet-1", "A6")).toBe(formula);
+
+    const mixed = totalsResizeFixture({ A7: `${formula}+A7` });
+    expectRejectedUnchanged(
+      mixed,
+      command,
+      deterministicServices(),
+      "TABLE_FORMULA_REFERENCE_UNSUPPORTED"
+    );
+  });
+
+  it.each(["Data:Other", "Other:Data"])(
+    "rejects a totals move atomically when the edited sheet is in the %s 3-D span",
+    (sheetSpan) => {
+      const base = totalsResizeFixture({ D1: `=SUM(${sheetSpan}!B6)` });
+      const workbook: WorkbookModel = {
+        ...base,
+        sheets: [{ ...base.sheets[0], name: "Data" }]
+      };
+
+      expectRejectedUnchanged(workbook, {
+        type: "table.resize",
+        tableId: "table-totals",
+        range: range(0, 0, 7, 1)
+      }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+    }
+  );
+
+  it("rejects a totals move when the edited sheet is inside a 3-D span", () => {
+    const base = totalsResizeFixture({ D1: "=SUM(Jan:Mar!B6)" });
+    const dataSheet = { ...base.sheets[0], name: "Data" };
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [
+        { ...dataSheet, id: "sheet-jan", name: "Jan", cells: {} },
+        dataSheet,
+        { ...dataSheet, id: "sheet-mar", name: "Mar", cells: {} }
+      ]
+    };
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
+  it("rejects a discontiguous moved range during growth", () => {
+    const workbook = totalsResizeFixture({ A7: "=SUM(A7:B9)" });
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
+  it("rewrites moved and external formulas when a totals row moves up during resize", () => {
+    const workbook = totalsResizeFixture({
+      D1: "=B6*2",
+      A4: "=A4*2"
+    });
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 3, 1)
+    }, deterministicServices());
+
+    expect(getCellContent(resized, "sheet-1", "D1")).toBe("=B4*2");
+    expect(getCellContent(resized, "sheet-1", "A5")).toBe("=A5*2");
+  });
+
+  it("keeps outside-band targets when a formula moves down during shrink", () => {
+    const workbook = totalsResizeFixture({
+      A4: "=A2+$A2+A$2+$A$2+A6+$A$6+Sheet1!B2+A1+SUM(A1:B2)"
+    });
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 3, 1)
+    }, deterministicServices());
+
+    expect(getCellContent(resized, "sheet-1", "A5")).toBe(
+      "=A2+$A2+A$2+$A$2+A4+$A$4+Sheet1!B2+A1+SUM(A1:B2)"
+    );
+  });
+
+  it("rejects a discontiguous moved range during shrink", () => {
+    const workbook = totalsResizeFixture({ A4: "=SUM(A2:B4)" });
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 3, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
+  it("rejects a moved range whose locked outside endpoint leaves a gap", () => {
+    const workbook = totalsResizeFixture({ A7: "=SUM(A7:B$9)" });
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
+  it("leaves newly added-column cell planes fixed while lengthening a table", () => {
+    const base = totalsResizeFixture({ C6: "six", C7: "seven", C8: "eight" });
+    const workbook: WorkbookModel = {
+      ...base,
+      sheets: [{
+        ...base.sheets[0],
+        formats: { ...base.sheets[0].formats, C7: { italic: true } }
+      }]
+    };
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 2)
+    }, deterministicServices());
+
+    expect(getCellContent(resized, "sheet-1", "C6")).toBe("six");
+    expect(getCellContent(resized, "sheet-1", "C7")).toBe("seven");
+    expect(getCellContent(resized, "sheet-1", "C8")).toBe("eight");
+    expect(resized.sheets[0].formats.C7).toEqual({ italic: true });
+  });
+
+  it("rejects an unrepresentable totals-row move atomically after deriving resize metadata", () => {
+    const workbook = totalsResizeFixture({ D1: "=SUM(A6:B7)" });
+
+    expectRejectedUnchanged(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 7, 1)
+    }, deterministicServices(), "TABLE_FORMULA_REFERENCE_UNSUPPORTED");
+  });
+
+  it("keeps displaced body data when a shrunken table later disables totals", () => {
+    const workbook = totalsResizeFixture();
+    const services = deterministicServices();
+
+    const resized = commit(workbook, {
+      type: "table.resize",
+      tableId: "table-totals",
+      range: range(0, 0, 3, 1)
+    }, services);
+    expect(getCellContent(resized, "sheet-1", "A4")).toBe("Total");
+    expect(getCellContent(resized, "sheet-1", "B4")).toBe("=SUBTOTAL(109,B2:B3)");
+
+    const withoutTotals = commit(resized, {
+      type: "table.setTotalsRow",
+      tableId: "table-totals",
+      enabled: false
+    }, services);
+
+    expect(getCellContent(withoutTotals, "sheet-1", "A5")).toBe("Linus");
+    expect(getCellContent(withoutTotals, "sheet-1", "B5")).toBe(30);
+    expect(getCellContent(withoutTotals, "sheet-1", "A6")).toBe("Margaret");
+    expect(getCellContent(withoutTotals, "sheet-1", "B6")).toBe(40);
+    expect(getCellContent(withoutTotals, "sheet-1", "A4")).toBeNull();
+    expect(getCellContent(withoutTotals, "sheet-1", "B4")).toBeNull();
+  });
+
+  it("rewrites moved and external formulas in both header-toggle directions", () => {
+    const workbook = headerFormulaFixture();
+    const services = deterministicServices();
+
+    const withHeader = commit(workbook, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: true
+    }, services);
+
+    expect(getCellContent(withHeader, "sheet-1", "B2")).toBe("=Z1+A2+Sheet2!B1");
+    expect(getCellContent(withHeader, "sheet-1", "D1")).toBe("=SUM(A2:A4)");
+    expect(getCellContent(withHeader, "sheet-summary", "A1")).toBe("=SUM(Sheet1!A2:A4)");
+    expect(withHeader.tables[0].columns[1].calculatedFormula).toBe("=Z1+A2+Sheet2!B1");
+
+    const withoutHeader = commit(withHeader, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: false
+    }, services);
+
+    expect(getCellContent(withoutHeader, "sheet-1", "B1")).toBe("=Z1+A1+Sheet2!B1");
+    expect(getCellContent(withoutHeader, "sheet-1", "D1")).toBe("=SUM(A1:A3)");
+    expect(getCellContent(withoutHeader, "sheet-summary", "A1")).toBe("=SUM(Sheet1!A1:A3)");
+    expect(withoutHeader.tables[0].columns[1].calculatedFormula).toBe("=Z1+A1+Sheet2!B1");
+  });
+
+  it("keeps the translated calculated-column anchor during later regeneration", () => {
+    const workbook = headerFormulaFixture();
+    const services = deterministicServices();
+    const withHeader = commit(workbook, {
+      type: "table.setHeaderRow",
+      tableId: "table-formulas",
+      enabled: true
+    }, services);
+
+    const inserted = commit(withHeader, {
+      type: "table.insertRows",
+      tableId: "table-formulas",
+      count: 1
+    }, services);
+
+    expect(getCellContent(inserted, "sheet-1", "B2")).toBe("=Z1+A2+Sheet2!B1");
+    expect(getCellContent(inserted, "sheet-1", "B5")).toBe("=Z4+A5+Sheet2!B4");
+  });
+
   it("toggles headers and totals without replacing body row IDs", () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "Ada");
@@ -246,6 +588,85 @@ function tableFixture(columnCount: number, rowCount: number) {
     }
   }
   return { workbook, services: deterministicServices() };
+}
+
+function totalsResizeFixture(overrides: Record<string, string | number> = {}): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  return {
+    ...workbook,
+    sheets: [{
+      ...workbook.sheets[0],
+      cells: {
+        A1: "Name", B1: "Amount",
+        A2: "Ada", B2: 10,
+        A3: "Grace", B3: 20,
+        A4: "Linus", B4: 30,
+        A5: "Margaret", B5: 40,
+        A6: "Total", B6: "=SUBTOTAL(109,B2:B5)",
+        ...overrides
+      },
+      formats: { B6: { bold: true } },
+      validations: { B6: { type: "number", min: 0 } },
+      comments: { B6: "generated total" },
+      hyperlinks: { B6: "https://example.com/total" }
+    }],
+    tables: [{
+      id: "table-totals",
+      name: "TotalsTable",
+      sheetId: "sheet-1",
+      range: range(0, 0, 5, 1),
+      headerRow: true,
+      totalsRow: true,
+      columns: [
+        { id: "column-name", name: "Name", sheetColumn: 0, totalsLabel: "Total" },
+        { id: "column-amount", name: "Amount", sheetColumn: 1, totalsFunction: "sum" }
+      ],
+      rowIds: ["row-ada", "row-grace", "row-linus", "row-margaret"]
+    }]
+  };
+}
+
+function headerFormulaFixture(): WorkbookModel {
+  const workbook = createBlankWorkbook();
+  const sheet = workbook.sheets[0];
+  return {
+    ...workbook,
+    sheets: [
+      {
+        ...sheet,
+        cells: {
+          A1: 1, B1: "=Z1+A1+Sheet2!B1",
+          A2: 2, B2: "=Z2+A2+Sheet2!B2",
+          A3: 3, B3: "=Z3+A3+Sheet2!B3",
+          D1: "=SUM(A1:A3)"
+        }
+      },
+      {
+        ...sheet,
+        id: "sheet-summary",
+        name: "Summary",
+        cells: { A1: "=SUM(Sheet1!A1:A3)" }
+      }
+    ],
+    tables: [{
+      id: "table-formulas",
+      name: "FormulaTable",
+      sheetId: "sheet-1",
+      range: range(0, 0, 2, 1),
+      headerRow: false,
+      totalsRow: false,
+      columns: [
+        { id: "column-value", name: "Value", sheetColumn: 0 },
+        {
+          id: "column-formula",
+          name: "Formula",
+          sheetColumn: 1,
+          calculatedFormula: "=Z1+A1+Sheet2!B1"
+        }
+      ],
+      rowIds: ["row-1", "row-2", "row-3"]
+    }]
+  };
 }
 
 function deterministicServices(): StructuredTableCommandServices {

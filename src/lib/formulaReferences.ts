@@ -1,4 +1,4 @@
-import type { CellRange } from "../types";
+import type { CellCoord, CellRange } from "../types";
 import type { TableIssue } from "../core/commands/types";
 import { columnIndexToName, columnNameToIndex, formatCellAddress, normalizeRange } from "./addressing";
 
@@ -31,12 +31,24 @@ export type FormulaStructureContext = {
 export type RectangularRowEditContext = {
   formulaSheetId: string;
   editedSheetId: string;
+  sheetOrder?: readonly string[];
   tableColumnStart: number;
   tableColumnEnd: number;
+  tableRowEnd: number;
   row: number;
   count: number;
   operation: "insert" | "delete";
   sheetBounds: { rowCount: number; columnCount: number };
+};
+
+export type RectangularRowMoveContext = {
+  formulaSheetId: string;
+  editedSheetId: string;
+  sheetOrder?: readonly string[];
+  tableColumnStart: number;
+  tableColumnEnd: number;
+  sourceRow: number;
+  targetRow: number;
 };
 
 export type FormulaRewriteResult =
@@ -70,11 +82,21 @@ type ParsedFormulaReferenceToken = FormulaReferenceToken & {
   endIndex: number;
 };
 
+type ParsedUnsupportedFormulaReference =
+  | { kind: "external"; endIndex: number }
+  | {
+      kind: "three-dimensional";
+      firstSheetName: string;
+      lastSheetName: string;
+      start: ParsedFormulaCellReference;
+      end: ParsedFormulaCellReference;
+      endIndex: number;
+    };
+
 const CELL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?)([A-Z]+)(\$?)([1-9]\d*)/gi;
 const LOCAL_REFERENCE_PATTERN = /(?<![A-Z0-9_.])(\$?[A-Z]+\$?[1-9]\d*)(?::(\$?[A-Z]+\$?[1-9]\d*))?/gi;
 const FORMULA_IDENTIFIER_START_PATTERN = /^[\p{ID_Start}_]$/u;
 const FORMULA_IDENTIFIER_CONTINUE_PATTERN = /^[\p{ID_Continue}_.]$/u;
-const EXTERNAL_WORKBOOK_QUALIFIER_PATTERN = /(?:'(?:[^']|'')*\[[^\]]+\](?:[^']|'')*'|\[[^\]]+\][\p{ID_Start}_][\p{ID_Continue}_.]*)!/u;
 const MAX_FORMULA_COLUMN_INDEX = columnNameToIndex("XFD");
 
 export function rewriteFormulaForStructure(formula: string, context: FormulaStructureContext): string {
@@ -96,42 +118,351 @@ export function rewriteFormulaForRectangularRowEdit(
   context: RectangularRowEditContext
 ): FormulaRewriteResult {
   if (!formula.startsWith("=") || context.count <= 0) return { ok: true, formula };
-  if (containsUnsupportedRectangularReference(formula)) {
-    return {
-      ok: false,
-      issue: {
-        code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
-        message: "External and 3-D references cannot be rewritten for a table row edit"
-      }
-    };
+  const unsupportedMessage =
+    "External and 3-D references cannot be rewritten for a table row edit";
+  if (containsAffectedThreeDimensionalReference(formula, context.editedSheetId, context.sheetOrder, (
+    start,
+    end
+  ) => referenceIntersectsRectangle(
+    start,
+    end,
+    context.tableColumnStart,
+    context.tableColumnEnd,
+    context.row,
+    context.tableRowEnd
+  ))) {
+    return unsupportedRectangularReference(unsupportedMessage);
   }
-
   const tokens = tokenizeFormulaReferences(formula);
+  return rewriteRelevantRectangularFormulaReferences(
+    formula,
+    tokens,
+    (token) => rectangularReferenceTargetsEditedSheet(token, context),
+    (token) => rewriteRectangularReferenceToken(token, context),
+    unsupportedMessage
+  );
+}
+
+export function rewriteFormulaForRectangularRowMove(
+  formula: string,
+  context: RectangularRowMoveContext
+): FormulaRewriteResult {
+  if (!formula.startsWith("=") || context.sourceRow === context.targetRow) {
+    return { ok: true, formula };
+  }
+  const unsupportedMessage =
+    "External and 3-D references cannot be rewritten for a table row move";
+  if (containsAffectedThreeDimensionalReference(formula, context.editedSheetId, context.sheetOrder, (
+    start,
+    end
+  ) => referenceIntersectsRectangle(
+    start,
+    end,
+    context.tableColumnStart,
+    context.tableColumnEnd,
+    Math.min(context.sourceRow, context.targetRow),
+    Math.max(context.sourceRow, context.targetRow)
+  ))) {
+    return unsupportedRectangularReference(unsupportedMessage);
+  }
+  const tokens = tokenizeFormulaReferences(formula);
+  return rewriteRelevantRectangularFormulaReferences(
+    formula,
+    tokens,
+    (token) => rectangularReferenceTargetsEditedSheet(token, context),
+    (token) => rewriteRectangularRowMoveReferenceToken(token, context),
+    unsupportedMessage
+  );
+}
+
+function containsAffectedThreeDimensionalReference(
+  formula: string,
+  editedSheetName: string,
+  sheetOrder: readonly string[] | undefined,
+  intersectsEditedRectangle: (start: CellCoord, end: CellCoord) => boolean
+): boolean {
+  let affected = false;
+  scanUnsupportedFormulaReferences(formula, (reference) => {
+    if (
+      threeDimensionalSpanIncludesSheet(
+        reference.firstSheetName,
+        reference.lastSheetName,
+        editedSheetName,
+        sheetOrder
+      )
+      && intersectsEditedRectangle(reference.start, reference.end)
+    ) {
+      affected = true;
+    }
+  });
+  return affected;
+}
+
+function threeDimensionalSpanIncludesSheet(
+  firstSheetName: string,
+  lastSheetName: string,
+  editedSheetName: string,
+  sheetOrder: readonly string[] | undefined
+): boolean {
+  const firstSheet = normalizeFormulaSheetName(firstSheetName);
+  const lastSheet = normalizeFormulaSheetName(lastSheetName);
+  const editedSheet = normalizeFormulaSheetName(editedSheetName);
+  if (firstSheet === editedSheet || lastSheet === editedSheet) return true;
+  if (!sheetOrder) return false;
+
+  const normalizedOrder = sheetOrder.map(normalizeFormulaSheetName);
+  const firstIndex = normalizedOrder.indexOf(firstSheet);
+  const lastIndex = normalizedOrder.indexOf(lastSheet);
+  const editedIndex = normalizedOrder.indexOf(editedSheet);
+  return firstIndex >= 0
+    && lastIndex >= 0
+    && editedIndex >= Math.min(firstIndex, lastIndex)
+    && editedIndex <= Math.max(firstIndex, lastIndex);
+}
+
+function normalizeFormulaSheetName(value: string): string {
+  const unquoted = value.startsWith("'")
+    ? value.slice(1, -1).replace(/''/g, "'")
+    : value;
+  return unquoted.normalize("NFKC").toLowerCase();
+}
+
+function referenceIntersectsRectangle(
+  start: CellCoord,
+  end: CellCoord,
+  columnStart: number,
+  columnEnd: number,
+  rowStart: number,
+  rowEnd: number
+): boolean {
+  const lowColumn = Math.min(start.column, end.column);
+  const highColumn = Math.max(start.column, end.column);
+  const lowRow = Math.min(start.row, end.row);
+  const highRow = Math.max(start.row, end.row);
+  return highColumn >= columnStart
+    && lowColumn <= columnEnd
+    && highRow >= rowStart
+    && lowRow <= rowEnd;
+}
+
+function rewriteRelevantRectangularFormulaReferences(
+  formula: string,
+  tokens: readonly FormulaToken[],
+  targetsEditedRectangle: (token: FormulaReferenceToken) => boolean,
+  rewriteReference: (token: FormulaReferenceToken) => FormulaRewriteResult,
+  unsupportedMessage: string
+): FormulaRewriteResult {
   const rewritten: string[] = [];
-  for (const token of tokens) {
-    if (token.kind === "raw" || !rectangularReferenceTargetsEditedSheet(token, context)) {
+  let localReferenceChanged = false;
+  for (const [index, token] of tokens.entries()) {
+    if (
+      token.kind === "raw"
+      || isExternalWorkbookReferenceToken(tokens, index, token)
+      || !targetsEditedRectangle(token)
+    ) {
       rewritten.push(token.raw);
       continue;
     }
-    const result = rewriteRectangularReferenceToken(token, context);
-    if (!result.ok) return result;
+    const result = rewriteReference(token);
+    if (!result.ok) {
+      return containsUnsupportedRectangularReference(formula)
+        ? unsupportedRectangularReference(unsupportedMessage)
+        : result;
+    }
+    localReferenceChanged ||= result.formula !== token.raw;
     rewritten.push(result.formula);
+  }
+  if (!localReferenceChanged) return { ok: true, formula };
+  if (containsUnsupportedRectangularReference(formula)) {
+    return unsupportedRectangularReference(unsupportedMessage);
   }
   return { ok: true, formula: rewritten.join("") };
 }
 
-function containsUnsupportedRectangularReference(formula: string): boolean {
-  let unsupported = false;
-  transformUnquotedFormulaSegments(formula, (segment) => {
-    if (
-      EXTERNAL_WORKBOOK_QUALIFIER_PATTERN.test(segment)
-      || /(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*):(?:'(?:[^']|'')+'|[\p{ID_Start}_][\p{ID_Continue}_.]*)!/u.test(segment)
-    ) {
-      unsupported = true;
+function unsupportedRectangularReference(message: string): FormulaRewriteResult {
+  return {
+    ok: false,
+    issue: {
+      code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+      message
     }
-    return segment;
-  });
+  };
+}
+
+function containsUnsupportedRectangularReference(formula: string): boolean {
+  return scanUnsupportedFormulaReferences(formula);
+}
+
+function scanUnsupportedFormulaReferences(
+  formula: string,
+  visitThreeDimensionalReference?: (
+    reference: Extract<ParsedUnsupportedFormulaReference, { kind: "three-dimensional" }>
+  ) => void
+): boolean {
+  let unsupported = false;
+  let index = 0;
+  while (index < formula.length) {
+    if (formula[index] === '"') {
+      index = skipQuotedFormulaSegment(formula, index, '"');
+      continue;
+    }
+
+    let reference: ParsedUnsupportedFormulaReference | null = null;
+    if (formula[index] === "[") {
+      reference = parseUnquotedExternalWorkbookReferenceAt(formula, index);
+      if (!reference) {
+        index = skipBracketedFormulaSegment(formula, index);
+        continue;
+      }
+    } else if (formula[index] === "'") {
+      reference = parseQuotedUnsupportedFormulaReferenceAt(formula, index);
+      if (!reference) {
+        index = skipQuotedFormulaSegment(formula, index, "'");
+        continue;
+      }
+    } else if (isFormulaIdentifierStart(formulaCodePointAt(formula, index))) {
+      reference = parseUnquotedThreeDimensionalReferenceAt(formula, index);
+    }
+
+    if (reference) {
+      unsupported = true;
+      if (reference.kind === "three-dimensional") {
+        visitThreeDimensionalReference?.(reference);
+      }
+      index = reference.endIndex;
+      continue;
+    }
+    index += formulaCodePointLengthAt(formula, index);
+  }
   return unsupported;
+}
+
+function parseQuotedUnsupportedFormulaReferenceAt(
+  formula: string,
+  index: number
+): ParsedUnsupportedFormulaReference | null {
+  const qualifier = parseQuotedSheetQualifier(formula, index);
+  if (!qualifier) return null;
+  const range = parseUnsupportedFormulaCellRangeAt(formula, qualifier.cellStart);
+  if (!range) return null;
+  if (/\[[^\]\r\n]+\]/u.test(qualifier.sheetName)) {
+    return { kind: "external", endIndex: range.endIndex };
+  }
+
+  const span = splitThreeDimensionalSheetSpan(qualifier.sheetName);
+  return span
+    ? {
+        kind: "three-dimensional",
+        ...span,
+        start: range.start,
+        end: range.end,
+        endIndex: range.endIndex
+      }
+    : null;
+}
+
+function parseUnquotedThreeDimensionalReferenceAt(
+  formula: string,
+  index: number
+): ParsedUnsupportedFormulaReference | null {
+  const previousCharacter = formulaCodePointBefore(formula, index);
+  if (isFormulaIdentifierContinue(previousCharacter) || previousCharacter === "]") {
+    return null;
+  }
+  const firstSheet = parseFormulaSheetIdentifierAt(formula, index);
+  if (!firstSheet || formula[firstSheet.endIndex] !== ":") return null;
+  const lastSheet = parseFormulaSheetIdentifierAt(formula, firstSheet.endIndex + 1);
+  if (!lastSheet || formula[lastSheet.endIndex] !== "!") return null;
+  const range = parseUnsupportedFormulaCellRangeAt(formula, lastSheet.endIndex + 1);
+  if (!range) return null;
+  return {
+    kind: "three-dimensional",
+    firstSheetName: firstSheet.value,
+    lastSheetName: lastSheet.value,
+    start: range.start,
+    end: range.end,
+    endIndex: range.endIndex
+  };
+}
+
+function parseUnquotedExternalWorkbookReferenceAt(
+  formula: string,
+  index: number
+): ParsedUnsupportedFormulaReference | null {
+  if (isFormulaIdentifierContinue(formulaCodePointBefore(formula, index))) return null;
+  const qualifierEnd = skipBracketedFormulaSegment(formula, index);
+  if (qualifierEnd >= formula.length) return null;
+  const firstSheet = parseFormulaSheetIdentifierAt(formula, qualifierEnd);
+  if (!firstSheet) return null;
+
+  let cursor = firstSheet.endIndex;
+  if (formula[cursor] === ":") {
+    const lastSheet = parseFormulaSheetIdentifierAt(formula, cursor + 1);
+    if (!lastSheet) return null;
+    cursor = lastSheet.endIndex;
+  }
+  if (formula[cursor] !== "!") return null;
+  const range = parseUnsupportedFormulaCellRangeAt(formula, cursor + 1);
+  return range ? { kind: "external", endIndex: range.endIndex } : null;
+}
+
+function parseFormulaSheetIdentifierAt(
+  formula: string,
+  index: number
+): { value: string; endIndex: number } | null {
+  if (!isFormulaIdentifierStart(formulaCodePointAt(formula, index))) return null;
+  let cursor = index + formulaCodePointLengthAt(formula, index);
+  while (isFormulaIdentifierContinue(formulaCodePointAt(formula, cursor))) {
+    cursor += formulaCodePointLengthAt(formula, cursor);
+  }
+  return { value: formula.slice(index, cursor), endIndex: cursor };
+}
+
+function splitThreeDimensionalSheetSpan(
+  qualifier: string
+): { firstSheetName: string; lastSheetName: string } | null {
+  const separator = qualifier.indexOf(":");
+  if (
+    separator <= 0
+    || separator === qualifier.length - 1
+    || qualifier.indexOf(":", separator + 1) >= 0
+  ) {
+    return null;
+  }
+  return {
+    firstSheetName: qualifier.slice(0, separator),
+    lastSheetName: qualifier.slice(separator + 1)
+  };
+}
+
+function parseUnsupportedFormulaCellRangeAt(
+  formula: string,
+  index: number
+): {
+  start: ParsedFormulaCellReference;
+  end: ParsedFormulaCellReference;
+  endIndex: number;
+} | null {
+  const start = parseFormulaCellReferenceAt(formula, index);
+  if (!start) return null;
+  let cursor = start.endIndex;
+  let end = start.reference;
+  if (formula[cursor] === ":") {
+    const parsedEnd = parseFormulaCellReferenceAt(formula, cursor + 1);
+    if (!parsedEnd) return null;
+    end = parsedEnd.reference;
+    cursor = parsedEnd.endIndex;
+  }
+
+  const nextCharacter = formulaCodePointAt(formula, cursor);
+  if (
+    isFormulaIdentifierContinue(nextCharacter)
+    || nextCharacter === "["
+    || nextCharacter === "!"
+  ) {
+    return null;
+  }
+  return { start: start.reference, end, endIndex: cursor };
 }
 
 export function translateFormulaReferences(content: string, offset: FormulaReferenceOffset): string {
@@ -141,6 +472,9 @@ export function translateFormulaReferences(content: string, offset: FormulaRefer
 
   return transformUnquotedFormulaSegments(content, (segment) =>
     segment.replace(CELL_REFERENCE_PATTERN, (match, columnLock: string, columnName: string, rowLock: string, rowName: string, position: number) => {
+      if (isInsideSingleQuotedFormulaSegment(segment, position)) {
+        return match;
+      }
       const nextCharacter = segment[position + match.length] ?? "";
       if (nextCharacter === "!" || nextCharacter === "(" || nextCharacter === "[") {
         return match;
@@ -155,6 +489,34 @@ export function translateFormulaReferences(content: string, offset: FormulaRefer
       return `${columnLock}${columnIndexToName(nextColumn)}${rowLock}${nextRow + 1}`;
     })
   );
+}
+
+function isInsideSingleQuotedFormulaSegment(segment: string, position: number): boolean {
+  let cursor = 0;
+  while (cursor < position) {
+    if (segment[cursor] !== "'") {
+      cursor += 1;
+      continue;
+    }
+    const end = findSingleQuotedFormulaQualifierEnd(segment, cursor);
+    if (end === undefined) {
+      cursor += 1;
+      continue;
+    }
+    if (position < end) return true;
+    cursor = end;
+  }
+  return false;
+}
+
+export function findSingleQuotedFormulaQualifierEnd(
+  formula: string,
+  startIndex: number
+): number | undefined {
+  if (formula[startIndex] !== "'") return undefined;
+  const end = skipQuotedFormulaSegment(formula, startIndex, "'");
+  const nextCharacter = formula[end] ?? "";
+  return nextCharacter === "!" || nextCharacter === ":" ? end : undefined;
 }
 
 export function translateFormulaRowsWithinColumns(
@@ -188,6 +550,9 @@ export function extractFormulaReferences(content: string): ExtractedFormulaRefer
 
   transformUnquotedFormulaSegments(content, (segment) => {
     segment.replace(LOCAL_REFERENCE_PATTERN, (match, startReference: string, endReference: string | undefined, position: number) => {
+      if (isInsideSingleQuotedFormulaSegment(segment, position)) {
+        return match;
+      }
       const previousCharacter = segment[position - 1] ?? "";
       const nextCharacter = segment[position + match.length] ?? "";
       if (previousCharacter === "!" || nextCharacter === "!" || nextCharacter === "(" || nextCharacter === "[") {
@@ -285,6 +650,12 @@ function tokenizeFormulaReferences(formula: string): FormulaToken[] {
 function skipBracketedFormulaSegment(formula: string, index: number): number {
   let depth = 0;
   for (let cursor = index; cursor < formula.length; cursor += 1) {
+    if (
+      (formula[cursor] === "[" || formula[cursor] === "]")
+      && isApostropheEscapedFormulaCharacter(formula, cursor)
+    ) {
+      continue;
+    }
     if (formula[cursor] === "[") {
       depth += 1;
     } else if (formula[cursor] === "]") {
@@ -293,6 +664,14 @@ function skipBracketedFormulaSegment(formula: string, index: number): number {
     }
   }
   return formula.length;
+}
+
+function isApostropheEscapedFormulaCharacter(formula: string, index: number): boolean {
+  let apostropheCount = 0;
+  for (let cursor = index - 1; cursor >= 0 && formula[cursor] === "'"; cursor -= 1) {
+    apostropheCount += 1;
+  }
+  return apostropheCount % 2 === 1;
 }
 
 function parseFormulaReferenceToken(formula: string, index: number): ParsedFormulaReferenceToken | null {
@@ -540,6 +919,15 @@ function hasExternalWorkbookPrefix(
   return previous?.kind === "raw" && /\[[^\]\r\n]+\]$/u.test(previous.raw);
 }
 
+function isExternalWorkbookReferenceToken(
+  tokens: readonly FormulaToken[],
+  index: number,
+  token: FormulaReferenceToken
+): boolean {
+  return /\[[^\]\r\n]+\]/u.test(token.sheetName ?? "")
+    || hasExternalWorkbookPrefix(tokens, index, token);
+}
+
 function shiftReferenceToken(token: FormulaReferenceToken, context: FormulaStructureContext): string {
   if (!token.end) {
     const nextReference = shiftParsedCellReference(token.start, context);
@@ -609,10 +997,168 @@ function shiftReferenceIndex(value: number, context: FormulaStructureContext): n
 
 function rectangularReferenceTargetsEditedSheet(
   token: FormulaReferenceToken,
-  context: RectangularRowEditContext
+  context: Pick<RectangularRowEditContext, "formulaSheetId" | "editedSheetId">
 ): boolean {
   const target = (token.sheetName ?? context.formulaSheetId).normalize("NFKC").toLowerCase();
   return target === context.editedSheetId.normalize("NFKC").toLowerCase();
+}
+
+function rewriteRectangularRowMoveReferenceToken(
+  token: FormulaReferenceToken,
+  context: RectangularRowMoveContext
+): FormulaRewriteResult {
+  const originalEnd = token.end ?? token.start;
+  const lowColumn = Math.min(token.start.column, originalEnd.column);
+  const highColumn = Math.max(token.start.column, originalEnd.column);
+  if (highColumn < context.tableColumnStart || lowColumn > context.tableColumnEnd) {
+    return { ok: true, formula: token.raw };
+  }
+
+  if (!token.end) {
+    const row = mapReferenceRowForRectangularMove(token.start, context);
+    return row === token.start.row
+      ? { ok: true, formula: token.raw }
+      : {
+          ok: true,
+          formula: `${token.sheetPrefix}${formatParsedCellReference({ ...token.start, row })}`
+        };
+  }
+
+  const interval = rewriteRowIntervalForRectangularRowMove(
+    token.start.row,
+    token.end.row,
+    context
+  );
+  if (interval === null) return unsupportedRowMoveReference();
+  if (interval.start === token.start.row
+    && interval.end === token.end.row) {
+    return { ok: true, formula: token.raw };
+  }
+  if (lowColumn < context.tableColumnStart || highColumn > context.tableColumnEnd) {
+    return unsupportedRowMoveReference();
+  }
+
+  return {
+    ok: true,
+    formula: formatRectangularMember(
+      token.sheetPrefix,
+      { ...token.start, row: interval.start },
+      { ...token.end, row: interval.end }
+    )
+  };
+}
+
+function mapReferenceRowForRectangularMove(
+  reference: ParsedFormulaCellReference,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): number {
+  return rowIsInRectangularMoveBand(reference.row, context)
+    ? mapRectangularRowMove(reference.row, context)
+    : reference.row;
+}
+
+function rowIsInRectangularMoveBand(
+  row: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): boolean {
+  return row >= Math.min(context.sourceRow, context.targetRow)
+    && row <= Math.max(context.sourceRow, context.targetRow);
+}
+
+export function rewriteRowIntervalForRectangularRowMove(
+  startRow: number,
+  endRow: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): { start: number; end: number } | null {
+  const ascending = startRow <= endRow;
+  const low = Math.min(startRow, endRow);
+  const high = Math.max(startRow, endRow);
+  return mergeRowImages(rowImagesForRectangularMove(low, high, context), ascending);
+}
+
+function rowImagesForRectangularMove(
+  low: number,
+  high: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): Array<{ start: number; end: number }> {
+  const movementStart = Math.min(context.sourceRow, context.targetRow);
+  const movementEnd = Math.max(context.sourceRow, context.targetRow);
+  const images: Array<{ start: number; end: number }> = [];
+  appendMappedRowInterval(images, low, Math.min(high, movementStart - 1), 0);
+  if (context.targetRow > context.sourceRow) {
+    if (low <= context.sourceRow && high >= context.sourceRow) {
+      images.push({ start: context.targetRow, end: context.targetRow });
+    }
+    appendMappedRowInterval(
+      images,
+      Math.max(low, context.sourceRow + 1),
+      Math.min(high, context.targetRow),
+      -1
+    );
+  } else {
+    appendMappedRowInterval(
+      images,
+      Math.max(low, context.targetRow),
+      Math.min(high, context.sourceRow - 1),
+      1
+    );
+    if (low <= context.sourceRow && high >= context.sourceRow) {
+      images.push({ start: context.targetRow, end: context.targetRow });
+    }
+  }
+  appendMappedRowInterval(images, Math.max(low, movementEnd + 1), high, 0);
+  return images;
+}
+
+function mergeRowImages(
+  images: Array<{ start: number; end: number }>,
+  ascending: boolean
+): { start: number; end: number } | null {
+  images.sort((left, right) => left.start - right.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const image of images) {
+    const previous = merged.at(-1);
+    if (previous && image.start <= previous.end + 1) {
+      previous.end = Math.max(previous.end, image.end);
+    } else {
+      merged.push({ ...image });
+    }
+  }
+  if (merged.length !== 1) return null;
+  return ascending
+    ? { start: merged[0].start, end: merged[0].end }
+    : { start: merged[0].end, end: merged[0].start };
+}
+
+function appendMappedRowInterval(
+  images: Array<{ start: number; end: number }>,
+  start: number,
+  end: number,
+  offset: number
+): void {
+  if (start > end) return;
+  images.push({ start: start + offset, end: end + offset });
+}
+
+function mapRectangularRowMove(
+  row: number,
+  context: Pick<RectangularRowMoveContext, "sourceRow" | "targetRow">
+): number {
+  if (row === context.sourceRow) return context.targetRow;
+  if (context.targetRow > context.sourceRow) {
+    return row > context.sourceRow && row <= context.targetRow ? row - 1 : row;
+  }
+  return row >= context.targetRow && row < context.sourceRow ? row + 1 : row;
+}
+
+function unsupportedRowMoveReference(): FormulaRewriteResult {
+  return {
+    ok: false,
+    issue: {
+      code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED",
+      message: "Formula range cannot represent this rectangular row move"
+    }
+  };
 }
 
 function translateReferenceRowsWithinColumns(
@@ -675,7 +1221,7 @@ function rewriteRectangularReferenceToken(
     return { ok: true, formula: token.raw };
   }
 
-  const affectedRowInterval = rewriteRowInterval(token.start.row, originalEnd.row, context);
+  const affectedRowInterval = rewriteRowIntervalForRectangularEdit(token.start.row, originalEnd.row, context);
   if (
     affectedRowInterval
     && affectedRowInterval.start === token.start.row
@@ -725,44 +1271,48 @@ function rewriteRectangularReferenceToken(
   };
 }
 
-function rewriteRowInterval(
+export function rewriteRowIntervalForRectangularEdit(
   startRow: number,
   endRow: number,
-  context: RectangularRowEditContext
+  context: Pick<RectangularRowEditContext, "row" | "count" | "operation" | "tableRowEnd">
 ): { start: number; end: number } | null {
   const ascending = startRow <= endRow;
   const low = Math.min(startRow, endRow);
   const high = Math.max(startRow, endRow);
-  let nextLow: number;
-  let nextHigh: number;
+  if (high < context.row || low > context.tableRowEnd) {
+    return { start: startRow, end: endRow };
+  }
+
+  let nextLow = low;
+  let nextHigh = high;
   if (context.operation === "insert") {
-    if (high < context.row) {
-      nextLow = low;
-      nextHigh = high;
-    } else if (low >= context.row) {
-      nextLow = low + context.count;
-      nextHigh = high + context.count;
-    } else {
-      nextLow = low;
-      nextHigh = high + context.count;
+    if (low >= context.row && low <= context.tableRowEnd) {
+      nextLow += context.count;
+    }
+    if (high >= context.row && high <= context.tableRowEnd) {
+      nextHigh += context.count;
     }
   } else {
-    const deleteEnd = context.row + context.count - 1;
-    if (high < context.row) {
-      nextLow = low;
-      nextHigh = high;
-    } else if (low > deleteEnd) {
-      nextLow = low - context.count;
-      nextHigh = high - context.count;
-    } else {
-      const survivesAbove = low < context.row;
-      const survivesBelow = high > deleteEnd;
-      if (!survivesAbove && !survivesBelow) return null;
-      nextLow = survivesAbove ? low : context.row;
-      nextHigh = survivesBelow ? high - context.count : context.row - 1;
-      if (nextLow > nextHigh) return null;
+    const deleteEnd = Math.min(
+      context.row + context.count - 1,
+      context.tableRowEnd
+    );
+    const lowDeleted = low >= context.row && low <= deleteEnd;
+    const highDeleted = high >= context.row && high <= deleteEnd;
+    if (lowDeleted && highDeleted) return null;
+
+    if (lowDeleted) nextLow = context.row;
+    else if (low > deleteEnd && low <= context.tableRowEnd) {
+      nextLow -= context.count;
+    }
+
+    if (highDeleted) nextHigh = context.row - 1;
+    else if (high > deleteEnd && high <= context.tableRowEnd) {
+      nextHigh -= context.count;
     }
   }
+
+  if (nextLow > nextHigh) [nextLow, nextHigh] = [nextHigh, nextLow];
   return ascending ? { start: nextLow, end: nextHigh } : { start: nextHigh, end: nextLow };
 }
 

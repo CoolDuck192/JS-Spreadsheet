@@ -78,6 +78,12 @@
   white-space: nowrap;
 }
 
+.js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__pagination {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
 .js-spreadsheet-root.js-spreadsheet-data-table button,
 .js-spreadsheet-root.js-spreadsheet-data-table input,
 .js-spreadsheet-root.js-spreadsheet-data-table select,
@@ -521,7 +527,7 @@
     padding: 4px 6px;
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button {
     flex: 0 0 30px;
     width: 30px;
     min-height: 30px;
@@ -530,33 +536,33 @@
     font-size: 0;
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button::before {
     font-size: 15px;
     line-height: 1;
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Undo"]::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Undo"]::before {
     content: "↶";
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Redo"]::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Redo"]::before {
     content: "↷";
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Refresh"]::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Refresh"]::before {
     content: "↻";
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Export CSV"]::before,
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Export XLSX"]::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Export CSV"]::before,
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Export XLSX"]::before {
     content: "⇩";
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > button[aria-label="Quick tools"]::before {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-icon-button[aria-label="Quick tools"]::before {
     content: "⋯";
   }
 
-  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar > span {
+  .js-spreadsheet-root.js-spreadsheet-data-table .js-spreadsheet-data-table__toolbar-summary {
     display: none;
   }
 

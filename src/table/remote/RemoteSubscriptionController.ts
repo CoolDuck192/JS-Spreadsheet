@@ -3,6 +3,8 @@ import type { RemoteMutationController } from "./RemoteMutationController";
 import type { RemoteQueryController } from "./RemoteQueryController";
 import type { RemoteSourceEvent, RemoteTableSource } from "./types";
 
+const INVALIDATION_RETRY_DELAYS_MS = [50, 100] as const;
+
 export type RemoteSubscriptionControllerOptions<TRow> = {
   source: RemoteTableSource<TRow>;
   queryController: RemoteQueryController<TRow>;
@@ -18,6 +20,8 @@ export class RemoteSubscriptionController<TRow> {
   private readonly getActiveQuery: () => QueryRequest;
   private readonly createOperationId: () => string;
   private unsubscribe: (() => void) | null = null;
+  private invalidationRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private invalidationRecoveryToken = 0;
   private destroyed = false;
 
   constructor(options: RemoteSubscriptionControllerOptions<TRow>) {
@@ -36,6 +40,7 @@ export class RemoteSubscriptionController<TRow> {
   stop(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.cancelInvalidationRecovery();
   }
 
   accept(event: RemoteSourceEvent<TRow>): void {
@@ -93,8 +98,38 @@ export class RemoteSubscriptionController<TRow> {
 
   private invalidateAndRefresh(): void {
     if (this.destroyed) return;
+    this.cancelInvalidationRecovery();
     this.queryController.invalidate();
-    void this.queryController.refresh(this.createOperationId()).catch(() => {});
+    const token = this.invalidationRecoveryToken;
+    void this.refreshInvalidatedQuery(token, 0);
+  }
+
+  private async refreshInvalidatedQuery(token: number, attemptIndex: number): Promise<void> {
+    if (!this.needsInvalidationRecovery(token)) return;
+    const refreshed = await this.queryController.refresh(this.createOperationId()).catch(() => false);
+    if (refreshed || !this.needsInvalidationRecovery(token)) return;
+    const retryDelay = INVALIDATION_RETRY_DELAYS_MS[attemptIndex];
+    if (retryDelay === undefined) return;
+    this.invalidationRetryTimer = setTimeout(() => {
+      this.invalidationRetryTimer = null;
+      void this.refreshInvalidatedQuery(token, attemptIndex + 1);
+    }, retryDelay);
+  }
+
+  private needsInvalidationRecovery(token: number): boolean {
+    const snapshot = this.queryController.getSnapshot();
+    return !this.destroyed
+      && token === this.invalidationRecoveryToken
+      && snapshot.status === "error"
+      && snapshot.error?.code === "REMOTE_INVALIDATED";
+  }
+
+  private cancelInvalidationRecovery(): void {
+    this.invalidationRecoveryToken += 1;
+    if (this.invalidationRetryTimer !== null) {
+      clearTimeout(this.invalidationRetryTimer);
+      this.invalidationRetryTimer = null;
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractFormulaReferences,
+  rewriteFormulaForRectangularRowMove,
   rewriteFormulaForRectangularRowEdit,
   rewriteFormulaForStructure,
   translateFormulaReferences,
@@ -24,6 +25,13 @@ describe("formulaReferences", () => {
     );
   });
 
+  it("preserves single-quoted sheet names that resemble cell references", () => {
+    expect(translateFormulaReferences(
+      "='A1'!B2+'Q1 data'!C3+A1",
+      { rowOffset: 1, columnOffset: 0 }
+    )).toBe("='A1'!B3+'Q1 data'!C4+A2");
+  });
+
   it("preserves external workbook references while translating same-sheet rows", () => {
     expect(translateFormulaRowsWithinColumns(
       "=[Book.xlsx]Sheet1!A3+A3",
@@ -43,6 +51,308 @@ describe("formulaReferences", () => {
       "=SUM($D3:A$3)",
       { rowOffset: 1, formulaSheetName: "Sheet1", columnStart: 0, columnEnd: 1 }
     )).toBe("=SUM($D3:A$3)");
+  });
+
+  it("maps totals-row moves down while preserving locks and unrelated references", () => {
+    expect(rewriteFormulaForRectangularRowMove(
+      "=$A$6+A$7+$B8+C6+Other!A6",
+      {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7
+      }
+    )).toEqual({
+      ok: true,
+      formula: "=$A$8+A$6+$B7+C6+Other!A6"
+    });
+  });
+
+  it("maps totals-row moves up on same- and cross-sheet dependents", () => {
+    const context = {
+      formulaSheetId: "Summary",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(
+      "=Data!$A$6+Data!A$4+Data!$B5+A6+Other!A6",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=Data!$A$4+Data!A$5+Data!$B6+A6+Other!A6"
+    });
+  });
+
+  it.each([
+    {
+      label: "up during growth",
+      formula: "=A9+$A9+A$9+$A$9+A6+$A$6+SUM(A9:B10)+SUM(A$9:B$10)",
+      context: {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7
+      },
+      expected: "=A9+$A9+A$9+$A$9+A8+$A$8+SUM(A9:B10)+SUM(A$9:B$10)"
+    },
+    {
+      label: "down during shrink",
+      formula: "=A2+$A2+A$2+$A$2+A6+$A$6+SUM(A1:B2)+SUM(A$1:B$2)",
+      context: {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 3
+      },
+      expected: "=A2+$A2+A$2+$A$2+A4+$A$4+SUM(A1:B2)+SUM(A$1:B$2)"
+    }
+  ])("keeps outside-band targets while the formula cell moves $label", ({ formula, context, expected }) => {
+    expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
+      ok: true,
+      formula: expected
+    });
+  });
+
+  it.each([
+    ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
+    ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
+    ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
+    ["quoted 3-D", "=SUM('Jan''A:Mar''B'!B2)"]
+  ])("keeps a physically moved %s formula byte-identical when no local reference changes", (_label, formula) => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(formula, context)).toEqual({
+      ok: true,
+      formula
+    });
+    expect(rewriteFormulaForRectangularRowMove(`${formula}+A7`, context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
+  it.each([
+    "=SUM(Data:Other!B6)",
+    "=SUM(Other:Data!B6)"
+  ])("rejects an affected 3-D row-move reference before any local token changes: %s", (formula) => {
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("keeps a 3-D span that excludes the edited sheet even across the move band", () => {
+    const formula = "=SUM(Jan:Mar!B6)";
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Jan", "Mar", "Data"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({ ok: true, formula });
+  });
+
+  it.each(["Jan:Mar", "Mar:Jan"])(
+    "uses sheet order to reject an edited sheet inside the %s 3-D span",
+    (sheetSpan) => {
+      expect(rewriteFormulaForRectangularRowMove(`=SUM(${sheetSpan}!B6)`, {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        sheetOrder: ["Jan", "Data", "Mar"],
+        tableColumnStart: 0,
+        tableColumnEnd: 1,
+        sourceRow: 5,
+        targetRow: 7
+      })).toMatchObject({
+        ok: false,
+        issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+      });
+    }
+  );
+
+  it("keeps an included 3-D span whose cells do not intersect the move band", () => {
+    const formula = "=SUM(Jan:Mar!B2)";
+    expect(rewriteFormulaForRectangularRowMove(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Jan", "Data", "Mar"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({ ok: true, formula });
+  });
+
+  it("parses a quoted 3-D span with spaced sheet names", () => {
+    const context = {
+      formulaSheetId: "Data Set",
+      editedSheetId: "Data Set",
+      sheetOrder: ["Data Set", "Other Set"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+
+    expect(rewriteFormulaForRectangularRowMove(
+      "=SUM('Data Set:Other Set'!B6)",
+      context
+    )).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("does not treat 3-D-shaped structured reference text as a sheet span", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Data", "Other"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+    for (const structuredReference of [
+      "Table[[Data:Other!B6]]",
+      "Table[Foo'] X Data:Other!B6]",
+      "Table[Foo'[ X Data:Other!B6]"
+    ]) {
+      expect(rewriteFormulaForRectangularRowMove(
+        `=SUM(${structuredReference})`,
+        context
+      )).toEqual({ ok: true, formula: `=SUM(${structuredReference})` });
+      expect(rewriteFormulaForRectangularRowMove(
+        `=SUM(${structuredReference})+A6`,
+        context
+      )).toEqual({ ok: true, formula: `=SUM(${structuredReference})+A8` });
+    }
+  });
+
+  it("keeps an external 3-D reference byte-identical unless a local reference changes", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      sheetOrder: ["Data", "Other"],
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+    const externalReference = "=SUM([Book.xlsx]Data:Other!B6)";
+
+    expect(rewriteFormulaForRectangularRowMove(externalReference, context)).toEqual({
+      ok: true,
+      formula: externalReference
+    });
+    expect(rewriteFormulaForRectangularRowMove(`${externalReference}+A6`, context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
+  it("rejects discontiguous range images instead of merging in formula-copy offsets", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B9)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A2:B4)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("rejects a final range image separated by a locked outside endpoint", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B$9)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
+  });
+
+  it("keeps contiguous row-range images representable in both move directions", () => {
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A7:B8)+SUM(A6:B8)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    })).toEqual({
+      ok: true,
+      formula: "=SUM(A6:B7)+SUM(A6:B8)"
+    });
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM($A$4:B5)+SUM(A4:B6)", {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 3
+    })).toEqual({
+      ok: true,
+      formula: "=SUM($A$5:B6)+SUM(A4:B6)"
+    });
+  });
+
+  it("rejects discontiguous and partial-column row-move images", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 0,
+      tableColumnEnd: 1,
+      sourceRow: 5,
+      targetRow: 7
+    };
+
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A6:B7)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+    expect(rewriteFormulaForRectangularRowMove("=SUM(A6:C7)", context))
+      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
   it("translates reversed ranges wholly inside the bounded columns while honoring row locks", () => {
@@ -73,6 +383,42 @@ describe("formulaReferences", () => {
         range: {
           start: { row: 0, column: 0 },
           end: { row: 0, column: 0 }
+        }
+      }
+    ]);
+  });
+
+  it("ignores A1-shaped text inside single-quoted sheet qualifiers", () => {
+    expect(extractFormulaReferences("='A1'!B2+C2")).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
+        }
+      }
+    ]);
+    expect(extractFormulaReferences("='Sheet''s'!B2+C2")).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
+        }
+      }
+    ]);
+  });
+
+  it.each([
+    "=OtherTable[Net'#Amount]+C2",
+    "=OtherTable[Net''Amount]+C2"
+  ])("extracts references after structured-reference apostrophe escapes in %s", (formula) => {
+    expect(extractFormulaReferences(formula)).toEqual([
+      {
+        label: "C2",
+        range: {
+          start: { row: 1, column: 2 },
+          end: { row: 1, column: 2 }
         }
       }
     ]);
@@ -223,6 +569,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 2,
       count: 1,
       operation: "insert" as const,
@@ -247,6 +594,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 2,
       operation: "delete" as const,
@@ -264,6 +612,72 @@ describe("formulaReferences", () => {
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
   });
 
+  it.each(["insert", "delete"] as const)(
+    "keeps references below the old table rectangle fixed on %s",
+    (operation) => {
+      const context = {
+        formulaSheetId: "Data",
+        editedSheetId: "Data",
+        tableColumnStart: 1,
+        tableColumnEnd: 3,
+        tableRowEnd: 10,
+        row: 4,
+        count: 1,
+        operation,
+        sheetBounds: { rowCount: 100, columnCount: 26 }
+      };
+
+      expect(rewriteFormulaForRectangularRowEdit("=B20*2+SUM(C15:C30)", context)).toEqual({
+        ok: true,
+        formula: "=B20*2+SUM(C15:C30)"
+      });
+    }
+  );
+
+  it("rewrites only the endpoints inside the old table rectangle on insertion", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 3,
+      tableRowEnd: 10,
+      row: 4,
+      count: 2,
+      operation: "insert" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit(
+      "=SUM(B5:B20)+SUM(C3:C11)+D11+SUM(B3:B20)",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=SUM(B7:B20)+SUM(C3:C13)+D13+SUM(B3:B20)"
+    });
+  });
+
+  it("rewrites only the endpoints inside the old table rectangle on deletion", () => {
+    const context = {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 3,
+      tableRowEnd: 10,
+      row: 4,
+      count: 2,
+      operation: "delete" as const,
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    };
+
+    expect(rewriteFormulaForRectangularRowEdit(
+      "=SUM(B7:B20)+SUM(C3:C11)+D11+SUM(B3:B20)",
+      context
+    )).toEqual({
+      ok: true,
+      formula: "=SUM(B5:B20)+SUM(C3:C9)+D9+SUM(B3:B20)"
+    });
+  });
+
   it("preserves quoted text, function names, scientific notation, and other sheets", () => {
     expect(rewriteFormulaForRectangularRowEdit(
       '=LOG10(B2)+1E10+"B2"+\'Rates 2026\'!B2',
@@ -272,6 +686,7 @@ describe("formulaReferences", () => {
         editedSheetId: "Data",
         tableColumnStart: 1,
         tableColumnEnd: 2,
+        tableRowEnd: 3,
         row: 1,
         count: 1,
         operation: "insert",
@@ -291,6 +706,7 @@ describe("formulaReferences", () => {
         editedSheetId: "Data",
         tableColumnStart: 1,
         tableColumnEnd: 2,
+        tableRowEnd: 3,
         row: 1,
         count: 1,
         operation: "insert",
@@ -308,6 +724,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,
@@ -334,6 +751,7 @@ describe("formulaReferences", () => {
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,
@@ -346,24 +764,49 @@ describe("formulaReferences", () => {
     });
   });
 
-  it("rejects external and 3-D references with a typed issue", () => {
+  it.each([
+    ["quoted external workbook", "='[Book.xlsx]Data'!B2"],
+    ["unquoted external workbook", "=[Book.xlsx]Data!B2"],
+    ["unquoted 3-D", "=SUM(Jan:Mar!B2)"],
+    ["quoted 3-D", "=SUM('Jan''A:Mar''B'!B2)"]
+  ])("keeps a %s formula byte-identical unless an affected local reference is also present", (_label, formula) => {
     const context = {
       formulaSheetId: "Data",
       editedSheetId: "Data",
       tableColumnStart: 1,
       tableColumnEnd: 2,
+      tableRowEnd: 3,
       row: 1,
       count: 1,
       operation: "insert" as const,
       sheetBounds: { rowCount: 100, columnCount: 26 }
     };
-    expect(rewriteFormulaForRectangularRowEdit("='[Book.xlsx]Data'!B2", context))
+
+    expect(rewriteFormulaForRectangularRowEdit(formula, context)).toEqual({
+      ok: true,
+      formula
+    });
+    expect(rewriteFormulaForRectangularRowEdit(`${formula}+B2`, context))
       .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=[Book.xlsx]Data!B2", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=SUM(Jan:Mar!B2)", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
-    expect(rewriteFormulaForRectangularRowEdit("=SUM('Jan''A':'Mar''B'!B2)", context))
-      .toMatchObject({ ok: false, issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" } });
+  });
+
+  it.each([
+    "=SUM(Data:Other!B6)",
+    "=SUM(Other:Data!B6)"
+  ])("rejects an affected 3-D row-edit reference before any local token changes: %s", (formula) => {
+    expect(rewriteFormulaForRectangularRowEdit(formula, {
+      formulaSheetId: "Data",
+      editedSheetId: "Data",
+      tableColumnStart: 1,
+      tableColumnEnd: 2,
+      tableRowEnd: 5,
+      row: 2,
+      count: 1,
+      operation: "insert",
+      sheetBounds: { rowCount: 100, columnCount: 26 }
+    })).toMatchObject({
+      ok: false,
+      issue: { code: "TABLE_FORMULA_REFERENCE_UNSUPPORTED" }
+    });
   });
 });
