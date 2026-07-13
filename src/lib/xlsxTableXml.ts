@@ -144,15 +144,13 @@ function readNativeCommentEntries(
     if (!Number.isNaN(sheetId) && !firstSheetIndexById.has(sheetId)) {
       firstSheetIndexById.set(sheetId, workbookSheetIndex);
     }
-    const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
+    const relationship = workbookRelationships.get(excelJsWorksheetRelationshipId(sheet));
     const worksheetPart = relationship
       ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
       : undefined;
     if (
       !sheetName
-      || !worksheetPart
-      || !EXCELJS_WORKSHEET_ENTRY_PATTERN.test(worksheetPart)
-      || !entries.has(worksheetPart)
+      || !isExcelJsWorksheetFileEntry(worksheetPart, entries)
     ) continue;
 
     let comments = commentsByWorksheetPart.get(worksheetPart);
@@ -197,7 +195,7 @@ function readNativeCommentEntries(
   // zipEntries sorts the prepared derivative, so ExcelJS assigns worksheet models
   // to its sparse ID registry in this physical part order after reconciliation.
   const excelJsWorksheetParts = [...entries.keys()]
-    .filter((name) => EXCELJS_WORKSHEET_ENTRY_PATTERN.test(name))
+    .filter((name) => isExcelJsWorksheetFileEntry(name, entries))
     .sort();
   for (const worksheetPart of excelJsWorksheetParts) {
     const worksheet = reconciledWorksheetsByPart.get(worksheetPart);
@@ -220,6 +218,18 @@ function readNativeCommentEntries(
 
 function isExcelJsPublicWorksheetId(id: number): boolean {
   return Number.isInteger(id) && id >= 1 && id <= EXCELJS_MAX_WORKSHEET_ARRAY_INDEX;
+}
+
+function isExcelJsWorksheetFileEntry(
+  entryName: string | undefined,
+  entries: ReadonlyMap<string, Uint8Array>
+): entryName is string {
+  return Boolean(
+    entryName
+    && !entryName.endsWith("/")
+    && EXCELJS_WORKSHEET_ENTRY_PATTERN.test(entryName)
+    && entries.has(entryName)
+  );
 }
 
 export function patchNativeTableXml(
@@ -302,12 +312,32 @@ function excelJsWorksheetIdentity(sheet: XmlElement): { id: number; name: string
   };
 }
 
+function excelJsWorksheetRelationshipId(sheet: XmlElement): string {
+  return sheet.getAttribute("r:id") ?? "";
+}
+
 function sliceAtUtf16CodePointBoundary(value: string, maxCodeUnits: number): string {
   const candidate = value.slice(0, maxCodeUnits);
   const trailingCodeUnit = candidate.charCodeAt(candidate.length - 1);
   return trailingCodeUnit >= 0xd800 && trailingCodeUnit <= 0xdbff
     ? candidate.slice(0, -1)
     : candidate;
+}
+
+function reserveUniqueWorksheetName(name: string, usedNames: Set<string>): string {
+  const baseName = sliceAtUtf16CodePointBoundary(name, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
+  let candidate = baseName;
+  let suffix = 1;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const suffixText = ` ${suffix}`;
+    candidate = `${sliceAtUtf16CodePointBoundary(
+      baseName,
+      EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length
+    )}${suffixText}`;
+    suffix += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
 }
 
 function truncateLongWorksheetNamesForExcelJs(
@@ -319,39 +349,80 @@ function truncateLongWorksheetNamesForExcelJs(
   const sheets = allElementsByLocalName(document, "sheet");
   const renamedWorksheets = new Map<string, string>();
   let changed = false;
-  const worksheetNames = sheets.map((sheet) => {
-    const sourceName = sheet.getAttribute("name");
-    const { name } = excelJsWorksheetIdentity(sheet);
-    if (sourceName === null) {
-      sheet.setAttribute("name", name);
-      changed = true;
-    }
-    return name;
-  });
+  const sourceNames = sheets.map((sheet) => sheet.getAttribute("name"));
   const usedNames = new Set(
-    worksheetNames.flatMap((name) => {
+    sourceNames.flatMap((name) => {
       return name && name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH
         ? [name.toLowerCase()]
         : [];
     })
   );
+  const workbookRelationshipsXml = entries.get("xl/_rels/workbook.xml.rels");
+  const workbookRelationships: ReadonlyMap<string, NativeRelationship> = workbookRelationshipsXml
+    ? relationshipsById(parseXml(strFromU8(workbookRelationshipsXml)))
+    : new Map();
+  const worksheetParts = sheets.map((sheet) => {
+    const relationship = workbookRelationships.get(excelJsWorksheetRelationshipId(sheet));
+    const worksheetPart = relationship
+      ? resolveExcelJsWorkbookWorksheetTarget(relationship.target)
+      : undefined;
+    return isExcelJsWorksheetFileEntry(worksheetPart, entries)
+      ? worksheetPart
+      : undefined;
+  });
+  const finalSynthesizedNameByPart = new Map<string, string | null>();
+  for (const [index, worksheetPart] of worksheetParts.entries()) {
+    if (!worksheetPart) continue;
+    finalSynthesizedNameByPart.set(
+      worksheetPart,
+      sourceNames[index] === null ? excelJsWorksheetIdentity(sheets[index]).name : null
+    );
+  }
+  const synthesizedNamesByPart = new Map<string, string>();
+  for (const worksheetPart of worksheetParts) {
+    if (!worksheetPart || synthesizedNamesByPart.has(worksheetPart)) continue;
+    const finalSynthesizedName = finalSynthesizedNameByPart.get(worksheetPart);
+    if (finalSynthesizedName) {
+      synthesizedNamesByPart.set(
+        worksheetPart,
+        reserveUniqueWorksheetName(finalSynthesizedName, usedNames)
+      );
+    }
+  }
+  const synthesizedNamesBySheetIndex = new Map<number, string>();
+  for (const [index, sheet] of sheets.entries()) {
+    if (sourceNames[index] !== null) continue;
+    const worksheetPart = worksheetParts[index];
+    if (worksheetPart && !synthesizedNamesByPart.has(worksheetPart)) {
+      synthesizedNamesByPart.set(
+        worksheetPart,
+        reserveUniqueWorksheetName(excelJsWorksheetIdentity(sheet).name, usedNames)
+      );
+    } else if (!worksheetPart) {
+      synthesizedNamesBySheetIndex.set(
+        index,
+        reserveUniqueWorksheetName(excelJsWorksheetIdentity(sheet).name, usedNames)
+      );
+    }
+  }
+  const worksheetNames = sheets.map((sheet, index) => {
+    const sourceName = sourceNames[index];
+    if (sourceName !== null) return sourceName;
+
+    const worksheetPart = worksheetParts[index];
+    const candidate = worksheetPart
+      ? synthesizedNamesByPart.get(worksheetPart)!
+      : synthesizedNamesBySheetIndex.get(index)!;
+    sheet.setAttribute("name", candidate);
+    changed = true;
+    return candidate;
+  });
 
   for (const [index, sheet] of sheets.entries()) {
     const name = worksheetNames[index];
     if (!name || name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH) continue;
-    const baseName = sliceAtUtf16CodePointBoundary(name, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
-    let candidate = baseName;
-    let suffix = 1;
-    while (usedNames.has(candidate.toLowerCase())) {
-      const suffixText = ` ${suffix}`;
-      candidate = `${sliceAtUtf16CodePointBoundary(
-        baseName,
-        EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length
-      )}${suffixText}`;
-      suffix += 1;
-    }
+    const candidate = reserveUniqueWorksheetName(name, usedNames);
     sheet.setAttribute("name", candidate);
-    usedNames.add(candidate.toLowerCase());
     renamedWorksheets.set(name, candidate);
     changed = true;
   }
@@ -769,10 +840,10 @@ function resolveRelationshipTarget(sourcePart: string, target: string): string |
   return segments.length > 0 ? segments.join("/") : undefined;
 }
 
-function resolveExcelJsWorkbookWorksheetTarget(target: string): string | undefined {
-  const candidate = `xl/${target.replace(/^(\s|\/xl\/)+/, "")}`;
-  const safelyResolved = resolveRelationshipTarget("workbook.xml", `/${candidate}`);
-  return safelyResolved === candidate ? candidate : undefined;
+function resolveExcelJsWorkbookWorksheetTarget(target: string): string {
+  // The original archive is already validated. Preserve ExcelJS's literal
+  // worksheetHash key here; it does not URI-decode workbook relationship targets.
+  return `xl/${target.replace(/^(\s|\/xl\/)+/, "")}`;
 }
 
 function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {

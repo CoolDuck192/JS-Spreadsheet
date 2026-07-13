@@ -85,6 +85,56 @@ function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array
   return zipSync(entries);
 }
 
+function suffixFirstWorksheetPartWithEncodedSpace(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  entries["xl/worksheets/sheet1.xml%20"] = strToU8(
+    strFromU8(entries["xl/worksheets/sheet1.xml"])
+      .replace(/<tableParts\b[\s\S]*?<\/tableParts>/, "")
+  );
+  delete entries["xl/worksheets/sheet1.xml"];
+  entries["xl/worksheets/_rels/sheet1.xml%20.rels"] =
+    entries["xl/worksheets/_rels/sheet1.xml.rels"];
+  delete entries["xl/worksheets/_rels/sheet1.xml.rels"];
+  for (const name of ["xl/_rels/workbook.xml.rels", "[Content_Types].xml"]) {
+    entries[name] = strToU8(strFromU8(entries[name]).replaceAll("sheet1.xml", "sheet1.xml%20"));
+  }
+  return zipSync(entries);
+}
+
+function rebindFirstWorksheetRelationshipPrefix(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  entries["xl/workbook.xml"] = strToU8(
+    strFromU8(entries["xl/workbook.xml"])
+      .replace("xmlns:r=", "xmlns:x=")
+      .replace('r:id="rId1"', 'x:id="rId1"')
+  );
+  return zipSync(entries);
+}
+
+function turnFirstWorksheetPartIntoDirectoryEntry(bytes: Uint8Array): Uint8Array {
+  const entries = unzipSync(bytes);
+  entries["xl/worksheets/sheet1.xml/"] = strToU8(
+    strFromU8(entries["xl/worksheets/sheet1.xml"])
+      .replace(/<tableParts\b[\s\S]*?<\/tableParts>/, "")
+  );
+  delete entries["xl/worksheets/sheet1.xml"];
+  delete entries["xl/worksheets/_rels/sheet1.xml.rels"];
+  entries["xl/worksheets/_rels/sheet2.xml.rels"] = strToU8(
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" ' +
+    'Target="/xl/comments/comment1.xml" Id="comments"/></Relationships>'
+  );
+  entries["xl/_rels/workbook.xml.rels"] = strToU8(
+    strFromU8(entries["xl/_rels/workbook.xml.rels"])
+      .replace("sheet1.xml", "sheet1.xml/")
+  );
+  entries["[Content_Types].xml"] = strToU8(
+    strFromU8(entries["[Content_Types].xml"])
+      .replace(/<Override PartName="\/xl\/worksheets\/sheet1\.xml"[^>]*\/>/, "")
+  );
+  return zipSync(entries);
+}
+
 function aliasLongCommentWorksheets(
   bytes: Uint8Array,
   aliases: readonly {
@@ -186,6 +236,58 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets[1].comments).toEqual({});
   });
 
+  it("keeps native comments aligned for encoded worksheet targets ExcelJS treats literally", async () => {
+    const source = suffixFirstWorksheetPartWithEncodedSpace(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(validateXlsxArchive(source)).toEqual({ ok: true });
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => ({
+      name: sheet.name,
+      value: sheet.cells.A1,
+      comments: sheet.comments
+    }))).toEqual([
+      { name: "Commented worksheet with a very", value: "Q", comments: { A1: "hello" } },
+      { name: "Commented worksheet with a ve 1", value: 7, comments: {} }
+    ]);
+  });
+
+  it("requires ExcelJS's literal r:id worksheet relationship prefix for comment indexes", async () => {
+    const source = rebindFirstWorksheetRelationshipPrefix(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(validateXlsxArchive(source)).toEqual({ ok: true });
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => ({
+      name: sheet.name,
+      value: sheet.cells.A1,
+      comments: sheet.comments
+    }))).toEqual([
+      { name: "Commented worksheet with a ve 1", value: 7, comments: {} }
+    ]);
+  });
+
+  it("does not index worksheet-shaped ZIP directory entries that ExcelJS skips", async () => {
+    const source = turnFirstWorksheetPartIntoDirectoryEntry(
+      await fixture("variant-comment-long-sheet.xlsx")
+    );
+
+    expect(validateXlsxArchive(source)).toEqual({ ok: true });
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => ({
+      name: sheet.name,
+      value: sheet.cells.A1,
+      comments: sheet.comments
+    }))).toEqual([
+      { name: "Commented worksheet with a ve 1", value: 7, comments: { A1: "hello" } }
+    ]);
+  });
+
   it.each([
     {
       description: "plain aliases sandwich the commented worksheet",
@@ -262,6 +364,60 @@ describe("real native XLSX fixtures", () => {
       ],
       expected: [
         { name: "Survivor", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "a synthesized worksheet name avoids a real name collision",
+      aliases: [
+        { name: "sheet2", sourceIndex: 1, sheetId: 1 },
+        { sourceIndex: 0, sheetId: 2 }
+      ],
+      expected: [
+        { name: "sheet2", value: 7, comments: {} },
+        { name: "sheet2 1", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "synthesized worksheet names detect real collisions case-insensitively",
+      aliases: [
+        { name: "ShEeT2", sourceIndex: 1, sheetId: 1 },
+        { sourceIndex: 0, sheetId: 2 }
+      ],
+      expected: [
+        { name: "ShEeT2", value: 7, comments: {} },
+        { name: "sheet2 1", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "nameless distinct parts with one ID collapse after name synthesis",
+      aliases: [
+        { sourceIndex: 0, sheetId: 2 },
+        { sourceIndex: 1, sheetId: 2 }
+      ],
+      expected: [
+        { name: "sheet2 1", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "nameless aliases of one part reuse one synthesized name",
+      aliases: [
+        { sourceIndex: 0, sheetId: 2 },
+        { sourceIndex: 0, sheetId: 2 }
+      ],
+      expected: [
+        { name: "sheet2", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "nameless aliases use the part's final sheet ID for name synthesis",
+      aliases: [
+        { sourceIndex: 0, sheetId: 1 },
+        { sourceIndex: 0, sheetId: 2 },
+        { sourceIndex: 1, sheetId: 1 }
+      ],
+      expected: [
+        { name: "sheet1", value: 7, comments: {} },
+        { name: "sheet2", value: "Q", comments: { A1: "hello" } }
       ]
     },
     {
