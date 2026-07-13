@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HyperFormula } from "hyperformula";
@@ -9,10 +11,12 @@ import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
 import {
+  addXlsxZipConsistencyMismatch,
   addMalformedWorkbookXml,
   addSyntheticVbaProject,
   addUnsafeWorkbookDoctype,
-  removeXlsxContentTypes
+  removeXlsxContentTypes,
+  replaceNativeTableDocumentRoot
 } from "./test/xlsxImportFixtures";
 
 describe("App", () => {
@@ -1481,6 +1485,59 @@ describe("App", () => {
     ));
     expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
       issue: expect.objectContaining({ code: expect.stringMatching(/^XLSX_/) })
+    }));
+  });
+
+  it("surfaces native-table XML rejections as typed security failures", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const source = await readFile(resolve("src/test/fixtures/xlsx/variant-table.xlsx"));
+    const unsafe = replaceNativeTableDocumentRoot(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File([unsafe], "unsafe-table.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "XLSX import rejected by security checks"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
+      code: "XLSX_XML_UNSAFE",
+      issue: {
+        code: "XLSX_XML_UNSAFE",
+        message: "Expected a native table document"
+      }
+    }));
+  });
+
+  it.each([
+    ["invalid local header", "invalidLocalHeader", /^Invalid local ZIP header for /],
+    ["inconsistent local header", "inconsistentLocalHeader", /^Inconsistent local ZIP header for /],
+    ["inconsistent entry name", "inconsistentEntryName", /^Inconsistent ZIP entry name for /],
+    ["inconsistent sizes", "inconsistentSizes", /^Inconsistent ZIP sizes for /]
+  ] as const)("routes a ZIP %s mismatch to security rejection", async (_label, mismatch, message) => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const unsafe = addXlsxZipConsistencyMismatch(
+      await exportWorkbookToXlsx(createBlankWorkbook()),
+      mismatch
+    );
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File([unsafe], "inconsistent.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "XLSX import rejected by security checks"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
+      code: "XLSX_ARCHIVE_LIMIT",
+      issue: expect.objectContaining({
+        code: "XLSX_ARCHIVE_LIMIT",
+        message: expect.stringMatching(message)
+      })
     }));
   });
 

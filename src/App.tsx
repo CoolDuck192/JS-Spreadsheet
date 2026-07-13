@@ -4369,6 +4369,7 @@ const XLSX_SECURITY_ISSUE_CODES = new Set([
   "XLSX_XML_UNSAFE",
   "XLSX_RELATIONSHIP_INVALID"
 ]);
+const XLSX_ARCHIVE_CONSISTENCY_REJECTION = /^(?:Invalid local ZIP header|Inconsistent local ZIP header|Inconsistent ZIP entry name|Inconsistent ZIP sizes) for .+\.$/i;
 
 function xlsxImportFailureMessage(error: unknown): string {
   if (isRecord(error)) {
@@ -4393,6 +4394,7 @@ function xlsxImportFailureMessage(error: unknown): string {
 function isCorruptXlsxPackageIssue(issue: Record<string, unknown>): boolean {
   if (typeof issue.message !== "string") return false;
   if (issue.code === "XLSX_ARCHIVE_LIMIT") {
+    if (XLSX_ARCHIVE_CONSISTENCY_REJECTION.test(issue.message)) return false;
     return /\b(?:missing|malformed|invalid|truncated|inconsistent|offset|overflow|CRC-32)\b|cannot be safely inflated|could not be safely validated/i
       .test(issue.message);
   }

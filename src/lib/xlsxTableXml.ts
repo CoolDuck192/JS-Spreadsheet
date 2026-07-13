@@ -1069,7 +1069,7 @@ function issueError(issue: { code: string; message: string }): Error {
 }
 
 function tableXmlError(message: string): Error {
-  return Object.assign(new Error(message), { code: "XLSX_XML_UNSAFE" });
+  return issueError({ code: "XLSX_XML_UNSAFE", message });
 }
 
 // Kept exported for the XLSX adapter's explicit standard-function mapping.
