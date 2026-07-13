@@ -319,12 +319,11 @@ describe("xlsxTableXml", () => {
     const comments = readNativeCommentsXml(adversarial);
     const durationMs = performance.now() - startedAt;
 
-    expect(comments).toHaveLength(ALIASED_COMMENT_SHEET_COUNT);
-    expect(comments[ALIASED_COMMENT_SHEET_COUNT - 1]).toEqual({
-      sheetIndex: ALIASED_COMMENT_SHEET_COUNT - 1,
+    expect(comments).toEqual([{
+      sheetIndex: 0,
       sheetName: `Alias ${ALIASED_COMMENT_SHEET_COUNT}`,
       comments: { A1: "hello" }
-    });
+    }]);
     expect(durationMs).toBeLessThan(ALIASED_COMMENT_PARSE_BUDGET_MS);
   });
 

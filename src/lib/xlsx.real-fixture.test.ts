@@ -85,6 +85,25 @@ function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array
   return zipSync(entries);
 }
 
+function aliasLongCommentWorksheets(
+  bytes: Uint8Array,
+  aliases: readonly { name: string; sourceIndex: number }[]
+): Uint8Array {
+  const entries = unzipSync(bytes);
+  const workbookXml = strFromU8(entries["xl/workbook.xml"]);
+  const sourceSheets = workbookXml.match(/<sheet\b[^>]*\/>/g);
+  expect(sourceSheets).toHaveLength(2);
+  const aliasedSheets = aliases.map(({ name, sourceIndex }, index) =>
+    sourceSheets![sourceIndex]
+      .replace(/name="[^"]*"/, `name="${name}"`)
+      .replace(/sheetId="[^"]*"/, `sheetId="${index + 1}"`)
+  ).join("");
+  entries["xl/workbook.xml"] = strToU8(
+    workbookXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${aliasedSheets}</sheets>`)
+  );
+  return zipSync(entries);
+}
+
 describe("real native XLSX fixtures", () => {
   it("imports openpyxl worksheets containing unsupported charts", async () => {
     const workbook = await importWorkbookFromXlsx(await fixture("variant-chart.xlsx"));
@@ -157,6 +176,59 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets).toHaveLength(2);
     expect(workbook.sheets[0].comments).toEqual({ A1: "hello" });
     expect(workbook.sheets[1].comments).toEqual({});
+  });
+
+  it.each([
+    {
+      description: "plain aliases sandwich the commented worksheet",
+      aliases: [
+        { name: "A", sourceIndex: 1 },
+        { name: "S", sourceIndex: 0 },
+        { name: "B", sourceIndex: 1 }
+      ],
+      expected: [
+        { name: "S", value: "Q", comments: { A1: "hello" } },
+        { name: "B", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "plain aliases wholly before the commented worksheet",
+      aliases: [
+        { name: "Plain first", sourceIndex: 1 },
+        { name: "Plain last", sourceIndex: 1 },
+        { name: "Commented", sourceIndex: 0 }
+      ],
+      expected: [
+        { name: "Plain last", value: 7, comments: {} },
+        { name: "Commented", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "plain aliases wholly after the commented worksheet",
+      aliases: [
+        { name: "Commented", sourceIndex: 0 },
+        { name: "Plain first", sourceIndex: 1 },
+        { name: "Plain last", sourceIndex: 1 }
+      ],
+      expected: [
+        { name: "Commented", value: "Q", comments: { A1: "hello" } },
+        { name: "Plain last", value: 7, comments: {} }
+      ]
+    }
+  ])("keeps native comments aligned when $description", async ({ aliases, expected }) => {
+    const source = aliasLongCommentWorksheets(
+      await fixture("variant-comment-long-sheet.xlsx"),
+      aliases
+    );
+
+    expect(validateXlsxArchive(source).ok).toBe(true);
+    const workbook = await importWorkbookFromXlsx(source);
+
+    expect(workbook.sheets.map((sheet) => ({
+      name: sheet.name,
+      value: sheet.cells.A1,
+      comments: sheet.comments
+    }))).toEqual(expected);
   });
 
   it("preserves application-authored comments through the native XML path", async () => {

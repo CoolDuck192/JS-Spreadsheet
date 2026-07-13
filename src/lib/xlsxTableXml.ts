@@ -132,7 +132,10 @@ function readNativeCommentEntries(
   const relationshipsByPart = new Map<string, ReadonlyMap<string, NativeRelationship>>();
   const commentsByPart = new Map<string, Readonly<Record<string, string>>>();
   const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
-  const worksheets: NativeWorksheetComments[] = [];
+  const worksheetsByPart = new Map<
+    string,
+    Omit<NativeWorksheetComments, "sheetIndex">
+  >();
   const workbookSheets = allElementsByLocalName(workbook, "sheet");
   for (const sheet of workbookSheets) {
     const sheetName = sheet.getAttribute("name");
@@ -175,9 +178,13 @@ function readNativeCommentEntries(
       comments = parsedComments;
       commentsByWorksheetPart.set(worksheetPart, comments);
     }
-    worksheets.push({ sheetIndex: worksheets.length, sheetName, comments });
+    worksheetsByPart.delete(worksheetPart);
+    worksheetsByPart.set(worksheetPart, { sheetName, comments });
   }
-  return worksheets;
+  return [...worksheetsByPart.values()].map((worksheet, sheetIndex) => ({
+    sheetIndex,
+    ...worksheet
+  }));
 }
 
 export function patchNativeTableXml(
