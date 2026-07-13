@@ -242,6 +242,56 @@ describe("xlsxTableXml", () => {
     expect(validateXlsxArchive(prepared.excelJsBytes).ok).toBe(true);
   });
 
+  it("drops a trailing high surrogate when truncating a long worksheet name", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const sourceName = `${"A".repeat(30)}😀`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName]).replaceAll(
+          "Commented worksheet with a very long name",
+          sourceName
+        )
+      );
+    }
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const workbookXml = strFromU8(unzipSync(prepared.excelJsBytes)["xl/workbook.xml"]);
+    expect(workbookXml).not.toContain("\uFFFD");
+    const workbook = parseXml(workbookXml);
+    const preparedName = firstByLocalName(workbook, "sheet")?.getAttribute("name");
+
+    expect(preparedName).toBe("A".repeat(30));
+    expect(preparedName).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
+  it("drops a trailing high surrogate before adding a worksheet collision suffix", async () => {
+    const source = await readFile(longCommentFixturePath);
+    const sourceEntries = unzipSync(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const collidingName = `${"A".repeat(28)}😀B`;
+    const sourceName = `${collidingName}C`;
+    for (const entryName of Object.keys(sourceEntries).filter((name) => name.endsWith(".xml"))) {
+      sourceEntries[entryName] = strToU8(
+        strFromU8(sourceEntries[entryName])
+          .replaceAll("Commented worksheet with a very long name", sourceName)
+          .replaceAll("Commented worksheet with a very long note", collidingName)
+      );
+    }
+
+    const prepared = prepareXlsxImportForExcelJs(zipSync(sourceEntries));
+    const workbookXml = strFromU8(unzipSync(prepared.excelJsBytes)["xl/workbook.xml"]);
+    expect(workbookXml).not.toContain("\uFFFD");
+    const workbook = parseXml(workbookXml);
+    const preparedName = firstByLocalName(workbook, "sheet")?.getAttribute("name");
+
+    expect(preparedName).toBe(`${"A".repeat(28)} 1`);
+    expect(preparedName).not.toMatch(/[\uD800-\uDFFF]/);
+  });
+
   it("bounds malformed quoted-formula scanning while preparing long worksheet names", async () => {
     const source = await readFile(longCommentFixturePath);
     const sourceEntries = unzipSync(

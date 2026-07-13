@@ -259,6 +259,14 @@ function entriesWithExcelJsCompatibleWorksheetNames(
   return entries;
 }
 
+function sliceAtUtf16CodePointBoundary(value: string, maxCodeUnits: number): string {
+  const candidate = value.slice(0, maxCodeUnits);
+  const trailingCodeUnit = candidate.charCodeAt(candidate.length - 1);
+  return trailingCodeUnit >= 0xd800 && trailingCodeUnit <= 0xdbff
+    ? candidate.slice(0, -1)
+    : candidate;
+}
+
 function truncateLongWorksheetNamesForExcelJs(
   entries: Map<string, Uint8Array>
 ): ReadonlyMap<string, string> {
@@ -280,12 +288,15 @@ function truncateLongWorksheetNamesForExcelJs(
   for (const sheet of sheets) {
     const name = sheet.getAttribute("name");
     if (!name || name.length <= EXCEL_MAX_WORKSHEET_NAME_LENGTH) continue;
-    const baseName = name.slice(0, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
+    const baseName = sliceAtUtf16CodePointBoundary(name, EXCEL_MAX_WORKSHEET_NAME_LENGTH);
     let candidate = baseName;
     let suffix = 1;
     while (usedNames.has(candidate.toLowerCase())) {
       const suffixText = ` ${suffix}`;
-      candidate = `${baseName.slice(0, EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length)}${suffixText}`;
+      candidate = `${sliceAtUtf16CodePointBoundary(
+        baseName,
+        EXCEL_MAX_WORKSHEET_NAME_LENGTH - suffixText.length
+      )}${suffixText}`;
       suffix += 1;
     }
     sheet.setAttribute("name", candidate);
