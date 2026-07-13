@@ -277,6 +277,68 @@ describe("RemoteMutationController", () => {
     }
   );
 
+  it("settles a partially resolved uncertain batch as superseded after authority resumes", async () => {
+    let queryResult = canonicalResult();
+    const onAcknowledged = vi.fn();
+    const onReconciled = vi.fn();
+    const harness = await createHarness(
+      async () => { throw new Error("connection lost"); },
+      undefined,
+      { query: async () => queryResult, onAcknowledged, onReconciled }
+    );
+    const labelMutation: PreparedRemoteMutation = {
+      kind: "cell-value",
+      rowId: "1",
+      columnId: "label",
+      rawText: "updated",
+      parsedValue: "updated",
+      optimisticCell: {
+        storedValue: "updated",
+        evaluatedValue: "updated",
+        displayValue: "updated",
+        metadata: {}
+      }
+    };
+
+    await harness.controller.execute("operation-mixed", [valueMutation(120), labelMutation]);
+    await harness.controller.execute("operation-newer", [valueMutation(130)]);
+    queryResult = {
+      items: [],
+      revision: "2",
+      completeness: "completeDataset",
+      pageInfo: { kind: "none", total: { kind: "known", value: 0 } }
+    };
+    await harness.queryController.load({
+      ...query(),
+      filter: {
+        kind: "comparison",
+        columnId: "label",
+        operator: "eq",
+        value: { type: "string", value: "visible" }
+      }
+    }, "projected-refresh");
+
+    expect(harness.controller.getPendingOperations().map((operation) => operation.id))
+      .toContain("operation-mixed");
+    expect(onAcknowledged).not.toHaveBeenCalled();
+    expect(onReconciled).not.toHaveBeenCalled();
+
+    queryResult = canonicalResult({
+      revision: "3",
+      row: { id: "1", salary: 130, label: "updated", rowVersion: "row-3" }
+    });
+    await harness.queryController.refresh("matching-refresh");
+
+    expect(harness.controller.getPendingOperations()).toEqual([]);
+    expect(onAcknowledged).not.toHaveBeenCalledWith(expect.objectContaining({
+      operationId: "operation-mixed"
+    }));
+    expect(onReconciled).toHaveBeenCalledWith({
+      operationId: "operation-mixed",
+      outcome: "superseded"
+    });
+  });
+
   it("waits for authority from a query started after the uncertain transition", async () => {
     const mutation = createDeferred<readonly RemoteMutationResult<Row>[]>();
     const earlyRefresh = createDeferred<QueryResult<Row>>();
