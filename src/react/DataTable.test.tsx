@@ -229,7 +229,7 @@ describe("DataTable", () => {
     expect(screen.getByRole("gridcell", { name: "e1 Salary" })).toHaveTextContent("45");
   });
 
-  it("commits the option displayed by a select editor", async () => {
+  it("keeps an unmatched list value unchanged when no option is chosen", async () => {
     const user = userEvent.setup();
     const session = createSession({
       defaultDocument: {
@@ -247,10 +247,45 @@ describe("DataTable", () => {
 
     await user.dblClick(screen.getByRole("gridcell", { name: "e1 Name" }));
     const editor = screen.getByRole("combobox", { name: "Edit e1 Name" });
-    expect(editor).toHaveValue("Grace");
+    expect(editor).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Blank" })).toBeInTheDocument();
     await user.keyboard("{Enter}");
 
-    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveTextContent("Grace");
+    expect(screen.getByRole("gridcell", { name: "e1 Name" })).toHaveTextContent("Ada");
+    session.destroy();
+  });
+
+  it("keeps a blank boolean cell blank when tabbing without a choice", async () => {
+    const user = userEvent.setup();
+    const nullableBooleanColumns: readonly ColumnDef<Employee>[] = [
+      columns[0],
+      columns[1],
+      {
+        id: "active",
+        header: "Active",
+        dataType: "boolean",
+        accessor: (row) => row.active,
+        update: (row: Employee, value: unknown) => ({ ...row, active: value as boolean })
+      },
+      columns[2]
+    ];
+    const session = createSession({
+      source: {
+        kind: "local",
+        rows: [{ ...employees[0], active: null as unknown as boolean }, ...employees.slice(1)],
+        getRowId
+      },
+      columns: nullableBooleanColumns
+    });
+    render(<DataTable aria-label="Boolean editor employees" session={session} />);
+
+    await user.dblClick(screen.getByRole("gridcell", { name: "e1 Active" }));
+    const editor = screen.getByRole("combobox", { name: "Edit e1 Active" });
+    expect(editor).toHaveValue("");
+    await user.keyboard("{Tab}");
+
+    expect(session.getSnapshot().getCell("e1", "active").storedValue).toBeNull();
+    expect(screen.getByRole("gridcell", { name: "e1 Active" })).toHaveTextContent("");
     session.destroy();
   });
 

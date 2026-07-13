@@ -109,7 +109,8 @@ export function DataTableEditor<TRow>({
     : null;
   if (column.dataType === "boolean" || listValues) {
     const values = (listValues ?? ["true", "false"]).map(String);
-    const displayedRawText = values.includes(rawText) ? rawText : values[0] ?? "";
+    const valueIsListed = values.includes(rawText);
+    const displayedRawText = valueIsListed ? rawText : "";
     return (
       <select
         autoFocus
@@ -118,11 +119,14 @@ export function DataTableEditor<TRow>({
         onChange={(event) => onChange(event.currentTarget.value)}
         onKeyDown={(event) => handleEditorKeyDown(
           event,
-          (move) => onCommit(displayedRawText, move),
+          (move) => onCommit(rawText, move),
           onCancel
         )}
       >
-        {values.map((value) => <option key={String(value)} value={String(value)}>{String(value)}</option>)}
+        {!valueIsListed && !values.includes("") ? <option value="">Blank</option> : null}
+        {values.map((value) => (
+          <option key={value} value={value}>{value || "Blank"}</option>
+        ))}
       </select>
     );
   }
