@@ -5,11 +5,19 @@ import { describe, expect, it } from "vitest";
 import type { FilterExpression } from "../table/core/query";
 import type { StructuredTable, WorkbookModel } from "../types";
 import { migrateWorkbookModel } from "../core/workbook/migrateWorkbook";
+import {
+  reduceStructuredTableCommand,
+  type StructuredTableCommandServices
+} from "../core/workbook/structuredTables";
 import { formatCellAddress } from "./addressing";
 import { createBlankWorkbook, setCellComment, setCellContent } from "./workbook";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./xlsx";
 
 const fixtureDirectory = resolve("src/test/fixtures/xlsx");
+const tableCommandServices: StructuredTableCommandServices = {
+  createId: () => "unused-id",
+  getCellEvaluation: () => null
+};
 
 async function fixture(name: string) {
   const bytes = await readFile(resolve(fixtureDirectory, name));
@@ -141,6 +149,38 @@ describe("real native XLSX fixtures", () => {
 
     const roundTripped = await importWorkbookFromXlsx(await exportWorkbookToXlsx(workbook));
     expect(roundTripped.tables[0].name).toBe("T1");
+  });
+
+  it("treats renaming an imported interop table to its current name as unchanged", async () => {
+    const workbook = await importWorkbookFromXlsx(await fixture("variant-table.xlsx"));
+    const table = workbook.tables[0];
+
+    const result = reduceStructuredTableCommand(workbook, {
+      type: "table.rename",
+      tableId: table.id,
+      name: "T1"
+    }, tableCommandServices);
+
+    expect(result.status).toBe("unchanged");
+    expect(result.workbook).toBe(workbook);
+  });
+
+  it("still rejects a genuinely new strict-invalid name for an imported interop table", async () => {
+    const workbook = await importWorkbookFromXlsx(await fixture("variant-table.xlsx"));
+    const table = workbook.tables[0];
+
+    const result = reduceStructuredTableCommand(workbook, {
+      type: "table.rename",
+      tableId: table.id,
+      name: "A1"
+    }, tableCommandServices);
+
+    expect(result).toMatchObject({
+      status: "rejected",
+      workbook,
+      issues: [{ code: "TABLE_NAME_INVALID" }]
+    });
+    expect(result.workbook).toBe(workbook);
   });
 
   it("imports a trimmed openpyxl kitchen sink without losing supported workbook data", async () => {

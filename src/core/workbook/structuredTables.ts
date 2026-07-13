@@ -306,9 +306,9 @@ function createTable(
 function renameTable(workbook: WorkbookModel, tableId: string, name: string): StructuredTableReduction {
   const table = getStructuredTable(workbook, tableId);
   if (!table) return tableNotFound(workbook);
+  if (table.name === name) return { status: "unchanged", workbook };
   const nameIssue = validateName(workbook, name, tableId);
   if (nameIssue) return { status: "rejected", workbook, issues: [nameIssue] };
-  if (table.name === name) return { status: "unchanged", workbook };
   return commitTable(workbook, { ...table, name });
 }
 
