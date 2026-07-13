@@ -134,10 +134,15 @@ function readNativeCommentEntries(
   const commentsByWorksheetPart = new Map<string, Readonly<Record<string, string>>>();
   const worksheetsByPart = new Map<
     string,
-    Omit<NativeWorksheetComments, "sheetIndex">
+    Omit<NativeWorksheetComments, "sheetIndex"> & { orderNo: number }
   >();
+  const firstSheetIndexById = new Map<number, number>();
   const workbookSheets = allElementsByLocalName(workbook, "sheet");
-  for (const sheet of workbookSheets) {
+  for (const [workbookSheetIndex, sheet] of workbookSheets.entries()) {
+    const sheetId = Number.parseInt(sheet.getAttribute("sheetId") ?? "", 10);
+    if (!Number.isNaN(sheetId) && !firstSheetIndexById.has(sheetId)) {
+      firstSheetIndexById.set(sheetId, workbookSheetIndex);
+    }
     const sheetName = sheet.getAttribute("name");
     const relationship = workbookRelationships.get(attributeByLocalName(sheet, "id"));
     const worksheetPart = relationship
@@ -179,12 +184,19 @@ function readNativeCommentEntries(
       commentsByWorksheetPart.set(worksheetPart, comments);
     }
     worksheetsByPart.delete(worksheetPart);
-    worksheetsByPart.set(worksheetPart, { sheetName, comments });
+    worksheetsByPart.set(worksheetPart, {
+      orderNo: firstSheetIndexById.get(sheetId) ?? -1,
+      sheetName,
+      comments
+    });
   }
-  return [...worksheetsByPart.values()].map((worksheet, sheetIndex) => ({
-    sheetIndex,
-    ...worksheet
-  }));
+  return [...worksheetsByPart.values()]
+    .sort((left, right) => left.orderNo - right.orderNo)
+    .map((worksheet, sheetIndex) => ({
+      sheetIndex,
+      sheetName: worksheet.sheetName,
+      comments: worksheet.comments
+    }));
 }
 
 export function patchNativeTableXml(

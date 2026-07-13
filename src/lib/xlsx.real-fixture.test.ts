@@ -87,16 +87,16 @@ function prefixFirstWorksheetTargetWithWhitespace(bytes: Uint8Array): Uint8Array
 
 function aliasLongCommentWorksheets(
   bytes: Uint8Array,
-  aliases: readonly { name: string; sourceIndex: number }[]
+  aliases: readonly { name: string; sourceIndex: number; sheetId?: number }[]
 ): Uint8Array {
   const entries = unzipSync(bytes);
   const workbookXml = strFromU8(entries["xl/workbook.xml"]);
   const sourceSheets = workbookXml.match(/<sheet\b[^>]*\/>/g);
   expect(sourceSheets).toHaveLength(2);
-  const aliasedSheets = aliases.map(({ name, sourceIndex }, index) =>
+  const aliasedSheets = aliases.map(({ name, sourceIndex, sheetId }, index) =>
     sourceSheets![sourceIndex]
       .replace(/name="[^"]*"/, `name="${name}"`)
-      .replace(/sheetId="[^"]*"/, `sheetId="${index + 1}"`)
+      .replace(/sheetId="[^"]*"/, `sheetId="${sheetId ?? index + 1}"`)
   ).join("");
   entries["xl/workbook.xml"] = strToU8(
     workbookXml.replace(/<sheets>[\s\S]*?<\/sheets>/, `<sheets>${aliasedSheets}</sheets>`)
@@ -213,6 +213,30 @@ describe("real native XLSX fixtures", () => {
       expected: [
         { name: "Commented", value: "Q", comments: { A1: "hello" } },
         { name: "Plain last", value: 7, comments: {} }
+      ]
+    },
+    {
+      description: "duplicated IDs place a plain alias group before the commented worksheet",
+      aliases: [
+        { name: "A", sourceIndex: 1, sheetId: 2 },
+        { name: "S", sourceIndex: 0, sheetId: 1 },
+        { name: "B", sourceIndex: 1, sheetId: 2 }
+      ],
+      expected: [
+        { name: "B", value: 7, comments: {} },
+        { name: "S", value: "Q", comments: { A1: "hello" } }
+      ]
+    },
+    {
+      description: "duplicated IDs keep a symmetric commented alias group ahead of the solo plain worksheet",
+      aliases: [
+        { name: "Commented first", sourceIndex: 0, sheetId: 1 },
+        { name: "Plain", sourceIndex: 1, sheetId: 2 },
+        { name: "Commented last", sourceIndex: 0, sheetId: 1 }
+      ],
+      expected: [
+        { name: "Commented last", value: "Q", comments: { A1: "hello" } },
+        { name: "Plain", value: 7, comments: {} }
       ]
     }
   ])("keeps native comments aligned when $description", async ({ aliases, expected }) => {
