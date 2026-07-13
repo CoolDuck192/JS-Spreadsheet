@@ -41,7 +41,10 @@ const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
 const EXCELJS_WORKSHEET_ENTRY_PATTERN = /xl\/worksheets\/sheet\d+[.]xml/;
 const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
 const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProject(?:Signature)?\.bin\.rels)$/i;
-const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
+// Local-time constructor: fflate validates zip timestamps with local getters
+// (getFullYear() etc.), so a UTC-midnight 1980 instant becomes 1979 in
+// negative-offset timezones and throws "date not in range 1980-2099".
+const FIXED_ZIP_DATE = new Date(1980, 0, 1);
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const EXCEL_MAX_WORKSHEET_NAME_LENGTH = 31;
 const EXCEL_MAX_ROWS = 1_048_576;
