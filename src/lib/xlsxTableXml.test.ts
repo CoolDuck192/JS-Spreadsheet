@@ -17,6 +17,7 @@ import {
 
 const fixturePath = resolve("src/test/fixtures/xlsx/generated-sales-structured-table.xlsx");
 const realFixturePath = resolve("src/test/fixtures/xlsx/exceljs-issue-1669.xlsx");
+const chartFixturePath = resolve("src/test/fixtures/xlsx/variant-chart.xlsx");
 
 async function fixture(name: "generated" | "real" = "generated") {
   const bytes = await readFile(name === "generated" ? fixturePath : realFixturePath);
@@ -144,6 +145,24 @@ function firstByLocalName(document: XmlDocument | XmlElement, name: string) {
 }
 
 describe("xlsxTableXml", () => {
+  it("removes unsupported drawing and chart parts from the ExcelJS derivative", async () => {
+    const source = await readFile(chartFixturePath);
+    const prepared = prepareNativeTableXmlForExcelJs(
+      new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
+    );
+    const entries = unzipSync(prepared);
+    const names = Object.keys(entries);
+
+    expect(names.filter((name) => /^xl\/(?:drawings|charts)\//i.test(name))).toEqual([]);
+    expect(strFromU8(entries["xl/worksheets/sheet1.xml"])).not.toMatch(/<drawing\b/i);
+    expect(strFromU8(entries["xl/worksheets/_rels/sheet1.xml.rels"])).not.toContain(
+      "/relationships/drawing"
+    );
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toMatch(
+      /PartName="\/xl\/(?:drawings|charts)\//i
+    );
+  });
+
   it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {
     const source = makeAboveFloorWorksheetPackage();
     const patched = patchNativeTableXml(source, [denseTable]);

@@ -32,8 +32,17 @@ export type NativeTableXmlMetadata = {
 };
 
 const TABLE_ENTRY_PATTERN = /^xl\/tables\/[^/]+\.xml$/i;
+const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
+const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
+const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const DRAWING_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/drawing",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships/vmlDrawing"
+]);
 
 const NATIVE_TO_AGGREGATE: Readonly<Record<string, TableAggregate>> = {
   sum: "sum",
@@ -95,6 +104,7 @@ export function patchNativeTableXml(
  */
 export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
   const entries = new Map(validatedEntries(data));
+  removeUnsupportedDrawingParts(entries);
   for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
     const document = parseXml(strFromU8(entries.get(entryName)!));
     for (const column of allElementsByLocalName(document, "tableColumn")) {
@@ -106,6 +116,47 @@ export function prepareNativeTableXmlForExcelJs(data: Uint8Array): Uint8Array {
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function removeUnsupportedDrawingParts(entries: Map<string, Uint8Array>): void {
+  for (const entryName of [...entries.keys()]) {
+    if (DRAWING_ENTRY_PATTERN.test(entryName)) entries.delete(entryName);
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => WORKSHEET_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    removeElementsByLocalName(document, new Set(["drawing", "legacyDrawing", "legacyDrawingHF"]));
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      const type = relationship.getAttribute("Type") ?? "";
+      const target = relationship.getAttribute("Target") ?? "";
+      if (
+        DRAWING_RELATIONSHIP_TYPES.has(type)
+        || /(?:^|\/)xl\/(?:drawings|charts)\//i.test(target)
+        || /^\.\.\/(?:drawings|charts)\//i.test(target)
+      ) {
+        relationship.parentNode?.removeChild(relationship);
+      }
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (contentTypes) {
+    const document = parseXml(strFromU8(contentTypes));
+    for (const override of allElementsByLocalName(document, "Override")) {
+      const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+      if (DRAWING_ENTRY_PATTERN.test(partName)) override.parentNode?.removeChild(override);
+    }
+    entries.set(
+      "[Content_Types].xml",
+      strToU8(new XMLSerializer().serializeToString(document))
+    );
+  }
 }
 
 function readTableDocument(xml: string): NativeTableXmlMetadata {
@@ -588,6 +639,12 @@ function removeDirectChildren(parent: XmlElement, localName: string): void {
 
 function allElementsByLocalName(document: XmlDocument, localName: string): XmlElement[] {
   return Array.from(document.getElementsByTagName("*")).filter((node) => node.localName === localName);
+}
+
+function removeElementsByLocalName(document: XmlDocument, localNames: ReadonlySet<string>): void {
+  for (const element of Array.from(document.getElementsByTagName("*"))) {
+    if (localNames.has(element.localName ?? "")) element.parentNode?.removeChild(element);
+  }
 }
 
 function xmlRoot(document: XmlDocument): XmlElement {

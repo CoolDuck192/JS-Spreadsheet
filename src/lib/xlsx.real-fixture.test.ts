@@ -46,6 +46,14 @@ function tableXmlStrings(bytes: Uint8Array): string[] {
 }
 
 describe("real native XLSX fixtures", () => {
+  it("imports openpyxl worksheets containing unsupported charts", async () => {
+    const workbook = await importWorkbookFromXlsx(await fixture("variant-chart.xlsx"));
+
+    expect(workbook.sheets).toHaveLength(1);
+    expect(workbook.sheets[0].cells).toMatchObject({ A1: "Q", B5: 200 });
+    expect(workbook.sheets[0].charts).toEqual([]);
+  });
+
   it("imports the deterministic sales matrix exactly and removes filter-derived hidden rows", async () => {
     const expected = JSON.parse(await readFile(
       resolve(fixtureDirectory, "generated-sales-structured-table.expected.json"),
