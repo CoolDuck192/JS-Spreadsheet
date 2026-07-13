@@ -1535,7 +1535,8 @@ describe("App", () => {
       "inconsistentEntryNameWithNewline",
       /^Inconsistent ZIP entry name for \n/
     ],
-    ["inconsistent sizes", "inconsistentSizes", /^Inconsistent ZIP sizes for /]
+    ["inconsistent sizes", "inconsistentSizes", /^Inconsistent ZIP sizes for /],
+    ["invalid stored sizes", "invalidStoredSizes", /^Invalid stored ZIP sizes for /]
   ] as const)("routes a ZIP %s mismatch to security rejection", async (_label, mismatch, message) => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const unsafe = addXlsxZipConsistencyMismatch(
@@ -1548,8 +1549,8 @@ describe("App", () => {
       target: { files: [new File([unsafe], "inconsistent.xlsx")] }
     });
 
-    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
-      "XLSX import rejected by security checks"
+    await waitFor(() => expect(screen.getByLabelText("Status").children[0]).toHaveTextContent(
+      /^XLSX import rejected by security checks$/
     ));
     expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
       code: "XLSX_ARCHIVE_LIMIT",

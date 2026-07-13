@@ -4373,7 +4373,7 @@ const XLSX_SECURITY_ISSUE_CODES = new Set([
   "XLSX_XML_UNSAFE",
   "XLSX_RELATIONSHIP_INVALID"
 ]);
-const XLSX_ARCHIVE_CONSISTENCY_REJECTION = /^(?:Invalid local ZIP header|Inconsistent local ZIP header|Inconsistent ZIP entry name|Inconsistent ZIP sizes) for [\s\S]+\.$/i;
+const XLSX_ARCHIVE_CONSISTENCY_REJECTION = /^(?:Invalid local ZIP header|Inconsistent local ZIP header|Inconsistent ZIP entry name|Inconsistent ZIP sizes|Invalid stored ZIP sizes) for [\s\S]+\.$/i;
 
 function xlsxImportFailureMessage(error: unknown): string {
   if (isRecord(error)) {
