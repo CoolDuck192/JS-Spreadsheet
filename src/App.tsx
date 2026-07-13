@@ -2585,6 +2585,20 @@ function SpreadsheetWorkbook({
       });
   }
 
+  function handleImportFileByExtension(file: File | undefined) {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
+      handleImportXlsx(file);
+    } else if (name.endsWith(".xls")) {
+      setStatus("Legacy .xls files aren't supported. Re-save the workbook as .xlsx and try again.");
+    } else if (name.endsWith(".csv")) {
+      handleImportCsv(file);
+    } else {
+      setStatus("Drop an .xlsx, .xlsm, or .csv file to import it");
+    }
+  }
+
   function handleExportXlsx() {
     const exporter = services?.exporters?.xlsx;
     Promise.resolve().then(async () => exporter
@@ -2779,17 +2793,7 @@ function SpreadsheetWorkbook({
     if (!file) {
       return;
     }
-
-    const name = file.name.toLowerCase();
-    if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
-      handleImportXlsx(file);
-    } else if (name.endsWith(".xls")) {
-      setStatus("Legacy .xls files aren't supported. Re-save the workbook as .xlsx and try again.");
-    } else if (name.endsWith(".csv")) {
-      handleImportCsv(file);
-    } else {
-      setStatus("Drop an .xlsx, .xlsm, or .csv file to import it");
-    }
+    handleImportFileByExtension(file);
   }
 
   const themedStyle = {
@@ -3123,7 +3127,7 @@ function SpreadsheetWorkbook({
           aria-label="XLSX file"
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
-            handleImportXlsx(file);
+            handleImportFileByExtension(file);
             event.currentTarget.value = "";
           }}
         />

@@ -1433,6 +1433,20 @@ describe("App", () => {
     );
   });
 
+  it("explains that legacy XLS files selected from the picker must be re-saved", async () => {
+    const importer = { import: vi.fn().mockResolvedValue(createBlankWorkbook()) };
+    render(<Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File(["legacy"], "budget.xls")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Legacy .xls files aren't supported. Re-save the workbook as .xlsx and try again."
+    ));
+    expect(importer.import).not.toHaveBeenCalled();
+  });
+
   it("imports dropped XLSM workbooks through the sanitizer and reports ignored macros", async () => {
     const workbook = setCellContent(createBlankWorkbook(), "sheet-1", "A1", "macro-safe");
     const bytes = addSyntheticVbaProject(await exportWorkbookToXlsx(workbook));
