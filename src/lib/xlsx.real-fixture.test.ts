@@ -247,8 +247,10 @@ describe("real native XLSX fixtures", () => {
       strFromU8(entries["xl/comments/comment1.xml"])
         .replace('ref="A1"', 'ref="XFD1048576"')
     );
+    const source = zipSync(entries);
 
-    const workbook = await importWorkbookFromXlsx(zipSync(entries));
+    expect(validateXlsxArchive(source)).toEqual({ ok: true });
+    const workbook = await importWorkbookFromXlsx(source);
 
     expect(workbook.sheets[0]).toMatchObject({
       rowCount: 100,
@@ -257,17 +259,18 @@ describe("real native XLSX fixtures", () => {
     expect(workbook.sheets[0].comments).toEqual({});
   });
 
-  it("drops an AZ200 comment-only cell outside the default import grid", async () => {
+  it("grows the import grid for a supported AZ200 comment-only cell", async () => {
     let source = createBlankWorkbook();
     source = setCellComment(source, source.activeSheetId, "AZ200", "orphaned note");
 
     const workbook = await importWorkbookFromXlsx(await exportWorkbookToXlsx(source));
 
     expect(workbook.sheets[0]).toMatchObject({
-      rowCount: 100,
-      columnCount: 26
+      rowCount: 200,
+      columnCount: 52,
+      comments: { AZ200: "orphaned note" }
     });
-    expect(workbook.sheets[0].comments).toEqual({});
+    expect(workbook.sheets[0].cells).not.toHaveProperty("AZ200");
   });
 
   it("imports openpyxl root-relative table relationships without renaming the table", async () => {

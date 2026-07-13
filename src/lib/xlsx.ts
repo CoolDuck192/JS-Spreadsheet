@@ -16,7 +16,10 @@ import type {
 import { columnIndexToName, formatCellAddress, parseCellAddress, parseRangeAddress } from "./addressing";
 import { extractFormulaReferences } from "./formulaReferences";
 import { DEFAULT_ROW_HEIGHT } from "./sheetDimensions";
-import { validateXlsxArchive } from "./xlsxSecurity";
+import {
+  isSupportedXlsxWorksheetSize,
+  validateXlsxArchive
+} from "./xlsxSecurity";
 import {
   patchNativeTableXml,
   prepareXlsxImportForExcelJs
@@ -349,12 +352,21 @@ function worksheetToSheet(
     maxRow = Math.max(maxRow, table.range.end.row);
     maxColumn = Math.max(maxColumn, table.range.end.column);
   }
-  const rowCount = Math.max(DEFAULT_ROWS, maxRow + 1);
-  const columnCount = Math.max(DEFAULT_COLUMNS, maxColumn + 1);
+  let rowCount = Math.max(DEFAULT_ROWS, maxRow + 1);
+  let columnCount = Math.max(DEFAULT_COLUMNS, maxColumn + 1);
   for (const [address, comment] of Object.entries(nativeComments)) {
     const coordinate = parseCellAddress(address);
-    if (coordinate.row < rowCount && coordinate.column < columnCount) {
+    const isAlreadyInGrid =
+      coordinate.row < rowCount && coordinate.column < columnCount;
+    const candidateRowCount = Math.max(rowCount, coordinate.row + 1);
+    const candidateColumnCount = Math.max(columnCount, coordinate.column + 1);
+    if (
+      isAlreadyInGrid ||
+      isSupportedXlsxWorksheetSize(candidateRowCount, candidateColumnCount)
+    ) {
       comments[address] = comment;
+      rowCount = candidateRowCount;
+      columnCount = candidateColumnCount;
     }
   }
   const freezePanes = worksheetFreezePanes(worksheet);

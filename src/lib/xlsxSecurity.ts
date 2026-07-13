@@ -93,6 +93,26 @@ const XML_BUDGET_BASE = 1_024;
 // cells per worksheet. This covers the supported dense import envelope without
 // allowing a sparse full-grid dimension to mint an effectively unbounded grant.
 const MAX_DENSE_WORKSHEET_CELLS = 2_000_000;
+
+export function isSupportedXlsxWorksheetSize(
+  rowCount: number,
+  columnCount: number
+): boolean {
+  if (
+    !Number.isSafeInteger(rowCount) ||
+    !Number.isSafeInteger(columnCount) ||
+    rowCount < 1 ||
+    columnCount < 1 ||
+    rowCount > MAX_WORKSHEET_ROWS ||
+    columnCount > MAX_WORKSHEET_COLUMNS
+  ) {
+    return false;
+  }
+
+  const cells = checkedMultiply(rowCount, columnCount);
+  return cells !== null && cells <= MAX_DENSE_WORKSHEET_CELLS;
+}
+
 const MAX_PART_XML_ELEMENTS =
   XML_BUDGET_BASE + MAX_WORKSHEET_ROWS + MAX_DENSE_WORKSHEET_CELLS * 3;
 const MAX_PART_XML_ATTRIBUTES =
@@ -776,7 +796,7 @@ function worksheetDimensionBudget(value: string): XmlCounts | null {
   const columns = endColumn - startColumn + 1;
   const cells = checkedMultiply(rows, columns);
   if (cells === null) return null;
-  if (cells > MAX_DENSE_WORKSHEET_CELLS) {
+  if (!isSupportedXlsxWorksheetSize(rows, columns)) {
     reject(
       "XLSX_SHEET_TOO_LARGE",
       `Worksheet dimension ${value} is too large to import safely.`

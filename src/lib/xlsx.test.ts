@@ -107,6 +107,20 @@ describe("xlsx", () => {
     expect(getCellContent(imported, importedSecondSheetId, "A1")).toBe("Second sheet");
   });
 
+  it("round-trips a comment-only cell beyond the default row count", async () => {
+    let workbook = createBlankWorkbook();
+    workbook = setCellComment(workbook, workbook.activeSheetId, "A101", "empty-cell note");
+
+    const imported = await importWorkbookFromXlsx(await exportWorkbookToXlsx(workbook));
+
+    expect(imported.sheets[0]).toMatchObject({
+      rowCount: 101,
+      columnCount: 26,
+      comments: { A101: "empty-cell note" }
+    });
+    expect(imported.sheets[0].cells).not.toHaveProperty("A101");
+  });
+
   it("preserves native model number and boolean types through XLSX", async () => {
     let workbook = createBlankWorkbook();
     const sheetId = workbook.activeSheetId;
