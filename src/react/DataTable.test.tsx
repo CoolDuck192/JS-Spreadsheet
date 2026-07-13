@@ -826,6 +826,23 @@ describe("DataTable", () => {
     session.destroy();
   });
 
+  it("does not announce a column move when the session reports no change", async () => {
+    const user = userEvent.setup();
+    const session = createSession();
+    vi.spyOn(session, "dispatch").mockResolvedValueOnce({
+      status: "committed",
+      revision: session.getSnapshot().revision,
+      changed: false
+    });
+    render(<DataTable aria-label="No-op order employees" session={session} />);
+
+    await openColumnMenu(user, "Name");
+    await user.click(screen.getByRole("button", { name: "Move Name right" }));
+
+    expect(screen.getByRole("status")).not.toHaveTextContent("Name moved");
+    session.destroy();
+  });
+
   it("drops a right-moving column after its target and reaches the final position", async () => {
     const session = createSession();
     render(<DataTable aria-label="Right drop employees" session={session} />);

@@ -203,7 +203,9 @@ export function DataTableColumnMenu<TRow>({
     next.splice(index, 1);
     next.splice(target, 0, column.id);
     const result = await run({ type: "set-column-order", columnIds: next });
-    if (result.status === "committed") onAnnouncement(`${label} moved to position ${target + 1}`);
+    if (result.status === "committed" && result.changed) {
+      onAnnouncement(`${label} moved to position ${target + 1}`);
+    }
   }
 
   return (
