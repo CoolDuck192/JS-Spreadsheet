@@ -8,6 +8,12 @@ import { WORKBOOK_STORAGE_KEY } from "./lib/persistence";
 import { exportWorkbookToXlsx, importWorkbookFromXlsx } from "./lib/xlsx";
 import { createBlankWorkbook, getCellContent, setCellContent } from "./lib/workbook";
 import { GOOGLE_CLIENT_ID_STORAGE_KEY } from "./react/browserGoogleClientIdStorage";
+import {
+  addMalformedWorkbookXml,
+  addSyntheticVbaProject,
+  addUnsafeWorkbookDoctype,
+  removeXlsxContentTypes
+} from "./test/xlsxImportFixtures";
 
 describe("App", () => {
   beforeEach(() => {
@@ -1408,6 +1414,142 @@ describe("App", () => {
     await userEvent.setup().click(screen.getByRole("gridcell", { name: "B1 7" }));
     expect(screen.getByLabelText("Formula input")).toHaveValue("=LEN(A1)");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Imported budget.xlsx");
+  });
+
+  it("explains that dropped legacy XLS files must be re-saved", () => {
+    const { container } = render(<App />);
+    const shell = container.querySelector("main.app-shell")!;
+
+    fireEvent.drop(shell, {
+      dataTransfer: { files: [new File(["legacy"], "budget.xls")] }
+    });
+
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Legacy .xls files aren't supported. Re-save the workbook as .xlsx and try again."
+    );
+  });
+
+  it("imports dropped XLSM workbooks through the sanitizer and reports ignored macros", async () => {
+    const workbook = setCellContent(createBlankWorkbook(), "sheet-1", "A1", "macro-safe");
+    const bytes = addSyntheticVbaProject(await exportWorkbookToXlsx(workbook));
+    const file = new File([bytes], "macro-budget.xlsm", {
+      type: "application/vnd.ms-excel.sheet.macroEnabled.12"
+    });
+    const { container } = render(<App />);
+    const shell = container.querySelector("main.app-shell")!;
+
+    fireEvent.drop(shell, { dataTransfer: { files: [file] } });
+
+    expect(await screen.findByRole("gridcell", { name: "A1 macro-safe" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Imported macro-budget.xlsm (macros ignored)"
+    );
+    expect(screen.getByLabelText("XLSX file")).toHaveAttribute(
+      "accept",
+      expect.stringContaining(".xlsm")
+    );
+  });
+
+  it("leaves XLSM macro policy and status to a host-provided importer", async () => {
+    const importer = { import: vi.fn().mockResolvedValue(createBlankWorkbook()) };
+    render(<Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File(["host-owned"], "host-budget.xlsm")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Imported host-budget.xlsm"
+    ));
+    expect(screen.getByLabelText("Status")).not.toHaveTextContent("macros ignored");
+    expect(importer.import).toHaveBeenCalledWith(expect.objectContaining({
+      fileName: "host-budget.xlsm"
+    }));
+  });
+
+  it("surfaces typed XLSX security rejections and logs the underlying error", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const unsafe = addUnsafeWorkbookDoctype(await exportWorkbookToXlsx(createBlankWorkbook()));
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File([unsafe], "unsafe.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "XLSX import rejected by security checks"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
+      issue: expect.objectContaining({ code: expect.stringMatching(/^XLSX_/) })
+    }));
+  });
+
+  it("identifies corrupt XLSX archives separately from security rejections", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File([new Uint8Array([1, 2, 3])], "corrupt.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Could not read XLSX file; it may be corrupt or unreadable"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
+      issue: expect.objectContaining({ code: "XLSX_ARCHIVE_LIMIT" })
+    }));
+  });
+
+  it.each([
+    ["malformed workbook XML", addMalformedWorkbookXml, "XLSX_XML_UNSAFE"],
+    ["missing package content types", removeXlsxContentTypes, "XLSX_RELATIONSHIP_INVALID"]
+  ] as const)("identifies %s as a corrupt workbook", async (_label, mutate, issueCode) => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const corrupt = mutate(await exportWorkbookToXlsx(createBlankWorkbook()));
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File([corrupt], "corrupt-package.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Could not read XLSX file; it may be corrupt or unreadable"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.objectContaining({
+      issue: expect.objectContaining({ code: issueCode })
+    }));
+  });
+
+  it("distinguishes unreadable XLSX files from parser failures", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const file = new File(["unreadable"], "unreadable.xlsx");
+    Object.defineProperty(file, "arrayBuffer", {
+      value: vi.fn().mockRejectedValue(new DOMException("read failed", "NotReadableError"))
+    });
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "Could not read XLSX file; it may be corrupt or unreadable"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", expect.any(DOMException));
+  });
+
+  it("distinguishes unexpected XLSX parser failures", async () => {
+    const failure = new Error("exceljs internal detail");
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const importer = { import: vi.fn().mockRejectedValue(failure) };
+    render(<Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />);
+
+    fireEvent.change(screen.getByLabelText("XLSX file"), {
+      target: { files: [new File(["parser input"], "parser.xlsx")] }
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Status")).toHaveTextContent(
+      "XLSX import failed because the workbook parser encountered an unexpected error"
+    ));
+    expect(consoleError).toHaveBeenCalledWith("XLSX import failed", failure);
   });
 
   it("exports the active workbook as an XLSX file", async () => {

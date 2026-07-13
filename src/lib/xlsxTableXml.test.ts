@@ -8,6 +8,7 @@ import {
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { makeAboveFloorWorksheetPackage } from "../test/xlsxSecurityFixtures";
+import { addSyntheticVbaProject } from "../test/xlsxImportFixtures";
 import type { StructuredTable, WorkbookModel } from "../types";
 import {
   patchNativeTableXml,
@@ -236,6 +237,18 @@ describe("xlsxTableXml", () => {
 
     expect(relationships).toContain('Target="../tables/table1.xml"');
     expect(relationships).not.toContain('Target="/xl/tables/table1.xml"');
+  });
+
+  it("removes VBA projects from the ExcelJS derivative", async () => {
+    const prepared = prepareNativeTableXmlForExcelJs(
+      addSyntheticVbaProject(await fixture())
+    );
+    const entries = unzipSync(prepared);
+
+    expect(entries["xl/vbaProject.bin"]).toBeUndefined();
+    expect(strFromU8(entries["xl/_rels/workbook.xml.rels"])).not.toContain("vbaProject");
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("macroEnabled");
+    expect(strFromU8(entries["[Content_Types].xml"])).not.toContain("vbaProject.bin");
   });
 
   it("patches and revalidates an above-floor A1:J47620 worksheet archive", () => {

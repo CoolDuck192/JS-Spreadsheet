@@ -36,10 +36,15 @@ const COMMENT_ENTRY_PATTERN = /^xl\/comments(?:\/[^/]+|[^/]*)\.xml$/i;
 const DRAWING_ENTRY_PATTERN = /^xl\/(?:drawings|charts)\//i;
 const WORKSHEET_ENTRY_PATTERN = /^xl\/worksheets\/[^/]+\.xml$/i;
 const RELATIONSHIP_ENTRY_PATTERN = /\.rels$/i;
+const VBA_ENTRY_PATTERN = /^xl\/(?:vbaProject(?:Signature)?\.bin|_rels\/vbaProject(?:Signature)?\.bin\.rels)$/i;
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z");
 const XML_NAMESPACE = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const EXCEL_MAX_ROWS = 1_048_576;
 const EXCEL_MAX_COLUMNS = 16_384;
+const XLSX_WORKBOOK_CONTENT_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+const XLSM_WORKBOOK_CONTENT_TYPE =
+  "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
 const DRAWING_RELATIONSHIP_TYPES = new Set([
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
@@ -53,6 +58,10 @@ const COMMENT_RELATIONSHIP_TYPES = new Set([
 const TABLE_RELATIONSHIP_TYPES = new Set([
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table",
   "http://purl.oclc.org/ooxml/officeDocument/relationships/table"
+]);
+const VBA_RELATIONSHIP_TYPES = new Set([
+  "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+  "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"
 ]);
 
 export type NativeWorksheetComments = {
@@ -192,6 +201,7 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   const entries = new Map(entriesInput);
   removeUnsupportedDrawingParts(entries);
   removeCommentParts(entries);
+  removeVbaProjectParts(entries);
   canonicalizeTableRelationshipTargets(entries);
   for (const entryName of [...entries.keys()].filter((name) => TABLE_ENTRY_PATTERN.test(name))) {
     const document = parseXml(strFromU8(entries.get(entryName)!));
@@ -204,6 +214,44 @@ function prepareEntriesForExcelJs(entriesInput: ReadonlyMap<string, Uint8Array>)
   const output = zipEntries(entries);
   assertSafeArchive(output);
   return output;
+}
+
+function removeVbaProjectParts(entries: Map<string, Uint8Array>): void {
+  const removedParts = new Set(
+    [...entries.keys()].filter((name) => VBA_ENTRY_PATTERN.test(name))
+  );
+
+  for (const entryName of [...entries.keys()].filter((name) => RELATIONSHIP_ENTRY_PATTERN.test(name))) {
+    const sourcePart = sourcePartForRelationships(entryName);
+    const document = parseXml(strFromU8(entries.get(entryName)!));
+    for (const relationship of allElementsByLocalName(document, "Relationship")) {
+      const type = relationship.getAttribute("Type") ?? "";
+      if (!VBA_RELATIONSHIP_TYPES.has(type)) continue;
+      const target = sourcePart
+        ? resolveRelationshipTarget(sourcePart, relationship.getAttribute("Target") ?? "")
+        : undefined;
+      if (target) {
+        removedParts.add(target);
+        removedParts.add(relationshipPartName(target));
+      }
+      relationship.parentNode?.removeChild(relationship);
+    }
+    entries.set(entryName, strToU8(new XMLSerializer().serializeToString(document)));
+  }
+  for (const partName of removedParts) entries.delete(partName);
+
+  const contentTypes = entries.get("[Content_Types].xml");
+  if (!contentTypes) return;
+  const document = parseXml(strFromU8(contentTypes));
+  for (const override of allElementsByLocalName(document, "Override")) {
+    const partName = override.getAttribute("PartName")?.replace(/^\//, "") ?? "";
+    if (removedParts.has(partName) || VBA_ENTRY_PATTERN.test(partName)) {
+      override.parentNode?.removeChild(override);
+    } else if (override.getAttribute("ContentType") === XLSM_WORKBOOK_CONTENT_TYPE) {
+      override.setAttribute("ContentType", XLSX_WORKBOOK_CONTENT_TYPE);
+    }
+  }
+  entries.set("[Content_Types].xml", strToU8(new XMLSerializer().serializeToString(document)));
 }
 
 function canonicalizeTableRelationshipTargets(entries: Map<string, Uint8Array>): void {
