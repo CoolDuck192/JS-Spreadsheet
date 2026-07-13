@@ -74,6 +74,7 @@ export type XlsxZipConsistencyMismatch =
   | "invalidLocalHeader"
   | "inconsistentLocalHeader"
   | "inconsistentEntryName"
+  | "inconsistentEntryNameWithNewline"
   | "inconsistentSizes";
 
 export function addXlsxZipConsistencyMismatch(
@@ -104,6 +105,9 @@ export function addXlsxZipConsistencyMismatch(
     }
     case "inconsistentEntryName":
       archive[localOffset + 30] ^= 0x01;
+      break;
+    case "inconsistentEntryNameWithNewline":
+      archive[centralOffset + 46] = 0x0a;
       break;
     case "inconsistentSizes":
       writeU32(archive, localOffset + 22, readU32(archive, localOffset + 22) + 1);

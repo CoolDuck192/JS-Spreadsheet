@@ -1530,6 +1530,11 @@ describe("App", () => {
     ["invalid local header", "invalidLocalHeader", /^Invalid local ZIP header for /],
     ["inconsistent local header", "inconsistentLocalHeader", /^Inconsistent local ZIP header for /],
     ["inconsistent entry name", "inconsistentEntryName", /^Inconsistent ZIP entry name for /],
+    [
+      "multiline inconsistent entry name",
+      "inconsistentEntryNameWithNewline",
+      /^Inconsistent ZIP entry name for \n/
+    ],
     ["inconsistent sizes", "inconsistentSizes", /^Inconsistent ZIP sizes for /]
   ] as const)("routes a ZIP %s mismatch to security rejection", async (_label, mismatch, message) => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
