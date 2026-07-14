@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Trash2 } from "lucide-react";
 import type { SheetChart, SheetModel } from "../types";
 import { formatCellAddress, normalizeRange } from "../lib/addressing";
@@ -21,7 +22,7 @@ const PLOT_WIDTH = SVG_WIDTH - PLOT_LEFT - PLOT_RIGHT;
 const PLOT_HEIGHT = SVG_HEIGHT - PLOT_TOP - PLOT_BOTTOM;
 const PIE_COLORS = ["#2f7d9f", "#398d71", "#b26b3f", "#7a6fb2", "#b04f6f", "#5f7f38"];
 
-export function SheetCharts({ charts, sheet, formulaEngine, onDelete }: SheetChartsProps) {
+export function SheetCharts({ charts, sheet, formulaEngine, onDelete }: SheetChartsProps): ReactElement | null {
   if (charts.length === 0) {
     return null;
   }

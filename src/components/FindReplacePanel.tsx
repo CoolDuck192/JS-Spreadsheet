@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { X } from "lucide-react";
 
 type FindReplacePanelProps = {
@@ -20,7 +21,7 @@ export function FindReplacePanel({
   onReplace,
   onReplaceAll,
   onClose
-}: FindReplacePanelProps) {
+}: FindReplacePanelProps): ReactElement {
   return (
     <aside className="find-panel" aria-label="Find and replace panel">
       <div className="find-panel-header">

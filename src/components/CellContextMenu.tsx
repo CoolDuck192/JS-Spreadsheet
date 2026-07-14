@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useClampedMenuPosition } from "./useClampedMenuPosition";
 
 type CellContextMenuProps = {
@@ -56,7 +57,7 @@ export function CellContextMenu({
   onDeleteColumn,
   onComment,
   onLink
-}: CellContextMenuProps) {
+}: CellContextMenuProps): ReactElement {
   const { menuRef, position } = useClampedMenuPosition(x, y);
 
   function run(action: () => void) {

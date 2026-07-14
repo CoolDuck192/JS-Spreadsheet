@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { X } from "lucide-react";
 import type { CellRange } from "../types";
 
@@ -25,7 +26,7 @@ export function FormulaAuditPanel({
   dependents,
   onSelectReference,
   onClose
-}: FormulaAuditPanelProps) {
+}: FormulaAuditPanelProps): ReactElement {
   return (
     <aside className="formula-audit-panel" aria-label="Formula audit">
       <div className="formula-audit-panel-header">

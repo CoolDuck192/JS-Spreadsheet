@@ -1,3 +1,5 @@
+import type { ReactElement } from "react";
+
 type StatusBarProps = {
   status: string;
   persistence: {
@@ -26,7 +28,7 @@ export function StatusBar({
   onZoomIn,
   onZoomOut,
   onResetZoom
-}: StatusBarProps) {
+}: StatusBarProps): ReactElement {
   const persistenceMessage = persistence.status === "failed"
     ? persistence.message ?? "Workbook storage operation failed"
     : persistence.status === "saving"

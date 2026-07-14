@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { X } from "lucide-react";
 import type { NamedRange, SheetModel } from "../types";
 import { formatRangeAddress } from "../lib/autoSum";
@@ -20,7 +21,7 @@ export function GoToPanel({
   onGoToReference,
   onSelectNamedRange,
   onClose
-}: GoToPanelProps) {
+}: GoToPanelProps): ReactElement {
   return (
     <aside className="go-to-panel" aria-label="Go to">
       <div className="go-to-panel-header">

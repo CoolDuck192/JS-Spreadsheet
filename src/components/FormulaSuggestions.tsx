@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import type { FormulaSuggestion } from "../lib/formulaSuggestions";
 
 type FormulaSuggestionsProps = {
@@ -14,7 +15,7 @@ export function FormulaSuggestions({
   listId,
   onActiveIndexChange,
   onSelect
-}: FormulaSuggestionsProps) {
+}: FormulaSuggestionsProps): ReactElement | null {
   if (suggestions.length === 0) {
     return null;
   }
