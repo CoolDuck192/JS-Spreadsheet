@@ -29,6 +29,7 @@
     "build": "pnpm run typecheck && pnpm run build:app",
     "build:app": "vite build --outDir dist/app --emptyOutDir",
     "build:lib": "tsc -p tsconfig.build.json && vite build --config vite.lib.config.ts",
+    "prepare": "pnpm run build:lib",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run --config vite.config.ts",
     "test:perf": "vitest run --config vitest.perf.config.ts",
