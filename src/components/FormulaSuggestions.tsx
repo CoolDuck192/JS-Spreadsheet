@@ -25,7 +25,7 @@ export function FormulaSuggestions({
   return (
     <div
       id={listId}
-      className="formula-suggestions formula-suggestions--excel"
+      className="js-spreadsheet-formula-suggestions js-spreadsheet-formula-suggestions--excel"
       role="listbox"
       aria-label="Formula suggestions"
       aria-orientation="vertical"
@@ -33,8 +33,8 @@ export function FormulaSuggestions({
       {suggestions.map((suggestion, index) => {
         const isSelected = selectedIndex === index;
         const optionClassName = [
-          "formula-suggestion-option",
-          isSelected ? "formula-suggestion-option--active" : "formula-suggestion-option--idle"
+          "js-spreadsheet-formula-suggestion-option",
+          isSelected ? "js-spreadsheet-formula-suggestion-option--active" : "js-spreadsheet-formula-suggestion-option--idle"
         ].join(" ");
 
         return (
@@ -52,11 +52,11 @@ export function FormulaSuggestions({
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onSelect(suggestion.name)}
           >
-            <span className="formula-suggestion-main">
+            <span className="js-spreadsheet-formula-suggestion-main">
               <strong>{suggestion.name}</strong>
               <code>{suggestion.syntax}</code>
             </span>
-            <span className="formula-suggestion-description">{suggestion.description}</span>
+            <span className="js-spreadsheet-formula-suggestion-description">{suggestion.description}</span>
           </button>
         );
       })}

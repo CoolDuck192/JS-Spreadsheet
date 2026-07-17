@@ -17,7 +17,7 @@ export function SheetTabs({ sheets, activeSheetId, onSelect, onAdd }: SheetTabsP
   }, [activeSheetId]);
 
   return (
-    <div className="sheet-tabs" role="tablist" aria-label="Sheet tabs">
+    <div className="js-spreadsheet-sheet-tabs" role="tablist" aria-label="Sheet tabs">
       {visibleSheets.map((sheet) => {
         const tabStyle: CSSProperties | undefined = sheet.tabColor
           ? { borderTopColor: sheet.tabColor }
@@ -29,7 +29,7 @@ export function SheetTabs({ sheets, activeSheetId, onSelect, onAdd }: SheetTabsP
             type="button"
             role="tab"
             aria-selected={sheet.id === activeSheetId}
-            className={sheet.id === activeSheetId ? "sheet-tab active-sheet-tab" : "sheet-tab"}
+            className={sheet.id === activeSheetId ? "js-spreadsheet-sheet-tab js-spreadsheet-active-sheet-tab" : "js-spreadsheet-sheet-tab"}
             style={tabStyle}
             ref={(element) => {
               if (element) {
@@ -44,7 +44,7 @@ export function SheetTabs({ sheets, activeSheetId, onSelect, onAdd }: SheetTabsP
           </button>
         );
       })}
-      <button type="button" className="add-sheet-tab" aria-label="Add sheet tab" title="Add sheet" onClick={onAdd}>
+      <button type="button" className="js-spreadsheet-add-sheet-tab" aria-label="Add sheet tab" title="Add sheet" onClick={onAdd}>
         +
       </button>
     </div>

@@ -2812,7 +2812,7 @@ function SpreadsheetWorkbook({
       style={themedStyle}
     >
       <main
-        className="app-shell"
+        className="js-spreadsheet-app-shell"
         onKeyDown={handleShellKeyCommand}
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes("Files")) {
@@ -2828,11 +2828,11 @@ function SpreadsheetWorkbook({
         onDrop={handleFileDrop}
       >
         {isDropTargetActive ? (
-          <div className="file-drop-overlay" aria-hidden="true">
+          <div className="js-spreadsheet-file-drop-overlay" aria-hidden="true">
             Drop to import workbook
           </div>
         ) : null}
-        <section className="spreadsheet-surface" aria-label="JavaScript spreadsheet">
+        <section className="js-spreadsheet-spreadsheet-surface" aria-label="JavaScript spreadsheet">
         {features?.toolbar !== false ? (
         <Toolbar
           features={features}
@@ -3111,7 +3111,7 @@ function SpreadsheetWorkbook({
         <>
         <input
           ref={fileInputRef}
-          className="hidden-file-input"
+          className="js-spreadsheet-hidden-file-input"
           type="file"
           accept=".csv,text/csv"
           aria-label="CSV file"
@@ -3123,7 +3123,7 @@ function SpreadsheetWorkbook({
         />
         <input
           ref={xlsxInputRef}
-          className="hidden-file-input"
+          className="js-spreadsheet-hidden-file-input"
           type="file"
           accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
           aria-label="XLSX file"

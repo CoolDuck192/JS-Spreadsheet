@@ -61,8 +61,8 @@ export function ConditionalFormattingPanel({
     (!conditionNeedsRank && (!conditionNeedsValue || (value.trim() !== "" && (ruleType !== "between" || secondValue.trim() !== ""))));
 
   return (
-    <aside className="conditional-panel" aria-label="Conditional formatting">
-      <div className="conditional-panel-header">
+    <aside className="js-spreadsheet-conditional-panel" aria-label="Conditional formatting">
+      <div className="js-spreadsheet-conditional-panel-header">
         <strong>Conditional Formatting</strong>
         <button type="button" aria-label="Close conditional formatting" onClick={onClose}>
           <X />
@@ -91,7 +91,7 @@ export function ConditionalFormattingPanel({
         </select>
       </label>
       {conditionNeedsRank ? (
-        <div className="conditional-value-fields">
+        <div className="js-spreadsheet-conditional-value-fields">
           <label>
             <span>Rank</span>
             <input
@@ -106,7 +106,7 @@ export function ConditionalFormattingPanel({
         </div>
       ) : null}
       {conditionNeedsValue ? (
-        <div className="conditional-value-fields">
+        <div className="js-spreadsheet-conditional-value-fields">
           <label>
             <span>Value</span>
             <input
@@ -128,7 +128,7 @@ export function ConditionalFormattingPanel({
         </div>
       ) : null}
       {isDataBarRule ? (
-        <div className="conditional-style-fields">
+        <div className="js-spreadsheet-conditional-style-fields">
           <label>
             <span>Bar</span>
             <input
@@ -140,7 +140,7 @@ export function ConditionalFormattingPanel({
           </label>
         </div>
       ) : isColorScaleRule ? (
-        <div className="conditional-style-fields">
+        <div className="js-spreadsheet-conditional-style-fields">
           <label>
             <span>Minimum</span>
             <input
@@ -161,7 +161,7 @@ export function ConditionalFormattingPanel({
           </label>
         </div>
       ) : (
-        <div className="conditional-style-fields">
+        <div className="js-spreadsheet-conditional-style-fields">
           <label>
             <span>Fill</span>
             <input
@@ -180,7 +180,7 @@ export function ConditionalFormattingPanel({
               onInput={(event) => setTextColor(event.currentTarget.value)}
             />
           </label>
-          <label className="conditional-check">
+          <label className="js-spreadsheet-conditional-check">
             <input
               type="checkbox"
               aria-label="Conditional bold"
@@ -191,10 +191,10 @@ export function ConditionalFormattingPanel({
           </label>
         </div>
       )}
-      <div className="conditional-panel-actions">
+      <div className="js-spreadsheet-conditional-panel-actions">
         <button
           type="button"
-          className="primary-panel-button"
+          className="js-spreadsheet-primary-panel-button"
           disabled={!canApply}
           onClick={() => {
             onApply({
@@ -226,9 +226,9 @@ export function ConditionalFormattingPanel({
           Clear conditional formats
         </button>
       </div>
-      <section className="conditional-rules-section" aria-label="Conditional format rules">
+      <section className="js-spreadsheet-conditional-rules-section" aria-label="Conditional format rules">
         <h3>Existing rules</h3>
-        <div className="conditional-rules-list" role="list">
+        <div className="js-spreadsheet-conditional-rules-list" role="list">
           {rules.length > 0 ? (
             rules.map((rule) => {
               const rangeLabel = formatRangeAddress(rule.range);
@@ -241,12 +241,12 @@ export function ConditionalFormattingPanel({
                   : rule.format.backgroundColor;
               const previewText = rule.condition.type === "dataBar" ? "Bar" : rule.condition.type === "colorScale" ? "Scale" : "Aa";
               return (
-                <article key={rule.id} className="conditional-rule-item" role="listitem">
+                <article key={rule.id} className="js-spreadsheet-conditional-rule-item" role="listitem">
                   <div>
                     <strong>{rangeLabel}</strong>
                     <span>{conditionLabel}</span>
                   </div>
-                  <div className="conditional-rule-preview" aria-hidden="true">
+                  <div className="js-spreadsheet-conditional-rule-preview" aria-hidden="true">
                     <span
                       style={{
                         backgroundColor: previewBackground,
@@ -268,7 +268,7 @@ export function ConditionalFormattingPanel({
               );
             })
           ) : (
-            <p className="conditional-rules-empty">No conditional format rules</p>
+            <p className="js-spreadsheet-conditional-rules-empty">No conditional format rules</p>
           )}
         </div>
       </section>

@@ -117,10 +117,10 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
 
   if (mode === "editor") {
     return (
-      <div className="cell-editor-shell" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="js-spreadsheet-cell-editor-shell" onMouseDown={(event) => event.stopPropagation()}>
         {validation?.type === "list" ? (
           <select
-            className="cell-editor"
+            className="js-spreadsheet-cell-editor"
             aria-label={`Cell editor ${address}`}
             autoFocus
             value={editorValue}
@@ -147,7 +147,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
         ) : (
           <>
             <input
-              className="cell-editor"
+              className="js-spreadsheet-cell-editor"
               role="combobox"
               aria-label={`Cell editor ${address}`}
               aria-autocomplete="list"
@@ -208,7 +208,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
               }}
             />
             <div
-              className="cell-suggestion-layer"
+              className="js-spreadsheet-cell-suggestion-layer"
               onMouseDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
             >
@@ -233,7 +233,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
     <>
       {conditionalDataBar ? (
         <span
-          className="cell-data-bar"
+          className="js-spreadsheet-cell-data-bar"
           aria-hidden="true"
           style={{ width: `${conditionalDataBar.percent}%`, backgroundColor: conditionalDataBar.color }}
         />
@@ -255,7 +255,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
         <>
           <button
             type="button"
-            className="auto-filter-toggle"
+            className="js-spreadsheet-auto-filter-toggle"
             aria-label={`Open AutoFilter menu for ${autoFilter.label}`}
             aria-haspopup="menu"
             aria-expanded={autoFilterOpen}
@@ -286,7 +286,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
           </button>
           {autoFilterOpen ? (
             <div
-              className="auto-filter-menu"
+              className="js-spreadsheet-auto-filter-menu"
               role="menu"
               aria-label={`AutoFilter menu for ${autoFilter.label}`}
               onMouseDown={(event) => event.stopPropagation()}
@@ -318,7 +318,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
               >
                 Sort Z to A
               </button>
-              <div className="auto-filter-menu-divider" />
+              <div className="js-spreadsheet-auto-filter-menu-divider" />
               <button
                 type="button"
                 role="menuitem"
@@ -330,7 +330,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
               >
                 Clear filter from {autoFilter.label}
               </button>
-              <div className="auto-filter-menu-divider" />
+              <div className="js-spreadsheet-auto-filter-menu-divider" />
               <input
                 type="search"
                 aria-label={`Search ${autoFilter.label} filter values`}
@@ -340,7 +340,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
               <div role="status" aria-live="polite">
                 {autoFilterResultSummary}
               </div>
-              <div className="auto-filter-choice-list">
+              <div className="js-spreadsheet-auto-filter-choice-list">
                 {displayedAutoFilterChoices.map((choice) => (
                   <button
                     key={choice.key}
@@ -369,7 +369,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
       ) : null}
       {structuredTableCell?.role === "header" && !autoFilter ? (
         <span
-          className="structured-table-filter-affordance"
+          className="js-spreadsheet-structured-table-filter-affordance"
           data-testid="structured-table-filter-affordance"
           aria-hidden="true"
           title="Table filter available from the Table tab"
@@ -381,7 +381,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
         <>
           <button
             type="button"
-            className="validation-dropdown-toggle"
+            className="js-spreadsheet-validation-dropdown-toggle"
             aria-label={`Open validation choices for ${address}`}
             aria-haspopup="listbox"
             aria-expanded={validationDropdownOpen}
@@ -405,7 +405,7 @@ export function SpreadsheetCell(props: SpreadsheetCellProps): ReactNode {
           </button>
           {validationDropdownOpen ? (
             <div
-              className="validation-dropdown"
+              className="js-spreadsheet-validation-dropdown"
               role="listbox"
               aria-label={`Validation choices for ${address}`}
               onMouseDown={(event) => event.stopPropagation()}

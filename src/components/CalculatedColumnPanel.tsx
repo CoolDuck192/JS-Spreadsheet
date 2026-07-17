@@ -55,8 +55,8 @@ export function CalculatedColumnPanel({
   }
 
   return (
-    <section className="structured-table-popover" aria-label="Calculated column">
-      <label className="structured-table-field">
+    <section className="js-spreadsheet-structured-table-popover" aria-label="Calculated column">
+      <label className="js-spreadsheet-structured-table-field">
         <span>Calculated column</span>
         <select
           aria-label="Calculated column"
@@ -70,7 +70,7 @@ export function CalculatedColumnPanel({
           ))}
         </select>
       </label>
-      <label className="structured-table-field">
+      <label className="js-spreadsheet-structured-table-field">
         <span>Formula</span>
         <input
           ref={formulaRef}
@@ -91,11 +91,11 @@ export function CalculatedColumnPanel({
         />
       </label>
       {displayedError ? (
-        <p id={errorId} className="structured-table-field-error" role="alert">
+        <p id={errorId} className="js-spreadsheet-structured-table-field-error" role="alert">
           {displayedError}
         </p>
       ) : null}
-      <div className="structured-table-actions">
+      <div className="js-spreadsheet-structured-table-actions">
         <button type="button" onClick={applyFormula} disabled={!columnId}>
           Apply calculated column
         </button>

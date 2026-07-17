@@ -220,7 +220,7 @@ test("keeps the Google setup dialog internally scrollable at 200% zoom", async (
   await page.getByRole("button", { name: "Import Google Sheet", exact: true }).click();
 
   const dialog = page.getByRole("dialog", { name: "Import Google Sheet", exact: true });
-  const body = dialog.locator(".google-sheets-import-body");
+  const body = dialog.locator(".js-spreadsheet-google-sheets-import-body");
   await expect(dialog).toContainText(/HTTPS DNS origin/i);
   await expect(body).toBeVisible();
   const scrollState = await body.evaluate((node) => ({
@@ -412,7 +412,7 @@ test("shows formula text in worksheet cells without changing formula editing", a
   const showFormulasToggle = page.getByRole("button", { name: "Show formulas", exact: true });
   await showFormulasToggle.click();
 
-  await expect(showFormulasToggle).toHaveClass(/active-toolbar-button/);
+  await expect(showFormulasToggle).toHaveClass(/js-spreadsheet-active-toolbar-button/);
   await expect(showFormulasToggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("gridcell", { name: "A3 =SUM(A1:A2)", exact: true })).toBeVisible();
   await expect(page.getByRole("gridcell", { name: "A1 10", exact: true })).toBeVisible();
@@ -775,18 +775,18 @@ test("imports XLSX workbook files", async ({ page }) => {
   await expect(importedCell).toHaveCSS("background-color", "rgb(234, 247, 242)");
   await expect(importedCell).toHaveCSS("text-align", "center");
   await expect(page.getByRole("gridcell", { name: "B1 7", exact: true })).toBeVisible();
-  await expect(page.getByRole("gridcell", { name: "C1 20", exact: true })).toHaveClass(/invalid-validation-cell/);
+  await expect(page.getByRole("gridcell", { name: "C1 20", exact: true })).toHaveClass(/js-spreadsheet-invalid-validation-cell/);
   await expect(page.getByRole("gridcell", { name: "E1 30", exact: true })).toBeVisible();
   const conditionalCell = page.getByRole("gridcell", { name: "F1 20", exact: true });
-  await expect(conditionalCell).toHaveClass(/conditional-format-cell/);
+  await expect(conditionalCell).toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(conditionalCell).toHaveCSS("background-color", "rgb(255, 241, 214)");
   await expect(conditionalCell).toHaveCSS("color", "rgb(138, 75, 0)");
   await expect(conditionalCell).toHaveCSS("font-weight", "700");
-  await expect(page.getByRole("gridcell", { name: "G1 Locked", exact: true })).toHaveClass(/read-only-cell/);
-  await expect(page.getByRole("gridcell", { name: "H1 Input", exact: true })).not.toHaveClass(/read-only-cell/);
+  await expect(page.getByRole("gridcell", { name: "G1 Locked", exact: true })).toHaveClass(/js-spreadsheet-read-only-cell/);
+  await expect(page.getByRole("gridcell", { name: "H1 Input", exact: true })).not.toHaveClass(/js-spreadsheet-read-only-cell/);
   await openRibbonTab(page, "View");
-  await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
-  await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
   await expect(page.getByLabel("Status")).toContainText("Imported budget.xlsx");
 });
 
@@ -799,7 +799,7 @@ test("suggests formulas while editing directly in a cell", async ({ page }) => {
   const suggestions = page.getByRole("listbox", { name: "Formula suggestions" });
   await expect(suggestions).toBeVisible();
   await expect(suggestions.getByText("SUM(number1, [number2], ...)", { exact: true })).toBeVisible();
-  const cellSuggestionMainStyle = await suggestions.locator(".formula-suggestion-main").first().evaluate((element) => {
+  const cellSuggestionMainStyle = await suggestions.locator(".js-spreadsheet-formula-suggestion-main").first().evaluate((element) => {
     const styles = getComputedStyle(element);
     return {
       display: styles.display,
@@ -1097,7 +1097,7 @@ test("adds and removes cell comments", async ({ page }) => {
   await openRibbonTab(page, "Review");
   await page.getByRole("button", { name: "Comment", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).toHaveClass(/commented-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).toHaveClass(/js-spreadsheet-commented-cell/);
   await expect(page.getByRole("gridcell", { name: "A1", exact: true })).toHaveAttribute(
     "title",
     "Comment: Review this assumption"
@@ -1106,7 +1106,7 @@ test("adds and removes cell comments", async ({ page }) => {
 
   await page.getByRole("button", { name: "Comment", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).not.toHaveClass(/commented-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1", exact: true })).not.toHaveClass(/js-spreadsheet-commented-cell/);
   await expect(page.getByLabel("Status")).toContainText("Removed comment from A1");
 });
 
@@ -1120,10 +1120,10 @@ test("merges and unmerges selected cells", async ({ page }) => {
   await page.getByRole("button", { name: "Merge cells", exact: true }).click();
 
   const mergedCell = page.getByRole("gridcell", { name: "A1 Quarterly report", exact: true });
-  await expect(mergedCell).toHaveClass(/merged-cell/);
+  await expect(mergedCell).toHaveClass(/js-spreadsheet-merged-cell/);
   await expect(mergedCell).toHaveAttribute("aria-colspan", "2");
   await expect(mergedCell).toHaveAttribute("aria-rowspan", "2");
-  await expect(page.getByRole("gridcell", { name: "B1", exact: true })).toHaveClass(/merge-covered-cell/);
+  await expect(page.getByRole("gridcell", { name: "B1", exact: true })).toHaveClass(/js-spreadsheet-merge-covered-cell/);
   await expect(page.getByLabel("Status")).toContainText("Merged A1:B2");
 
   const mergedBox = await mergedCell.boundingBox();
@@ -1135,8 +1135,8 @@ test("merges and unmerges selected cells", async ({ page }) => {
 
   await page.getByRole("button", { name: "Unmerge cells", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "A1 Quarterly report", exact: true })).not.toHaveClass(/merged-cell/);
-  await expect(page.getByRole("gridcell", { name: "B1", exact: true })).not.toHaveClass(/merge-covered-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 Quarterly report", exact: true })).not.toHaveClass(/js-spreadsheet-merged-cell/);
+  await expect(page.getByRole("gridcell", { name: "B1", exact: true })).not.toHaveClass(/js-spreadsheet-merge-covered-cell/);
   await expect(page.getByLabel("Status")).toContainText("Unmerged A1:B2");
 });
 
@@ -1190,7 +1190,7 @@ test("copies cell styling with Format Painter", async ({ page }) => {
   await setColor(page.getByLabel("Fill color"), "#1f6feb");
 
   await page.getByRole("button", { name: "Format painter", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Format painter", exact: true })).toHaveClass(/active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Format painter", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
   await targetCell.click();
 
   await expect(targetCell).toHaveText("Target");
@@ -1198,7 +1198,7 @@ test("copies cell styling with Format Painter", async ({ page }) => {
   await expect(targetCell).toHaveCSS("font-style", "italic");
   await expect(targetCell).toHaveCSS("color", "rgb(255, 255, 255)");
   await expect(targetCell).toHaveCSS("background-color", "rgb(31, 111, 235)");
-  await expect(page.getByRole("button", { name: "Format painter", exact: true })).not.toHaveClass(/active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Format painter", exact: true })).not.toHaveClass(/js-spreadsheet-active-toolbar-button/);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Painted format to B1");
 });
 
@@ -1525,7 +1525,7 @@ test("locks and unlocks selected cells", async ({ page }) => {
   await page.getByRole("button", { name: "Lock cells", exact: true }).click();
 
   const lockedCell = page.getByRole("gridcell", { name: "A1 Locked", exact: true });
-  await expect(lockedCell).toHaveClass(/read-only-cell/);
+  await expect(lockedCell).toHaveClass(/js-spreadsheet-read-only-cell/);
   await lockedCell.dblclick();
   await expect(page.getByLabel("Cell editor A1")).toHaveCount(0);
   await expect(page.getByLabel("Status")).toContainText("A1 is read-only");
@@ -1533,7 +1533,7 @@ test("locks and unlocks selected cells", async ({ page }) => {
   await page.getByRole("button", { name: "Unlock cells", exact: true }).click();
   await editCell(page, "A1", "Editable");
 
-  await expect(page.getByRole("gridcell", { name: "A1 Editable", exact: true })).not.toHaveClass(/read-only-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 Editable", exact: true })).not.toHaveClass(/js-spreadsheet-read-only-cell/);
 });
 
 test("blocks cut-paste moves when the source becomes protected before paste", async ({ page }) => {
@@ -1579,8 +1579,8 @@ test("inserts, deletes, and freezes spreadsheet structure", async ({ page }) => 
   await openRibbonTab(page, "View");
   await page.getByRole("button", { name: "Freeze top row", exact: true }).click();
   await page.getByRole("button", { name: "Freeze first column", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/active-toolbar-button/);
-  await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Freeze top row", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Freeze first column", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
 
   await page.getByRole("grid", { name: "Spreadsheet grid" }).evaluate((grid) => {
     grid.scrollTop = 900;
@@ -1709,13 +1709,13 @@ test("wraps and unwraps text from the toolbar", async ({ page }) => {
 
   await page.getByRole("button", { name: "Wrap text", exact: true }).click();
 
-  await expect(cell).toHaveClass(/wrapped-cell/);
+  await expect(cell).toHaveClass(/js-spreadsheet-wrapped-cell/);
   await expect(cell).toHaveCSS("white-space", "normal");
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Wrapped text");
 
   await page.getByRole("button", { name: "Wrap text", exact: true }).click();
 
-  await expect(cell).not.toHaveClass(/wrapped-cell/);
+  await expect(cell).not.toHaveClass(/js-spreadsheet-wrapped-cell/);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Unwrapped text");
 });
 
@@ -1730,8 +1730,8 @@ test("uses keyboard shortcuts for formatting links and filters", async ({ page }
   await page.keyboard.press("Control+I");
   await expect(cell).toHaveCSS("font-weight", "700");
   await expect(cell).toHaveCSS("font-style", "italic");
-  await expect(page.getByRole("button", { name: "Bold", exact: true })).toHaveClass(/active-toolbar-button/);
-  await expect(page.getByRole("button", { name: "Italic", exact: true })).toHaveClass(/active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Bold", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
+  await expect(page.getByRole("button", { name: "Italic", exact: true })).toHaveClass(/js-spreadsheet-active-toolbar-button/);
 
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("Cell link URL");
@@ -1758,7 +1758,7 @@ test("uses the cell context menu for common cell actions", async ({ page }) => {
   await menu.getByRole("menuitem", { name: "Wrap text", exact: true }).click();
 
   await expect(menu).toHaveCount(0);
-  await expect(cell).toHaveClass(/wrapped-cell/);
+  await expect(cell).toHaveClass(/js-spreadsheet-wrapped-cell/);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Wrapped text");
 
   await cell.click({ button: "right" });
@@ -1882,7 +1882,7 @@ test("clears conditional formats from the context menu without clearing direct f
   await page.getByLabel("Conditional value").fill("10");
   await page.getByRole("button", { name: "Apply conditional format", exact: true }).click();
 
-  await expect(cell).toHaveClass(/conditional-format-cell/);
+  await expect(cell).toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(cell).toHaveCSS("background-color", "rgb(255, 241, 214)");
   await expect(cell).toHaveCSS("font-style", "italic");
 
@@ -1893,7 +1893,7 @@ test("clears conditional formats from the context menu without clearing direct f
     .click();
 
   await expect(page.getByRole("gridcell", { name: "A1 12", exact: true })).toBeVisible();
-  await expect(page.getByRole("gridcell", { name: "A1 12", exact: true })).not.toHaveClass(/conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 12", exact: true })).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(page.getByRole("gridcell", { name: "A1 12", exact: true })).toHaveCSS("font-style", "italic");
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Cleared conditional formatting");
 });
@@ -1937,13 +1937,13 @@ test("clears data validation from the context menu without clearing content", as
   await page.getByRole("button", { name: "Apply validation", exact: true }).click();
 
   const invalidCell = page.getByRole("gridcell", { name: "A1 20", exact: true });
-  await expect(invalidCell).toHaveClass(/invalid-validation-cell/);
+  await expect(invalidCell).toHaveClass(/js-spreadsheet-invalid-validation-cell/);
 
   await invalidCell.click({ button: "right" });
   await page.getByRole("menu", { name: "Cell context menu", exact: true }).getByRole("menuitem", { name: "Clear validation", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "A1 20", exact: true })).toBeVisible();
-  await expect(page.getByRole("gridcell", { name: "A1 20", exact: true })).not.toHaveClass(/invalid-validation-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 20", exact: true })).not.toHaveClass(/js-spreadsheet-invalid-validation-cell/);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Cleared data validation");
 });
 
@@ -1993,7 +1993,7 @@ test("validates text length from the data validation panel", async ({ page }) =>
 
   await page.getByLabel("Cell editor A1").fill("West");
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("gridcell", { name: "A1 West", exact: true })).not.toHaveClass(/invalid-validation-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 West", exact: true })).not.toHaveClass(/js-spreadsheet-invalid-validation-cell/);
 
   await page.getByRole("button", { name: "Data validation", exact: true }).click();
   const validationRules = page.getByLabel("Data validation rules", { exact: true });
@@ -2039,7 +2039,7 @@ test("clears comments from the context menu without clearing content", async ({ 
   await page.getByRole("button", { name: "Comment", exact: true }).click();
 
   const cell = page.getByRole("gridcell", { name: "A1 Forecast", exact: true });
-  await expect(cell).toHaveClass(/commented-cell/);
+  await expect(cell).toHaveClass(/js-spreadsheet-commented-cell/);
   await expect(cell).toHaveAttribute("title", "Comment: Review the forecast");
 
   await cell.click({ button: "right" });
@@ -2047,7 +2047,7 @@ test("clears comments from the context menu without clearing content", async ({ 
   await page.getByRole("menu", { name: "Cell context menu", exact: true }).getByRole("menuitem", { name: "Clear comments", exact: true }).click();
 
   await expect(page.getByRole("gridcell", { name: "A1 Forecast", exact: true })).toBeVisible();
-  await expect(page.getByRole("gridcell", { name: "A1 Forecast", exact: true })).not.toHaveClass(/commented-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 Forecast", exact: true })).not.toHaveClass(/js-spreadsheet-commented-cell/);
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Cleared comments");
 });
 
@@ -2064,10 +2064,10 @@ test("applies conditional formatting to matching selected cells", async ({ page 
   await page.getByRole("button", { name: "Apply conditional format", exact: true }).click();
 
   const matchingCell = page.getByRole("gridcell", { name: "A2 12", exact: true });
-  await expect(matchingCell).toHaveClass(/conditional-format-cell/);
+  await expect(matchingCell).toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(matchingCell).toHaveCSS("background-color", "rgb(255, 241, 214)");
   await expect(matchingCell).toHaveCSS("color", "rgb(138, 75, 0)");
-  await expect(page.getByRole("gridcell", { name: "A1 5", exact: true })).not.toHaveClass(/conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A1 5", exact: true })).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
 
   await page.getByRole("button", { name: "Conditional formatting", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Existing rules", exact: true })).toBeVisible();
@@ -2076,7 +2076,7 @@ test("applies conditional formatting to matching selected cells", async ({ page 
 
   await page.getByRole("button", { name: "Delete conditional format rule A1:A3 Greater than 10", exact: true }).click();
 
-  await expect(matchingCell).not.toHaveClass(/conditional-format-cell/);
+  await expect(matchingCell).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(page.getByText("No conditional format rules", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Status", { exact: true })).toContainText("Deleted conditional format rule");
 });
@@ -2097,8 +2097,8 @@ test("highlights blank cells with conditional formatting", async ({ page }) => {
   await page.getByRole("button", { name: "Apply conditional format", exact: true }).click();
 
   const blankCell = page.getByRole("gridcell", { name: "B3", exact: true });
-  await expect(blankCell).toHaveClass(/conditional-format-cell/);
-  await expect(page.getByRole("gridcell", { name: "B2 Done", exact: true })).not.toHaveClass(/conditional-format-cell/);
+  await expect(blankCell).toHaveClass(/js-spreadsheet-conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "B2 Done", exact: true })).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
 
   await page.getByRole("button", { name: "Conditional formatting", exact: true }).click();
   const rules = page.getByLabel("Conditional format rules", { exact: true });
@@ -2121,9 +2121,9 @@ test("highlights duplicate values with conditional formatting", async ({ page })
 
   await page.getByRole("button", { name: "Apply conditional format", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "A2 West", exact: true })).toHaveClass(/conditional-format-cell/);
-  await expect(page.getByRole("gridcell", { name: "A4 West", exact: true })).toHaveClass(/conditional-format-cell/);
-  await expect(page.getByRole("gridcell", { name: "A3 East", exact: true })).not.toHaveClass(/conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A2 West", exact: true })).toHaveClass(/js-spreadsheet-conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A4 West", exact: true })).toHaveClass(/js-spreadsheet-conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A3 East", exact: true })).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
 
   await page.getByRole("button", { name: "Conditional formatting", exact: true }).click();
   const rules = page.getByLabel("Conditional format rules", { exact: true });
@@ -2147,9 +2147,9 @@ test("highlights top ranked values with conditional formatting", async ({ page }
 
   await page.getByRole("button", { name: "Apply conditional format", exact: true }).click();
 
-  await expect(page.getByRole("gridcell", { name: "A3 30", exact: true })).toHaveClass(/conditional-format-cell/);
-  await expect(page.getByRole("gridcell", { name: "A5 30", exact: true })).toHaveClass(/conditional-format-cell/);
-  await expect(page.getByRole("gridcell", { name: "A4 20", exact: true })).not.toHaveClass(/conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A3 30", exact: true })).toHaveClass(/js-spreadsheet-conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A5 30", exact: true })).toHaveClass(/js-spreadsheet-conditional-format-cell/);
+  await expect(page.getByRole("gridcell", { name: "A4 20", exact: true })).not.toHaveClass(/js-spreadsheet-conditional-format-cell/);
 
   await page.getByRole("button", { name: "Conditional formatting", exact: true }).click();
   const rules = page.getByLabel("Conditional format rules", { exact: true });
@@ -2177,9 +2177,9 @@ test("renders conditional formatting data bars for numeric ranges", async ({ pag
   const firstCell = page.getByRole("gridcell", { name: "A2 10", exact: true });
   const lastCell = page.getByRole("gridcell", { name: "A4 30", exact: true });
 
-  await expect(firstCell).toHaveClass(/conditional-data-bar-cell/);
-  await expect(firstCell.locator(".cell-data-bar")).toHaveAttribute("style", /width:\s*33%;/);
-  await expect(lastCell.locator(".cell-data-bar")).toHaveAttribute("style", /width:\s*100%;/);
+  await expect(firstCell).toHaveClass(/js-spreadsheet-conditional-data-bar-cell/);
+  await expect(firstCell.locator(".js-spreadsheet-cell-data-bar")).toHaveAttribute("style", /width:\s*33%;/);
+  await expect(lastCell.locator(".js-spreadsheet-cell-data-bar")).toHaveAttribute("style", /width:\s*100%;/);
 
   await page.getByRole("button", { name: "Conditional formatting", exact: true }).click();
   const rules = page.getByLabel("Conditional format rules", { exact: true });
@@ -2211,7 +2211,7 @@ test("renders conditional formatting color scales for numeric ranges", async ({ 
   const midCell = page.getByRole("gridcell", { name: "A3 20", exact: true });
   const highCell = page.getByRole("gridcell", { name: "A4 30", exact: true });
 
-  await expect(lowCell).toHaveClass(/conditional-format-cell/);
+  await expect(lowCell).toHaveClass(/js-spreadsheet-conditional-format-cell/);
   await expect(lowCell).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await expect(midCell).toHaveCSS("background-color", "rgb(128, 128, 128)");
   await expect(highCell).toHaveCSS("background-color", "rgb(0, 0, 0)");

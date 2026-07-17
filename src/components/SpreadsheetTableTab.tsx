@@ -166,9 +166,9 @@ export function SpreadsheetTableTab({
   }
 
   return (
-    <div className="spreadsheet-table-tab" role="group" aria-label={`Table ${table.name}`}>
-      <div className="structured-table-tab-fields">
-        <label className="structured-table-field">
+    <div className="js-spreadsheet-spreadsheet-table-tab" role="group" aria-label={`Table ${table.name}`}>
+      <div className="js-spreadsheet-structured-table-tab-fields">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Table name</span>
           <input
             ref={nameRef}
@@ -182,7 +182,7 @@ export function SpreadsheetTableTab({
             onKeyDown={(event) => commitOnEnter(event, commitName)}
           />
         </label>
-        <label className="structured-table-field">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Table range</span>
           <input
             ref={rangeRef}
@@ -196,18 +196,18 @@ export function SpreadsheetTableTab({
             onKeyDown={(event) => commitOnEnter(event, commitRange)}
           />
         </label>
-        <label className="structured-table-check">
+        <label className="js-spreadsheet-structured-table-check">
           <input type="checkbox" aria-label="Header row" checked={table.headerRow} onChange={(event) => onHeaderRow(event.currentTarget.checked)} />
           <span>Header row</span>
         </label>
-        <label className="structured-table-check">
+        <label className="js-spreadsheet-structured-table-check">
           <input type="checkbox" aria-label="Totals row" checked={table.totalsRow} onChange={(event) => onTotalsRow(event.currentTarget.checked)} />
           <span>Totals row</span>
         </label>
       </div>
 
-      <div className="structured-table-tab-fields">
-        <label className="structured-table-field">
+      <div className="js-spreadsheet-structured-table-tab-fields">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Totals column</span>
           <select aria-label="Totals column" value={totalsColumnId} onChange={(event) => setTotalsColumnId(event.currentTarget.value)}>
             {table.columns.map((column) => (
@@ -215,7 +215,7 @@ export function SpreadsheetTableTab({
             ))}
           </select>
         </label>
-        <label className="structured-table-field">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Totals function</span>
           <select
             aria-label="Totals function"
@@ -228,7 +228,7 @@ export function SpreadsheetTableTab({
             ))}
           </select>
         </label>
-        <label className="structured-table-field">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Table style</span>
           <select aria-label="Table style" value={style.theme} onChange={(event) => updateStyle({ theme: event.currentTarget.value })}>
             {TABLE_STYLES.map((option) => (
@@ -236,7 +236,7 @@ export function SpreadsheetTableTab({
             ))}
           </select>
         </label>
-        <label className="structured-table-field">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Key column</span>
           <select aria-label="Key column" value={table.keyColumnId ?? ""} onChange={(event) => onKeyColumn(event.currentTarget.value || undefined)}>
             <option value="">No key column</option>
@@ -247,14 +247,14 @@ export function SpreadsheetTableTab({
         </label>
       </div>
 
-      <div className="structured-table-style-options" role="group" aria-label="Table style options">
+      <div className="js-spreadsheet-structured-table-style-options" role="group" aria-label="Table style options">
         <StyleToggle label="First column" checked={Boolean(style.showFirstColumn)} onChange={(checked) => updateStyle({ showFirstColumn: checked })} />
         <StyleToggle label="Last column" checked={Boolean(style.showLastColumn)} onChange={(checked) => updateStyle({ showLastColumn: checked })} />
         <StyleToggle label="Row stripes" checked={style.showRowStripes !== false} onChange={(checked) => updateStyle({ showRowStripes: checked })} />
         <StyleToggle label="Column stripes" checked={Boolean(style.showColumnStripes)} onChange={(checked) => updateStyle({ showColumnStripes: checked })} />
       </div>
 
-      <div className="structured-table-actions" role="group" aria-label="Table actions">
+      <div className="js-spreadsheet-structured-table-actions" role="group" aria-label="Table actions">
         <button type="button" aria-expanded={openPanel === "calculated"} onClick={() => setOpenPanel((current) => current === "calculated" ? null : "calculated")}>
           Calculated column
         </button>
@@ -270,7 +270,7 @@ export function SpreadsheetTableTab({
         >
           Export table
         </button>
-        {exportReason ? <span id={exportReasonId} className="visually-hidden">{exportReason}</span> : null}
+        {exportReason ? <span id={exportReasonId} className="js-spreadsheet-visually-hidden">{exportReason}</span> : null}
         <button type="button" onClick={onConvertToRange}>Convert to range</button>
         <button type="button" onClick={onOpenTableView}>Open table view</button>
       </div>
@@ -295,7 +295,7 @@ export function SpreadsheetTableTab({
       ) : null}
 
       {nameError || rangeError || generalIssues.length > 0 ? (
-        <div className="structured-table-issue-summary" role="alert" aria-live="assertive">
+        <div className="js-spreadsheet-structured-table-issue-summary" role="alert" aria-live="assertive">
           {nameError ? <p id={nameErrorId}>{nameError}</p> : null}
           {rangeError ? <p id={rangeErrorId}>{rangeError}</p> : null}
           {generalIssues.map((issue, index) => <p key={`${issue.code}-${index}`}>{issue.message}</p>)}
@@ -307,7 +307,7 @@ export function SpreadsheetTableTab({
 
 function StyleToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange(checked: boolean): void }) {
   return (
-    <label className="structured-table-check">
+    <label className="js-spreadsheet-structured-table-check">
       <input type="checkbox" aria-label={label} checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />
       <span>{label}</span>
     </label>

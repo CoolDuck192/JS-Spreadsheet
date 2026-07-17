@@ -57,9 +57,9 @@ export function FormulaBar({
   return (
     // role="group" exposes the aria-label (ignored on generic divs) and keeps
     // the region distinguishable from the View tab's "Formula bar" toggle.
-    <div className="formula-bar" role="group" aria-label="Formula bar">
+    <div className="js-spreadsheet-formula-bar" role="group" aria-label="Formula bar">
       <input
-        className="name-box"
+        className="js-spreadsheet-name-box"
         aria-label="Name box"
         title="Name box"
         value={nameBoxValue}
@@ -72,7 +72,7 @@ export function FormulaBar({
           }
         }}
       />
-      <div className="formula-input-wrap">
+      <div className="js-spreadsheet-formula-input-wrap">
         <input
           aria-label="Formula input"
           aria-autocomplete="list"

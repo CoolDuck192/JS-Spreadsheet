@@ -455,27 +455,27 @@ export function Grid({
       minHeight: cellHeight
     };
     const className = [
-      "cell",
-      isSelected ? "selected-cell" : "",
-      isActive ? "active-cell" : "",
-      isEditing ? "editing-cell" : "",
-      isMergeAnchor ? "merged-cell" : "",
-      isMergeCovered ? "merge-covered-cell" : "",
-      isInvalidValidation ? "invalid-validation-cell" : "",
-      comment && !isMergeCovered ? "commented-cell" : "",
-      hyperlink ? "hyperlink-cell" : "",
-      isAutoFilterHeader ? "auto-filter-header-cell" : "",
-      activeAutoFilter ? "filtered-header-cell" : "",
-      showValidationDropdown ? "validation-list-cell" : "",
-      mergedFormat?.wrapText ? "wrapped-cell" : "",
-      isReadOnly ? "read-only-cell" : "",
-      conditionalFormat ? "conditional-format-cell" : "",
-      conditionalDataBar ? "conditional-data-bar-cell" : "",
-      structuredTableCell ? "structured-table-cell" : "",
-      structuredTableCell ? `structured-table-cell--${structuredTableCell.role}` : "",
-      isStructuredTableStriped ? "structured-table-cell--striped" : "",
-      freezeTopRow && row === 0 ? "frozen-top-row-cell" : "",
-      freezeFirstColumn && column === 0 ? "frozen-first-column-cell" : ""
+      "js-spreadsheet-cell",
+      isSelected ? "js-spreadsheet-selected-cell" : "",
+      isActive ? "js-spreadsheet-active-cell" : "",
+      isEditing ? "js-spreadsheet-editing-cell" : "",
+      isMergeAnchor ? "js-spreadsheet-merged-cell" : "",
+      isMergeCovered ? "js-spreadsheet-merge-covered-cell" : "",
+      isInvalidValidation ? "js-spreadsheet-invalid-validation-cell" : "",
+      comment && !isMergeCovered ? "js-spreadsheet-commented-cell" : "",
+      hyperlink ? "js-spreadsheet-hyperlink-cell" : "",
+      isAutoFilterHeader ? "js-spreadsheet-auto-filter-header-cell" : "",
+      activeAutoFilter ? "js-spreadsheet-filtered-header-cell" : "",
+      showValidationDropdown ? "js-spreadsheet-validation-list-cell" : "",
+      mergedFormat?.wrapText ? "js-spreadsheet-wrapped-cell" : "",
+      isReadOnly ? "js-spreadsheet-read-only-cell" : "",
+      conditionalFormat ? "js-spreadsheet-conditional-format-cell" : "",
+      conditionalDataBar ? "js-spreadsheet-conditional-data-bar-cell" : "",
+      structuredTableCell ? "js-spreadsheet-structured-table-cell" : "",
+      structuredTableCell ? `js-spreadsheet-structured-table-cell--${structuredTableCell.role}` : "",
+      isStructuredTableStriped ? "js-spreadsheet-structured-table-cell--striped" : "",
+      freezeTopRow && row === 0 ? "js-spreadsheet-frozen-top-row-cell" : "",
+      freezeFirstColumn && column === 0 ? "js-spreadsheet-frozen-first-column-cell" : ""
     ]
       .filter(Boolean)
       .join(" ");
@@ -884,7 +884,7 @@ export function Grid({
     "--js-spreadsheet-row-header-width": showHeaders ? `${ROW_HEADER_WIDTH}px` : "0px",
     "--js-spreadsheet-column-header-height": showHeaders ? `${COLUMN_HEADER_HEIGHT}px` : "0px"
   } as CSSProperties;
-  const rootClassName = ["grid-scroll", showGridlines ? "" : "grid-scroll--no-gridlines"]
+  const rootClassName = ["js-spreadsheet-grid-scroll", showGridlines ? "" : "js-spreadsheet-grid-scroll--no-gridlines"]
     .filter(Boolean)
     .join(" ");
 
@@ -965,7 +965,7 @@ export function Grid({
           ? () => (
               <button
                 type="button"
-                className="corner-cell"
+                className="js-spreadsheet-corner-cell"
                 aria-label="Select sheet"
                 aria-pressed={isWholeSheetSelected}
                 style={{ position: "relative", width: "100%", height: "100%" }}
@@ -982,16 +982,16 @@ export function Grid({
       renderOverlay={() => (
         <>
           {selectionRect && !editingCell ? (
-            <div className="selection-outline" aria-hidden="true" style={selectionRect} />
+            <div className="js-spreadsheet-selection-outline" aria-hidden="true" style={selectionRect} />
           ) : null}
-          {copiedRect ? <div className="copy-marquee" aria-hidden="true" style={copiedRect} /> : null}
+          {copiedRect ? <div className="js-spreadsheet-copy-marquee" aria-hidden="true" style={copiedRect} /> : null}
           {fillPreviewRect ? (
-            <div className="fill-preview-outline" aria-hidden="true" style={fillPreviewRect} />
+            <div className="js-spreadsheet-fill-preview-outline" aria-hidden="true" style={fillPreviewRect} />
           ) : null}
           {showFillHandle && selectionRect ? (
             <button
               type="button"
-              className="auto-fill-handle"
+              className="js-spreadsheet-auto-fill-handle"
               aria-label="AutoFill selection"
               title="AutoFill selection"
               style={{
@@ -1038,7 +1038,7 @@ export function Grid({
         "data-gridlines": showGridlines ? "visible" : "hidden",
         "data-headers": showHeaders ? "visible" : "hidden"
       }}
-      canvasClassName="spreadsheet-grid"
+      canvasClassName="js-spreadsheet-spreadsheet-grid"
       interactionEventMode="mouse"
       onBeforeKeyDown={onKeyCommand}
       onCellMouseEnter={(cell) => {
@@ -1090,7 +1090,7 @@ export function Grid({
         const hit =
           !selected && index >= normalizedSelection.start.column && index <= normalizedSelection.end.column;
         return {
-          className: ["column-header", selected ? "selected-header" : "", hit ? "column-header--hit" : ""]
+          className: ["js-spreadsheet-column-header", selected ? "js-spreadsheet-selected-header" : "", hit ? "js-spreadsheet-column-header--hit" : ""]
             .filter(Boolean)
             .join(" "),
           ariaSelected: selected,
@@ -1106,7 +1106,7 @@ export function Grid({
           index <= normalizedSelection.end.row;
         const hit = !selected && index >= normalizedSelection.start.row && index <= normalizedSelection.end.row;
         return {
-          className: ["row-header", selected ? "selected-header" : "", hit ? "row-header--hit" : ""]
+          className: ["js-spreadsheet-row-header", selected ? "js-spreadsheet-selected-header" : "", hit ? "js-spreadsheet-row-header--hit" : ""]
             .filter(Boolean)
             .join(" "),
           ariaSelected: selected,

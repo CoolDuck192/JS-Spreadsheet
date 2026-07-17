@@ -50,8 +50,8 @@ export function PivotPanel({ headers, sourceLabel, sourceRowCount, isOpen, onClo
   const canCreate = headers.length > 0 && rowField && valueField && secondaryRowField !== rowField;
 
   return (
-    <aside className="pivot-panel" aria-label="Pivot table builder">
-      <div className="pivot-panel-header">
+    <aside className="js-spreadsheet-pivot-panel" aria-label="Pivot table builder">
+      <div className="js-spreadsheet-pivot-panel-header">
         <strong>Pivot Table</strong>
         <button type="button" aria-label="Close pivot table builder" onClick={onClose}>
           <X />
@@ -62,7 +62,7 @@ export function PivotPanel({ headers, sourceLabel, sourceRowCount, isOpen, onClo
       ) : (
         <>
           {sourceLabel ? (
-            <p className="pivot-panel-source">
+            <p className="js-spreadsheet-pivot-panel-source">
               Source <strong>{sourceLabel}</strong>
               {typeof sourceRowCount === "number" && sourceRowCount > 0
                 ? ` · ${sourceRowCount} ${sourceRowCount === 1 ? "row" : "rows"}`
@@ -149,7 +149,7 @@ export function PivotPanel({ headers, sourceLabel, sourceRowCount, isOpen, onClo
           </label>
           <button
             type="button"
-            className="primary-panel-button"
+            className="js-spreadsheet-primary-panel-button"
             disabled={!canCreate}
             onClick={() =>
               onCreate({
@@ -162,7 +162,7 @@ export function PivotPanel({ headers, sourceLabel, sourceRowCount, isOpen, onClo
           >
             Create pivot table
           </button>
-          <p className="pivot-panel-hint">Double-click a pivot value later to drill into its source rows.</p>
+          <p className="js-spreadsheet-pivot-panel-hint">Double-click a pivot value later to drill into its source rows.</p>
         </>
       )}
     </aside>

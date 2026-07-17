@@ -18,8 +18,8 @@ export function FilterPanel({ isOpen, onClose, onApply, onClear }: FilterPanelPr
   }
 
   return (
-    <aside className="filter-panel" aria-label="Filter">
-      <div className="filter-panel-header">
+    <aside className="js-spreadsheet-filter-panel" aria-label="Filter">
+      <div className="js-spreadsheet-filter-panel-header">
         <strong>Filter</strong>
         <button type="button" aria-label="Close filter" onClick={onClose}>
           <X />
@@ -53,10 +53,10 @@ export function FilterPanel({ isOpen, onClose, onApply, onClear }: FilterPanelPr
           }}
         />
       </label>
-      <div className="filter-panel-actions">
+      <div className="js-spreadsheet-filter-panel-actions">
         <button
           type="button"
-          className="primary-panel-button"
+          className="js-spreadsheet-primary-panel-button"
           disabled={value.trim() === ""}
           onClick={() => onApply({ operator, value: value.trim() })}
         >

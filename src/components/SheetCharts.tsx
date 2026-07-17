@@ -28,15 +28,15 @@ export function SheetCharts({ charts, sheet, formulaEngine, onDelete }: SheetCha
   }
 
   return (
-    <div className="sheet-chart-layer" aria-label="Embedded charts">
+    <div className="js-spreadsheet-sheet-chart-layer" aria-label="Embedded charts">
       {charts.map((chart) => {
         const chartData = createChartData(chartRows(sheet, chart, formulaEngine), chart.title || "Chart");
         const title = chart.title || chartData.title;
         const pointLabel = `${chartData.data.length} ${chartData.data.length === 1 ? "point" : "points"}`;
 
         return (
-          <figure key={chart.id} role="figure" aria-label={`Chart ${title}`} className="sheet-chart" data-testid="sheet-chart">
-            <figcaption className="sheet-chart-header">
+          <figure key={chart.id} role="figure" aria-label={`Chart ${title}`} className="js-spreadsheet-sheet-chart" data-testid="sheet-chart">
+            <figcaption className="js-spreadsheet-sheet-chart-header">
               <span>
                 <strong>{title}</strong>
                 <small>{pointLabel}</small>
@@ -48,7 +48,7 @@ export function SheetCharts({ charts, sheet, formulaEngine, onDelete }: SheetCha
             {chartData.data.length > 0 ? (
               renderChartSvg(chart.type, chartData.data)
             ) : (
-              <div className="sheet-chart-empty">No numeric data</div>
+              <div className="js-spreadsheet-sheet-chart-empty">No numeric data</div>
             )}
           </figure>
         );
@@ -90,7 +90,7 @@ function BarChartSvg({ data }: { data: ChartDatum[] }) {
   const barWidth = Math.max(12, (PLOT_WIDTH - barGap * Math.max(data.length - 1, 0)) / data.length);
 
   return (
-    <svg className="sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Bar chart">
+    <svg className="js-spreadsheet-sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Bar chart">
       <ChartAxis />
       {data.map((datum, index) => {
         const height = Math.max(2, (Math.abs(datum.value) / maxValue) * PLOT_HEIGHT);
@@ -98,10 +98,10 @@ function BarChartSvg({ data }: { data: ChartDatum[] }) {
         const y = PLOT_TOP + PLOT_HEIGHT - height;
         return (
           <g key={`${datum.label}-${index}`}>
-            <rect className="sheet-chart-bar" x={x} y={y} width={barWidth} height={height} rx="3" />
+            <rect className="js-spreadsheet-sheet-chart-bar" x={x} y={y} width={barWidth} height={height} rx="3" />
             <title>{`${datum.label}: ${formatChartValue(datum.value)}`}</title>
             {index < 5 ? (
-              <text className="sheet-chart-label" x={x + barWidth / 2} y={SVG_HEIGHT - 8} textAnchor="middle">
+              <text className="js-spreadsheet-sheet-chart-label" x={x + barWidth / 2} y={SVG_HEIGHT - 8} textAnchor="middle">
                 {shortLabel(datum.label)}
               </text>
             ) : null}
@@ -122,15 +122,15 @@ function LineChartSvg({ data }: { data: ChartDatum[] }) {
   }));
 
   return (
-    <svg className="sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Line chart">
+    <svg className="js-spreadsheet-sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Line chart">
       <ChartAxis />
-      <polyline className="sheet-chart-line" points={points.map((point) => `${point.x},${point.y}`).join(" ")} />
+      <polyline className="js-spreadsheet-sheet-chart-line" points={points.map((point) => `${point.x},${point.y}`).join(" ")} />
       {points.map((point, index) => (
         <g key={`${point.datum.label}-${index}`}>
-          <circle className="sheet-chart-dot" cx={point.x} cy={point.y} r="4" />
+          <circle className="js-spreadsheet-sheet-chart-dot" cx={point.x} cy={point.y} r="4" />
           <title>{`${point.datum.label}: ${formatChartValue(point.datum.value)}`}</title>
           {index < 5 ? (
-            <text className="sheet-chart-label" x={point.x} y={SVG_HEIGHT - 8} textAnchor="middle">
+            <text className="js-spreadsheet-sheet-chart-label" x={point.x} y={SVG_HEIGHT - 8} textAnchor="middle">
               {shortLabel(point.datum.label)}
             </text>
           ) : null}
@@ -143,7 +143,7 @@ function LineChartSvg({ data }: { data: ChartDatum[] }) {
 function PieChartSvg({ data }: { data: ChartDatum[] }) {
   const slices = createPieSlices(data);
   if (slices.length === 0) {
-    return <div className="sheet-chart-empty">No positive values</div>;
+    return <div className="js-spreadsheet-sheet-chart-empty">No positive values</div>;
   }
 
   const centerX = 78;
@@ -151,12 +151,12 @@ function PieChartSvg({ data }: { data: ChartDatum[] }) {
   const radius = 43;
 
   return (
-    <svg className="sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Pie chart">
+    <svg className="js-spreadsheet-sheet-chart-svg" viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`} role="img" aria-label="Pie chart">
       {slices.map((slice, index) =>
         slice.endAngle - slice.startAngle >= Math.PI * 2 - 0.0001 ? (
           <circle
             key={`${slice.datum.label}-${index}`}
-            className="sheet-chart-pie-slice"
+            className="js-spreadsheet-sheet-chart-pie-slice"
             cx={centerX}
             cy={centerY}
             r={radius}
@@ -167,7 +167,7 @@ function PieChartSvg({ data }: { data: ChartDatum[] }) {
         ) : (
           <path
             key={`${slice.datum.label}-${index}`}
-            className="sheet-chart-pie-slice"
+            className="js-spreadsheet-sheet-chart-pie-slice"
             d={describePieSlice(centerX, centerY, radius, slice.startAngle, slice.endAngle)}
             fill={PIE_COLORS[index % PIE_COLORS.length]}
           >
@@ -179,8 +179,8 @@ function PieChartSvg({ data }: { data: ChartDatum[] }) {
         const y = 28 + index * 18;
         return (
           <g key={`${slice.datum.label}-${index}-legend`}>
-            <rect className="sheet-chart-pie-key" x={146} y={y - 9} width={9} height={9} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-            <text className="sheet-chart-label" x={162} y={y} textAnchor="start">
+            <rect className="js-spreadsheet-sheet-chart-pie-key" x={146} y={y - 9} width={9} height={9} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+            <text className="js-spreadsheet-sheet-chart-label" x={162} y={y} textAnchor="start">
               {`${shortLabel(slice.datum.label)} ${Math.round(slice.share * 100)}%`}
             </text>
           </g>
@@ -193,16 +193,16 @@ function PieChartSvg({ data }: { data: ChartDatum[] }) {
 function ChartAxis() {
   return (
     <>
-      <line className="sheet-chart-axis" x1={PLOT_LEFT} y1={PLOT_TOP} x2={PLOT_LEFT} y2={PLOT_TOP + PLOT_HEIGHT} />
+      <line className="js-spreadsheet-sheet-chart-axis" x1={PLOT_LEFT} y1={PLOT_TOP} x2={PLOT_LEFT} y2={PLOT_TOP + PLOT_HEIGHT} />
       <line
-        className="sheet-chart-axis"
+        className="js-spreadsheet-sheet-chart-axis"
         x1={PLOT_LEFT}
         y1={PLOT_TOP + PLOT_HEIGHT}
         x2={SVG_WIDTH - PLOT_RIGHT}
         y2={PLOT_TOP + PLOT_HEIGHT}
       />
       <line
-        className="sheet-chart-gridline"
+        className="js-spreadsheet-sheet-chart-gridline"
         x1={PLOT_LEFT}
         y1={PLOT_TOP + PLOT_HEIGHT / 2}
         x2={SVG_WIDTH - PLOT_RIGHT}

@@ -23,8 +23,8 @@ export function FindReplacePanel({
   onClose
 }: FindReplacePanelProps): ReactElement {
   return (
-    <aside className="find-panel" aria-label="Find and replace panel">
-      <div className="find-panel-header">
+    <aside className="js-spreadsheet-find-panel" aria-label="Find and replace panel">
+      <div className="js-spreadsheet-find-panel-header">
         <strong>Find and Replace</strong>
         <button type="button" aria-label="Close find and replace" onClick={onClose}>
           <X />
@@ -53,14 +53,14 @@ export function FindReplacePanel({
           onChange={(event) => onReplaceChange(event.currentTarget.value)}
         />
       </label>
-      <div className="find-panel-actions">
+      <div className="js-spreadsheet-find-panel-actions">
         <button type="button" onClick={onFindNext}>
           Find next
         </button>
         <button type="button" onClick={onReplace}>
           Replace
         </button>
-        <button type="button" className="primary-panel-button" onClick={onReplaceAll}>
+        <button type="button" className="js-spreadsheet-primary-panel-button" onClick={onReplaceAll}>
           Replace all
         </button>
       </div>

@@ -79,8 +79,8 @@ export function StructuredTableFilterPanel({
   }
 
   return (
-    <section className="structured-table-popover" aria-label="Table filter">
-      <label className="structured-table-field">
+    <section className="js-spreadsheet-structured-table-popover" aria-label="Table filter">
+      <label className="js-spreadsheet-structured-table-field">
         <span>Filter type</span>
         <select
           aria-label="Filter type"
@@ -98,7 +98,7 @@ export function StructuredTableFilterPanel({
           <option value="not">Not</option>
         </select>
       </label>
-      <label className="structured-table-field">
+      <label className="js-spreadsheet-structured-table-field">
         <span>Column</span>
         <select aria-label="Filter column" value={columnId} onChange={(event) => setColumnId(event.currentTarget.value)}>
           {columns.map((column) => (
@@ -109,7 +109,7 @@ export function StructuredTableFilterPanel({
         </select>
       </label>
       {kind !== "blank" ? (
-        <label className="structured-table-field">
+        <label className="js-spreadsheet-structured-table-field">
           <span>Value type</span>
           <select
             aria-label="Value type"
@@ -174,11 +174,11 @@ export function StructuredTableFilterPanel({
         <ValueInput ref={firstValueRef} label="Comparison value" value={value} disabled={scalarType === "null"} onChange={setValue} />
       ) : null}
       {error ? (
-        <p className="structured-table-field-error" role="alert">
+        <p className="js-spreadsheet-structured-table-field-error" role="alert">
           {error}
         </p>
       ) : null}
-      <div className="structured-table-actions">
+      <div className="js-spreadsheet-structured-table-actions">
         <button type="button" onClick={applyFilter} disabled={!selectedColumnExists}>
           Apply table filter
         </button>
@@ -213,7 +213,7 @@ function OperatorSelect({
   onChange(value: string): void;
 }) {
   return (
-    <label className="structured-table-field">
+    <label className="js-spreadsheet-structured-table-field">
       <span>{label}</span>
       <select aria-label={label} value={value} onChange={(event) => onChange(event.currentTarget.value)}>
         {options.map((option) => (
@@ -233,7 +233,7 @@ const ValueInput = forwardRef<HTMLInputElement, {
   onChange(value: string): void;
 }>(function ValueInput({ label, value, disabled, onChange }, ref) {
   return (
-    <label className="structured-table-field">
+    <label className="js-spreadsheet-structured-table-field">
       <span>{label}</span>
       <input
         ref={ref}

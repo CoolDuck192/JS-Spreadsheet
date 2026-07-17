@@ -18,7 +18,7 @@ export function SpreadsheetColumnHeader({
       {label}
       <button
         type="button"
-        className="column-resize-handle"
+        className="js-spreadsheet-column-resize-handle"
         aria-label={`Resize column ${label}`}
         onClick={(event) => {
           event.preventDefault();
@@ -57,7 +57,7 @@ export function SpreadsheetRowHeader({
       {label}
       <button
         type="button"
-        className="row-resize-handle"
+        className="js-spreadsheet-row-resize-handle"
         aria-label={`Resize row ${label}`}
         onClick={(event) => {
           event.preventDefault();

@@ -42,13 +42,13 @@
 }
 
 @scope (.js-spreadsheet-root.js-spreadsheet-workbook) {
-.app-shell {
+.js-spreadsheet-app-shell {
   min-height: 420px;
   height: 100%;
   padding: 0;
 }
 
-.spreadsheet-surface {
+.js-spreadsheet-spreadsheet-surface {
   position: relative;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto;
@@ -60,7 +60,7 @@
   overflow: hidden;
 }
 
-.toolbar {
+.js-spreadsheet-toolbar {
   display: grid;
   grid-template-rows: auto auto;
   gap: 6px;
@@ -70,7 +70,7 @@
   overflow: visible;
 }
 
-.ribbon-header {
+.js-spreadsheet-ribbon-header {
   display: grid;
   grid-template-columns: minmax(190px, 236px) minmax(0, 1fr);
   gap: 10px;
@@ -78,7 +78,7 @@
   min-width: 0;
 }
 
-.ribbon-tabs {
+.js-spreadsheet-ribbon-tabs {
   display: flex;
   align-items: end;
   gap: 2px;
@@ -87,11 +87,11 @@
   scrollbar-width: none;
 }
 
-.ribbon-tabs::-webkit-scrollbar {
+.js-spreadsheet-ribbon-tabs::-webkit-scrollbar {
   display: none;
 }
 
-.ribbon-tab {
+.js-spreadsheet-ribbon-tab {
   min-width: 74px;
   min-height: 30px;
   border: 1px solid transparent;
@@ -105,20 +105,20 @@
   cursor: pointer;
 }
 
-.ribbon-tab:hover,
-.ribbon-tab:focus-visible {
+.js-spreadsheet-ribbon-tab:hover,
+.js-spreadsheet-ribbon-tab:focus-visible {
   background: rgba(226, 232, 240, 0.66);
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.active-ribbon-tab {
+.js-spreadsheet-active-ribbon-tab {
   border-color: rgba(148, 163, 184, 0.4);
   background: rgba(255, 255, 255, 0.94);
   color: var(--js-spreadsheet-accent-strong);
 }
 
-.ribbon-panel {
+.js-spreadsheet-ribbon-panel {
   display: flex;
   align-items: stretch;
   row-gap: 8px;
@@ -131,7 +131,7 @@
   background: #fff;
 }
 
-.brand {
+.js-spreadsheet-brand {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -142,12 +142,12 @@
   white-space: nowrap;
 }
 
-.brand span:last-child {
+.js-spreadsheet-brand span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.brand-mark {
+.js-spreadsheet-brand-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -162,7 +162,7 @@
 
 /* Excel-style groups: no boxes — hairline separators between clusters, with the
    group name sitting quietly underneath its controls. */
-.toolbar-group {
+.js-spreadsheet-toolbar-group {
   display: flex;
   flex-direction: column-reverse;
   justify-content: space-between;
@@ -173,11 +173,11 @@
   border-right: 1px solid #e4eae6;
 }
 
-.toolbar-group:last-child {
+.js-spreadsheet-toolbar-group:last-child {
   border-right: 0;
 }
 
-.toolbar-group-label {
+.js-spreadsheet-toolbar-group-label {
   color: #7c8b84;
   font-size: 9.5px;
   font-weight: 650;
@@ -187,7 +187,7 @@
   text-align: center;
 }
 
-.toolbar-group-controls {
+.js-spreadsheet-toolbar-group-controls {
   display: flex;
   align-items: center;
   gap: 3px;
@@ -195,7 +195,7 @@
   min-height: 36px;
 }
 
-.toolbar-button {
+.js-spreadsheet-toolbar-button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -215,22 +215,22 @@
   transition-timing-function: ease;
 }
 
-.toolbar-button:hover:not(:disabled),
-.toolbar-button:focus-visible:not(:disabled) {
+.js-spreadsheet-toolbar-button:hover:not(:disabled),
+.js-spreadsheet-toolbar-button:focus-visible:not(:disabled) {
   background: #e9f4ef;
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.toolbar-button:focus-visible:not(:disabled) {
+.js-spreadsheet-toolbar-button:focus-visible:not(:disabled) {
   border-color: rgba(34, 121, 93, 0.45);
 }
 
-.toolbar-button:active:not(:disabled) {
+.js-spreadsheet-toolbar-button:active:not(:disabled) {
   transform: scale(0.96);
 }
 
-.active-toolbar-button {
+.js-spreadsheet-active-toolbar-button {
   border-color: rgba(34, 121, 93, 0.4);
   background: #dff3eb;
   color: var(--js-spreadsheet-accent-strong);
@@ -240,14 +240,14 @@
 
 /* The selection disagrees on this toggle: a dash under the icon marks the
    Excel-style indeterminate state. */
-.mixed-toolbar-button {
+.js-spreadsheet-mixed-toolbar-button {
   /* Anchors the ::before dash; only compact buttons are positioned otherwise. */
   position: relative;
   background: #eef4f0;
   color: #4a5a52;
 }
 
-.mixed-toolbar-button::before {
+.js-spreadsheet-mixed-toolbar-button::before {
   content: "";
   position: absolute;
   bottom: 4px;
@@ -259,30 +259,30 @@
   background: var(--js-spreadsheet-accent);
 }
 
-.toolbar-button:disabled {
+.js-spreadsheet-toolbar-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.toolbar-button svg {
+.js-spreadsheet-toolbar-button svg {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
 }
 
-.compact-toolbar-button {
+.js-spreadsheet-compact-toolbar-button {
   position: relative;
   width: 34px;
   justify-content: center;
   padding: 0;
 }
 
-.compact-toolbar-button span {
+.js-spreadsheet-compact-toolbar-button span {
   display: none;
 }
 
 /* Textual glyph icons ($, %, ,) for number-format quick buttons. */
-.toolbar-button .glyph-icon {
+.js-spreadsheet-toolbar-button .js-spreadsheet-glyph-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -296,7 +296,7 @@
 
 /* Instant labels for icon-only buttons: hover any icon and its name appears
    right away instead of relying on the browser's slow native tooltip. */
-.compact-toolbar-button::after {
+.js-spreadsheet-compact-toolbar-button::after {
   content: attr(aria-label);
   position: absolute;
   top: calc(100% + 6px);
@@ -316,31 +316,31 @@
   transition-duration: 100ms;
 }
 
-.compact-toolbar-button:hover::after,
-.compact-toolbar-button:focus-visible::after {
+.js-spreadsheet-compact-toolbar-button:hover::after,
+.js-spreadsheet-compact-toolbar-button:focus-visible::after {
   opacity: 1;
   transition-delay: 320ms;
 }
 
 /* Tooltips include the keyboard shortcut when the command has one. */
-.compact-toolbar-button[data-shortcut]::after {
+.js-spreadsheet-compact-toolbar-button[data-shortcut]::after {
   content: attr(aria-label) " (" attr(data-shortcut) ")";
 }
 
 /* Excel-style split button: a primary action plus a chevron that opens a menu
    of variants. The menu reuses the context-menu look. */
-.split-button {
+.js-spreadsheet-split-button {
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
 }
 
-.split-button .split-button-primary {
+.js-spreadsheet-split-button .js-spreadsheet-split-button-primary {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 
-.split-button-toggle {
+.js-spreadsheet-split-button-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -361,29 +361,29 @@
   transition-timing-function: ease;
 }
 
-.split-button-toggle svg {
+.js-spreadsheet-split-button-toggle svg {
   width: 12px;
   height: 12px;
 }
 
-.split-button-toggle:hover:not(:disabled),
-.split-button-toggle:focus-visible:not(:disabled),
-.split-button-toggle[aria-expanded="true"] {
+.js-spreadsheet-split-button-toggle:hover:not(:disabled),
+.js-spreadsheet-split-button-toggle:focus-visible:not(:disabled),
+.js-spreadsheet-split-button-toggle[aria-expanded="true"] {
   background: #e9f4ef;
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.split-button-toggle:focus-visible:not(:disabled) {
+.js-spreadsheet-split-button-toggle:focus-visible:not(:disabled) {
   border-color: rgba(34, 121, 93, 0.45);
 }
 
-.split-button-toggle:disabled {
+.js-spreadsheet-split-button-toggle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.split-button-menu {
+.js-spreadsheet-split-button-menu {
   /* Coordinates come from the component (position: fixed) so ribbon overflow
      containers can't clip the menu; above tooltips (z 60) so a neighboring
      button's hover label can't paint across an open menu. */
@@ -400,12 +400,12 @@
 }
 
 @starting-style {
-  .split-button-menu {
+  .js-spreadsheet-split-button-menu {
     opacity: 0;
   }
 }
 
-.split-button-menu button {
+.js-spreadsheet-split-button-menu button {
   display: flex;
   align-items: center;
   min-height: 26px;
@@ -420,38 +420,38 @@
   cursor: pointer;
 }
 
-.split-button-menu button:hover,
-.split-button-menu button:focus-visible {
+.js-spreadsheet-split-button-menu button:hover,
+.js-spreadsheet-split-button-menu button:focus-visible {
   background: #eef8f4;
   outline: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .toolbar-button,
-  .split-button-toggle,
-  .split-button-menu {
+  .js-spreadsheet-toolbar-button,
+  .js-spreadsheet-split-button-toggle,
+  .js-spreadsheet-split-button-menu {
     transition-duration: 0ms;
   }
 
-  .toolbar-button:active:not(:disabled) {
+  .js-spreadsheet-toolbar-button:active:not(:disabled) {
     transform: none;
   }
 }
 
-.toolbar-button span {
+.js-spreadsheet-toolbar-button span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.toolbar-divider {
+.js-spreadsheet-toolbar-divider {
   width: 1px;
   align-self: stretch;
   margin: 2px 4px;
   background: #d4dde7;
 }
 
-.color-control {
+.js-spreadsheet-color-control {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -469,23 +469,23 @@
   transition-duration: 120ms;
 }
 
-.color-control:hover,
-.color-control:focus-within {
+.js-spreadsheet-color-control:hover,
+.js-spreadsheet-color-control:focus-within {
   background: #e9f4ef;
 }
 
-.color-control svg {
+.js-spreadsheet-color-control svg {
   width: 15px;
   height: 15px;
 }
 
-.color-control span {
+.js-spreadsheet-color-control span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.color-control input {
+.js-spreadsheet-color-control input {
   width: 21px;
   height: 21px;
   border: 1px solid #d1dae4;
@@ -495,25 +495,25 @@
   cursor: pointer;
 }
 
-.compact-color-control {
+.js-spreadsheet-compact-color-control {
   width: 53px;
   justify-content: center;
   gap: 4px;
   padding: 0 5px;
 }
 
-.compact-color-control span {
+.js-spreadsheet-compact-color-control span {
   display: none;
 }
 
-.select-control {
+.js-spreadsheet-select-control {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   height: 31px;
 }
 
-.select-control span {
+.js-spreadsheet-select-control span {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -522,7 +522,7 @@
   white-space: nowrap;
 }
 
-.select-control select {
+.js-spreadsheet-select-control select {
   height: 32px;
   max-width: 120px;
   border: 1px solid #dbe4e0;
@@ -537,7 +537,7 @@
   transition-duration: 120ms;
 }
 
-.compact-select-control select {
+.js-spreadsheet-compact-select-control select {
   width: 64px;
   max-width: 64px;
   padding-left: 7px;
@@ -545,19 +545,19 @@
 }
 
 /* Font names need more room than the generic compact select. */
-.font-family-select select {
+.js-spreadsheet-font-family-select select {
   width: 108px;
   max-width: 108px;
 }
 
-.select-control select:hover,
-.select-control select:focus-visible {
+.js-spreadsheet-select-control select:hover,
+.js-spreadsheet-select-control select:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background-color: #edf8f4;
   outline: none;
 }
 
-.hidden-file-input {
+.js-spreadsheet-hidden-file-input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -565,7 +565,7 @@
   pointer-events: none;
 }
 
-.formula-bar {
+.js-spreadsheet-formula-bar {
   display: grid;
   grid-template-columns: 104px minmax(0, 1fr);
   gap: 8px;
@@ -576,7 +576,7 @@
   background: #fff;
 }
 
-.formula-bar input {
+.js-spreadsheet-formula-bar input {
   width: 100%;
   height: 28px;
   border: 1px solid #b7c4d2;
@@ -584,28 +584,28 @@
   padding: 0 8px;
 }
 
-.name-box {
+.js-spreadsheet-name-box {
   background: #edf4f8;
   font-size: 12px;
   font-weight: 800;
   text-align: center;
 }
 
-.formula-input-wrap {
+.js-spreadsheet-formula-input-wrap {
   position: relative;
   min-width: 0;
 }
 
-.formula-input-wrap input {
+.js-spreadsheet-formula-input-wrap input {
   padding-right: 10px;
 }
 
-.formula-bar input:focus {
+.js-spreadsheet-formula-bar input:focus {
   border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
-.formula-suggestions {
+.js-spreadsheet-formula-suggestions {
   position: absolute;
   top: calc(100% + 4px);
   right: auto;
@@ -627,11 +627,11 @@
   scrollbar-width: none;
 }
 
-.formula-suggestions::-webkit-scrollbar {
+.js-spreadsheet-formula-suggestions::-webkit-scrollbar {
   display: none;
 }
 
-.formula-suggestions button {
+.js-spreadsheet-formula-suggestions button {
   display: grid;
   gap: 3px;
   width: 100%;
@@ -649,58 +649,58 @@
   text-align: left;
 }
 
-.formula-suggestions .formula-suggestion-option--active {
+.js-spreadsheet-formula-suggestions .js-spreadsheet-formula-suggestion-option--active {
   width: 100%;
   max-width: none;
   opacity: 1;
   pointer-events: auto;
 }
 
-.formula-suggestions button:hover,
-.formula-suggestions button:focus-visible {
+.js-spreadsheet-formula-suggestions button:hover,
+.js-spreadsheet-formula-suggestions button:focus-visible {
   background: rgba(34, 121, 93, 0.08);
   outline: none;
 }
 
-.formula-suggestions button[aria-selected="true"] {
+.js-spreadsheet-formula-suggestions button[aria-selected="true"] {
   background: #eaf7f2;
 }
 
-.formula-suggestion-main {
+.js-spreadsheet-formula-suggestion-main {
   display: flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
 }
 
-.formula-suggestions strong,
-.formula-suggestions code,
-.formula-suggestion-description {
+.js-spreadsheet-formula-suggestions strong,
+.js-spreadsheet-formula-suggestions code,
+.js-spreadsheet-formula-suggestion-description {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.formula-suggestions strong {
+.js-spreadsheet-formula-suggestions strong {
   color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 800;
 }
 
-.formula-suggestions code {
+.js-spreadsheet-formula-suggestions code {
   min-width: 0;
   color: #475569;
   font-family: inherit;
   font-size: 11px;
 }
 
-.formula-suggestion-description {
+.js-spreadsheet-formula-suggestion-description {
   color: #64748b;
   font-size: 11px;
   line-height: 1.25;
 }
 
-.pivot-panel {
+.js-spreadsheet-pivot-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -715,7 +715,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.pivot-panel .pivot-panel-source {
+.js-spreadsheet-pivot-panel .js-spreadsheet-pivot-panel-source {
   margin: 0;
   padding: 6px 9px;
   border-radius: 6px;
@@ -725,14 +725,14 @@
   font-variant-numeric: tabular-nums;
 }
 
-.pivot-panel .pivot-panel-hint {
+.js-spreadsheet-pivot-panel .js-spreadsheet-pivot-panel-hint {
   margin: 0;
   color: var(--js-spreadsheet-muted);
   font-size: 11.5px;
   text-wrap: pretty;
 }
 
-.find-panel {
+.js-spreadsheet-find-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -747,7 +747,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.filter-panel {
+.js-spreadsheet-filter-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -762,7 +762,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.validation-panel {
+.js-spreadsheet-validation-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -777,7 +777,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.conditional-panel {
+.js-spreadsheet-conditional-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -792,7 +792,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.chart-panel {
+.js-spreadsheet-chart-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -807,7 +807,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.function-library-panel {
+.js-spreadsheet-function-library-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -823,7 +823,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.named-ranges-panel {
+.js-spreadsheet-named-ranges-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -839,7 +839,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.go-to-panel {
+.js-spreadsheet-go-to-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -855,7 +855,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.formula-audit-panel {
+.js-spreadsheet-formula-audit-panel {
   position: absolute;
   top: 88px;
   right: 14px;
@@ -872,7 +872,7 @@
   box-shadow: 0 16px 42px rgba(31, 41, 55, 0.18);
 }
 
-.pivot-panel-header {
+.js-spreadsheet-pivot-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -880,7 +880,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.find-panel-header {
+.js-spreadsheet-find-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -888,7 +888,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.filter-panel-header {
+.js-spreadsheet-filter-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -896,7 +896,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.validation-panel-header {
+.js-spreadsheet-validation-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -904,7 +904,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.conditional-panel-header {
+.js-spreadsheet-conditional-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -912,7 +912,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.chart-panel-header {
+.js-spreadsheet-chart-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -920,7 +920,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.function-library-panel-header {
+.js-spreadsheet-function-library-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -928,7 +928,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.named-ranges-panel-header {
+.js-spreadsheet-named-ranges-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -936,7 +936,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.go-to-panel-header {
+.js-spreadsheet-go-to-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -944,7 +944,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.formula-audit-panel-header {
+.js-spreadsheet-formula-audit-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -952,7 +952,7 @@
   color: var(--js-spreadsheet-text);
 }
 
-.pivot-panel-header button {
+.js-spreadsheet-pivot-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -964,7 +964,7 @@
   cursor: pointer;
 }
 
-.find-panel-header button {
+.js-spreadsheet-find-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -976,7 +976,7 @@
   cursor: pointer;
 }
 
-.filter-panel-header button {
+.js-spreadsheet-filter-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -988,7 +988,7 @@
   cursor: pointer;
 }
 
-.validation-panel-header button {
+.js-spreadsheet-validation-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1000,7 +1000,7 @@
   cursor: pointer;
 }
 
-.conditional-panel-header button {
+.js-spreadsheet-conditional-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1012,7 +1012,7 @@
   cursor: pointer;
 }
 
-.chart-panel-header button {
+.js-spreadsheet-chart-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1024,7 +1024,7 @@
   cursor: pointer;
 }
 
-.function-library-panel-header button {
+.js-spreadsheet-function-library-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1036,7 +1036,7 @@
   cursor: pointer;
 }
 
-.named-ranges-panel-header button {
+.js-spreadsheet-named-ranges-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1048,7 +1048,7 @@
   cursor: pointer;
 }
 
-.go-to-panel-header button {
+.js-spreadsheet-go-to-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1060,7 +1060,7 @@
   cursor: pointer;
 }
 
-.formula-audit-panel-header button {
+.js-spreadsheet-formula-audit-panel-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1072,63 +1072,63 @@
   cursor: pointer;
 }
 
-.pivot-panel-header button svg {
+.js-spreadsheet-pivot-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.find-panel-header button svg {
+.js-spreadsheet-find-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.filter-panel-header button svg {
+.js-spreadsheet-filter-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.validation-panel-header button svg {
+.js-spreadsheet-validation-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.conditional-panel-header button svg {
+.js-spreadsheet-conditional-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.chart-panel-header button svg {
+.js-spreadsheet-chart-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.function-library-panel-header button svg {
+.js-spreadsheet-function-library-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.named-ranges-panel-header button svg {
+.js-spreadsheet-named-ranges-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.go-to-panel-header button svg {
+.js-spreadsheet-go-to-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.formula-audit-panel-header button svg {
+.js-spreadsheet-formula-audit-panel-header button svg {
   width: 15px;
   height: 15px;
 }
 
-.pivot-panel p {
+.js-spreadsheet-pivot-panel p {
   margin: 0;
   color: #526173;
   font-size: 13px;
 }
 
-.find-panel label {
+.js-spreadsheet-find-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1136,7 +1136,7 @@
   font-weight: 800;
 }
 
-.filter-panel label {
+.js-spreadsheet-filter-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1144,7 +1144,7 @@
   font-weight: 800;
 }
 
-.pivot-panel label {
+.js-spreadsheet-pivot-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1152,7 +1152,7 @@
   font-weight: 800;
 }
 
-.validation-panel label {
+.js-spreadsheet-validation-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1160,7 +1160,7 @@
   font-weight: 800;
 }
 
-.conditional-panel label {
+.js-spreadsheet-conditional-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1168,7 +1168,7 @@
   font-weight: 800;
 }
 
-.chart-panel label {
+.js-spreadsheet-chart-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1176,7 +1176,7 @@
   font-weight: 800;
 }
 
-.function-library-panel label {
+.js-spreadsheet-function-library-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1184,7 +1184,7 @@
   font-weight: 800;
 }
 
-.go-to-panel label {
+.js-spreadsheet-go-to-panel label {
   display: grid;
   gap: 4px;
   color: #425166;
@@ -1192,7 +1192,7 @@
   font-weight: 800;
 }
 
-.find-panel input {
+.js-spreadsheet-find-panel input {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1201,8 +1201,8 @@
   color: #1f2937;
 }
 
-.filter-panel input,
-.filter-panel select {
+.js-spreadsheet-filter-panel input,
+.js-spreadsheet-filter-panel select {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1211,8 +1211,8 @@
   color: #1f2937;
 }
 
-.validation-panel input,
-.validation-panel select {
+.js-spreadsheet-validation-panel input,
+.js-spreadsheet-validation-panel select {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1221,8 +1221,8 @@
   color: #1f2937;
 }
 
-.conditional-panel input,
-.conditional-panel select {
+.js-spreadsheet-conditional-panel input,
+.js-spreadsheet-conditional-panel select {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1231,8 +1231,8 @@
   color: #1f2937;
 }
 
-.chart-panel input,
-.chart-panel select {
+.js-spreadsheet-chart-panel input,
+.js-spreadsheet-chart-panel select {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1241,7 +1241,7 @@
   color: #1f2937;
 }
 
-.function-library-panel input {
+.js-spreadsheet-function-library-panel input {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1250,7 +1250,7 @@
   color: #1f2937;
 }
 
-.go-to-panel input {
+.js-spreadsheet-go-to-panel input {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1259,40 +1259,40 @@
   color: #1f2937;
 }
 
-.find-panel input:focus,
-.filter-panel input:focus,
-.filter-panel select:focus,
-.validation-panel input:focus,
-.validation-panel select:focus,
-.conditional-panel input:focus,
-.conditional-panel select:focus,
-.chart-panel input:focus,
-.chart-panel select:focus,
-.function-library-panel input:focus {
+.js-spreadsheet-find-panel input:focus,
+.js-spreadsheet-filter-panel input:focus,
+.js-spreadsheet-filter-panel select:focus,
+.js-spreadsheet-validation-panel input:focus,
+.js-spreadsheet-validation-panel select:focus,
+.js-spreadsheet-conditional-panel input:focus,
+.js-spreadsheet-conditional-panel select:focus,
+.js-spreadsheet-chart-panel input:focus,
+.js-spreadsheet-chart-panel select:focus,
+.js-spreadsheet-function-library-panel input:focus {
   border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
-.go-to-panel input:focus {
+.js-spreadsheet-go-to-panel input:focus {
   border-color: var(--js-spreadsheet-accent);
   outline: 2px solid rgba(57, 141, 113, 0.16);
 }
 
-.function-library-summary {
+.js-spreadsheet-function-library-summary {
   margin: 0;
   color: #526173;
   font-size: 12px;
   font-weight: 800;
 }
 
-.named-ranges-summary {
+.js-spreadsheet-named-ranges-summary {
   margin: 0;
   color: #526173;
   font-size: 12px;
   font-weight: 800;
 }
 
-.named-ranges-list {
+.js-spreadsheet-named-ranges-list {
   display: grid;
   gap: 7px;
   max-height: 360px;
@@ -1300,7 +1300,7 @@
   padding-right: 2px;
 }
 
-.named-range-item {
+.js-spreadsheet-named-range-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -1311,14 +1311,14 @@
   padding: 8px;
 }
 
-.named-range-item strong {
+.js-spreadsheet-named-range-item strong {
   display: block;
   color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
 
-.named-range-item code {
+.js-spreadsheet-named-range-item code {
   display: block;
   margin-top: 3px;
   color: #27354a;
@@ -1327,12 +1327,12 @@
   word-break: break-word;
 }
 
-.named-range-actions {
+.js-spreadsheet-named-range-actions {
   display: flex;
   gap: 6px;
 }
 
-.named-range-actions button {
+.js-spreadsheet-named-range-actions button {
   min-height: 30px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1344,31 +1344,31 @@
   cursor: pointer;
 }
 
-.named-range-actions button:hover,
-.named-range-actions button:focus-visible {
+.js-spreadsheet-named-range-actions button:hover,
+.js-spreadsheet-named-range-actions button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.named-ranges-empty {
+.js-spreadsheet-named-ranges-empty {
   margin: 0;
   color: #526173;
   font-size: 12px;
 }
 
-.go-to-form {
+.js-spreadsheet-go-to-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
 }
 
-.go-to-form button {
+.js-spreadsheet-go-to-form button {
   min-width: 58px;
 }
 
-.go-to-list {
+.js-spreadsheet-go-to-list {
   display: grid;
   gap: 7px;
   max-height: 300px;
@@ -1376,7 +1376,7 @@
   padding-right: 2px;
 }
 
-.go-to-item {
+.js-spreadsheet-go-to-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1387,14 +1387,14 @@
   padding: 8px;
 }
 
-.go-to-item strong {
+.js-spreadsheet-go-to-item strong {
   display: block;
   color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
 
-.go-to-item code {
+.js-spreadsheet-go-to-item code {
   display: block;
   margin-top: 3px;
   color: #27354a;
@@ -1403,7 +1403,7 @@
   word-break: break-word;
 }
 
-.go-to-item button {
+.js-spreadsheet-go-to-item button {
   min-height: 30px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1415,20 +1415,20 @@
   cursor: pointer;
 }
 
-.go-to-item button:hover,
-.go-to-item button:focus-visible {
+.js-spreadsheet-go-to-item button:hover,
+.js-spreadsheet-go-to-item button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.go-to-empty {
+.js-spreadsheet-go-to-empty {
   margin: 0;
   color: #526173;
   font-size: 12px;
 }
 
-.formula-audit-target {
+.js-spreadsheet-formula-audit-target {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1442,24 +1442,24 @@
   font-weight: 800;
 }
 
-.formula-audit-target strong {
+.js-spreadsheet-formula-audit-target strong {
   color: var(--js-spreadsheet-accent-strong);
   font-weight: 900;
 }
 
-.formula-audit-section {
+.js-spreadsheet-formula-audit-section {
   display: grid;
   gap: 6px;
 }
 
-.formula-audit-section h3 {
+.js-spreadsheet-formula-audit-section h3 {
   margin: 0;
   color: #1f2937;
   font-size: 12px;
   font-weight: 900;
 }
 
-.formula-audit-section code {
+.js-spreadsheet-formula-audit-section code {
   display: block;
   border: 1px solid #d7e0ea;
   border-radius: 5px;
@@ -1471,13 +1471,13 @@
   word-break: break-word;
 }
 
-.formula-audit-list {
+.js-spreadsheet-formula-audit-list {
   display: grid;
   gap: 7px;
   padding-right: 2px;
 }
 
-.formula-audit-item {
+.js-spreadsheet-formula-audit-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -1488,18 +1488,18 @@
   padding: 8px;
 }
 
-.formula-audit-item strong {
+.js-spreadsheet-formula-audit-item strong {
   display: block;
   color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
 
-.formula-audit-item code {
+.js-spreadsheet-formula-audit-item code {
   margin-top: 3px;
 }
 
-.formula-audit-item button {
+.js-spreadsheet-formula-audit-item button {
   min-height: 30px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1511,20 +1511,20 @@
   cursor: pointer;
 }
 
-.formula-audit-item button:hover,
-.formula-audit-item button:focus-visible {
+.js-spreadsheet-formula-audit-item button:hover,
+.js-spreadsheet-formula-audit-item button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.formula-audit-empty {
+.js-spreadsheet-formula-audit-empty {
   margin: 0;
   color: #526173;
   font-size: 12px;
 }
 
-.function-library-results {
+.js-spreadsheet-function-library-results {
   display: grid;
   gap: 7px;
   max-height: 390px;
@@ -1532,7 +1532,7 @@
   padding-right: 2px;
 }
 
-.function-library-item {
+.js-spreadsheet-function-library-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -1543,14 +1543,14 @@
   padding: 8px;
 }
 
-.function-library-item strong {
+.js-spreadsheet-function-library-item strong {
   display: block;
   color: var(--js-spreadsheet-accent-strong);
   font-size: 12px;
   font-weight: 900;
 }
 
-.function-library-item code {
+.js-spreadsheet-function-library-item code {
   display: block;
   margin-top: 3px;
   color: #27354a;
@@ -1559,15 +1559,15 @@
   word-break: break-word;
 }
 
-.function-library-item p,
-.function-library-empty {
+.js-spreadsheet-function-library-item p,
+.js-spreadsheet-function-library-empty {
   margin: 4px 0 0;
   color: #526173;
   font-size: 12px;
   line-height: 1.35;
 }
 
-.function-library-item button {
+.js-spreadsheet-function-library-item button {
   min-height: 30px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1579,14 +1579,14 @@
   cursor: pointer;
 }
 
-.function-library-item button:hover,
-.function-library-item button:focus-visible {
+.js-spreadsheet-function-library-item button:hover,
+.js-spreadsheet-function-library-item button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.pivot-panel select {
+.js-spreadsheet-pivot-panel select {
   height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1595,52 +1595,52 @@
   color: #1f2937;
 }
 
-.find-panel-actions {
+.js-spreadsheet-find-panel-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
-.filter-panel-actions {
+.js-spreadsheet-filter-panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.validation-number-fields {
+.js-spreadsheet-validation-number-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.validation-panel-actions {
+.js-spreadsheet-validation-panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.validation-rules-section {
+.js-spreadsheet-validation-rules-section {
   display: grid;
   gap: 6px;
   border-top: 1px solid #d9e2ec;
   padding-top: 8px;
 }
 
-.validation-rules-section h3 {
+.js-spreadsheet-validation-rules-section h3 {
   margin: 0;
   color: #334155;
   font-size: 12px;
   font-weight: 800;
 }
 
-.validation-rules-list {
+.js-spreadsheet-validation-rules-list {
   display: grid;
   gap: 6px;
   max-height: 150px;
   overflow: auto;
 }
 
-.validation-rule-item {
+.js-spreadsheet-validation-rule-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1651,8 +1651,8 @@
   padding: 7px;
 }
 
-.validation-rule-item strong,
-.validation-rule-item span {
+.js-spreadsheet-validation-rule-item strong,
+.js-spreadsheet-validation-rule-item span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -1660,18 +1660,18 @@
   white-space: nowrap;
 }
 
-.validation-rule-item strong {
+.js-spreadsheet-validation-rule-item strong {
   color: #111827;
   font-size: 12px;
   font-weight: 800;
 }
 
-.validation-rule-item span {
+.js-spreadsheet-validation-rule-item span {
   color: #64748b;
   font-size: 11px;
 }
 
-.validation-rule-item button {
+.js-spreadsheet-validation-rule-item button {
   min-height: 26px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1683,14 +1683,14 @@
   cursor: pointer;
 }
 
-.validation-rule-item button:hover,
-.validation-rule-item button:focus-visible {
+.js-spreadsheet-validation-rule-item button:hover,
+.js-spreadsheet-validation-rule-item button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.validation-rules-empty {
+.js-spreadsheet-validation-rules-empty {
   margin: 0;
   border: 1px dashed #cbd5e1;
   border-radius: 6px;
@@ -1699,56 +1699,56 @@
   font-size: 12px;
 }
 
-.conditional-value-fields,
-.conditional-style-fields {
+.js-spreadsheet-conditional-value-fields,
+.js-spreadsheet-conditional-style-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.conditional-style-fields {
+.js-spreadsheet-conditional-style-fields {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
 }
 
-.conditional-check {
+.js-spreadsheet-conditional-check {
   min-height: 32px;
   align-content: center;
 }
 
-.conditional-check input {
+.js-spreadsheet-conditional-check input {
   width: 16px;
   height: 16px;
 }
 
-.conditional-panel-actions {
+.js-spreadsheet-conditional-panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.conditional-rules-section {
+.js-spreadsheet-conditional-rules-section {
   display: grid;
   gap: 6px;
   border-top: 1px solid #d9e2ec;
   padding-top: 8px;
 }
 
-.conditional-rules-section h3 {
+.js-spreadsheet-conditional-rules-section h3 {
   margin: 0;
   color: #334155;
   font-size: 12px;
   font-weight: 800;
 }
 
-.conditional-rules-list {
+.js-spreadsheet-conditional-rules-list {
   display: grid;
   gap: 6px;
   max-height: 150px;
   overflow: auto;
 }
 
-.conditional-rule-item {
+.js-spreadsheet-conditional-rule-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
@@ -1759,8 +1759,8 @@
   padding: 7px;
 }
 
-.conditional-rule-item strong,
-.conditional-rule-item span {
+.js-spreadsheet-conditional-rule-item strong,
+.js-spreadsheet-conditional-rule-item span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -1768,18 +1768,18 @@
   white-space: nowrap;
 }
 
-.conditional-rule-item strong {
+.js-spreadsheet-conditional-rule-item strong {
   color: #111827;
   font-size: 12px;
   font-weight: 800;
 }
 
-.conditional-rule-item span {
+.js-spreadsheet-conditional-rule-item span {
   color: #64748b;
   font-size: 11px;
 }
 
-.conditional-rule-preview span {
+.js-spreadsheet-conditional-rule-preview span {
   display: inline-grid;
   min-width: 28px;
   min-height: 22px;
@@ -1790,7 +1790,7 @@
   font-size: 11px;
 }
 
-.conditional-rule-item button {
+.js-spreadsheet-conditional-rule-item button {
   min-height: 26px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1802,14 +1802,14 @@
   cursor: pointer;
 }
 
-.conditional-rule-item button:hover,
-.conditional-rule-item button:focus-visible {
+.js-spreadsheet-conditional-rule-item button:hover,
+.js-spreadsheet-conditional-rule-item button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.conditional-rules-empty {
+.js-spreadsheet-conditional-rules-empty {
   margin: 0;
   border: 1px dashed #cbd5e1;
   border-radius: 6px;
@@ -1818,13 +1818,13 @@
   font-size: 12px;
 }
 
-.chart-panel-actions {
+.js-spreadsheet-chart-panel-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.find-panel-actions button {
+.js-spreadsheet-find-panel-actions button {
   min-height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1836,7 +1836,7 @@
   cursor: pointer;
 }
 
-.filter-panel-actions button {
+.js-spreadsheet-filter-panel-actions button {
   min-height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1848,7 +1848,7 @@
   cursor: pointer;
 }
 
-.validation-panel-actions button {
+.js-spreadsheet-validation-panel-actions button {
   min-height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1860,7 +1860,7 @@
   cursor: pointer;
 }
 
-.conditional-panel-actions button {
+.js-spreadsheet-conditional-panel-actions button {
   min-height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1872,7 +1872,7 @@
   cursor: pointer;
 }
 
-.chart-panel-actions button {
+.js-spreadsheet-chart-panel-actions button {
   min-height: 32px;
   border: 1px solid #b7c4d2;
   border-radius: 5px;
@@ -1884,32 +1884,32 @@
   cursor: pointer;
 }
 
-.find-panel-actions button:hover,
-.find-panel-actions button:focus-visible,
-.filter-panel-actions button:hover,
-.filter-panel-actions button:focus-visible,
-.validation-panel-actions button:hover,
-.validation-panel-actions button:focus-visible,
-.conditional-panel-actions button:hover,
-.conditional-panel-actions button:focus-visible,
-.chart-panel-actions button:hover,
-.chart-panel-actions button:focus-visible {
+.js-spreadsheet-find-panel-actions button:hover,
+.js-spreadsheet-find-panel-actions button:focus-visible,
+.js-spreadsheet-filter-panel-actions button:hover,
+.js-spreadsheet-filter-panel-actions button:focus-visible,
+.js-spreadsheet-validation-panel-actions button:hover,
+.js-spreadsheet-validation-panel-actions button:focus-visible,
+.js-spreadsheet-conditional-panel-actions button:hover,
+.js-spreadsheet-conditional-panel-actions button:focus-visible,
+.js-spreadsheet-chart-panel-actions button:hover,
+.js-spreadsheet-chart-panel-actions button:focus-visible {
   border-color: rgba(34, 121, 93, 0.38);
   background: #edf8f4;
   outline: none;
 }
 
-.find-panel-actions .primary-panel-button,
-.filter-panel-actions .primary-panel-button,
-.validation-panel-actions .primary-panel-button,
-.conditional-panel-actions .primary-panel-button,
-.chart-panel-actions .primary-panel-button {
+.js-spreadsheet-find-panel-actions .js-spreadsheet-primary-panel-button,
+.js-spreadsheet-filter-panel-actions .js-spreadsheet-primary-panel-button,
+.js-spreadsheet-validation-panel-actions .js-spreadsheet-primary-panel-button,
+.js-spreadsheet-conditional-panel-actions .js-spreadsheet-primary-panel-button,
+.js-spreadsheet-chart-panel-actions .js-spreadsheet-primary-panel-button {
   border-color: var(--js-spreadsheet-accent-strong);
   background: var(--js-spreadsheet-accent);
   color: #fff;
 }
 
-.primary-panel-button {
+.js-spreadsheet-primary-panel-button {
   height: 34px;
   border: 1px solid var(--js-spreadsheet-accent-strong);
   border-radius: 5px;
@@ -1920,20 +1920,20 @@
   transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 120ms ease;
 }
 
-.primary-panel-button:hover:not(:disabled) {
+.js-spreadsheet-primary-panel-button:hover:not(:disabled) {
   background: var(--js-spreadsheet-accent-strong);
 }
 
-.primary-panel-button:active:not(:disabled) {
+.js-spreadsheet-primary-panel-button:active:not(:disabled) {
   transform: scale(0.96);
 }
 
-.primary-panel-button:disabled {
+.js-spreadsheet-primary-panel-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.grid-scroll {
+.js-spreadsheet-grid-scroll {
   min-height: 0;
   overflow: auto;
   background: #fff;
@@ -1945,11 +1945,11 @@
 }
 
 /* Editing text must stay selectable inside the otherwise unselectable grid. */
-.grid-scroll .cell-editor {
+.js-spreadsheet-grid-scroll .js-spreadsheet-cell-editor {
   user-select: text;
 }
 
-.spreadsheet-grid {
+.js-spreadsheet-spreadsheet-grid {
   /* Positioning context for the selection/fill overlays. */
   position: relative;
   display: grid;
@@ -1960,7 +1960,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.grid-row-spacer {
+.js-spreadsheet-grid-row-spacer {
   pointer-events: none;
   /* Phantom gridlines: while fast scrolling outpaces the rendered row window,
      the not-yet-rendered area reads as more grid instead of a white flash.
@@ -1969,31 +1969,31 @@
   background-size: 100% 28px;
 }
 
-.grid-scroll--no-gridlines .grid-row-spacer {
+.js-spreadsheet-grid-scroll--no-gridlines .js-spreadsheet-grid-row-spacer {
   background-image: none;
 }
 
-.corner-cell,
-.column-header,
-.row-header,
-.cell {
+.js-spreadsheet-corner-cell,
+.js-spreadsheet-column-header,
+.js-spreadsheet-row-header,
+.js-spreadsheet-cell {
   height: 28px;
   border: 0;
   border-right: 1px solid #dde5ee;
   border-bottom: 1px solid #dde5ee;
 }
 
-.grid-scroll--no-gridlines .corner-cell,
-.grid-scroll--no-gridlines .column-header,
-.grid-scroll--no-gridlines .row-header,
-.grid-scroll--no-gridlines .cell {
+.js-spreadsheet-grid-scroll--no-gridlines .js-spreadsheet-corner-cell,
+.js-spreadsheet-grid-scroll--no-gridlines .js-spreadsheet-column-header,
+.js-spreadsheet-grid-scroll--no-gridlines .js-spreadsheet-row-header,
+.js-spreadsheet-grid-scroll--no-gridlines .js-spreadsheet-cell {
   border-right-color: transparent;
   border-bottom-color: transparent;
 }
 
-.corner-cell,
-.column-header,
-.row-header {
+.js-spreadsheet-corner-cell,
+.js-spreadsheet-column-header,
+.js-spreadsheet-row-header {
   position: sticky;
   z-index: 3;
   display: flex;
@@ -2008,17 +2008,17 @@
 
 /* A slightly stronger edge separates the sticky header chrome from the data
    area, like Excel's header boundary. Colors only — geometry must not change. */
-.corner-cell,
-.column-header {
+.js-spreadsheet-corner-cell,
+.js-spreadsheet-column-header {
   border-bottom-color: #c3cedd;
 }
 
-.corner-cell,
-.row-header {
+.js-spreadsheet-corner-cell,
+.js-spreadsheet-row-header {
   border-right-color: #c3cedd;
 }
 
-.corner-cell {
+.js-spreadsheet-corner-cell {
   left: 0;
   top: 0;
   z-index: 5;
@@ -2028,7 +2028,7 @@
 }
 
 /* Excel's select-all corner triangle. */
-.corner-cell::after {
+.js-spreadsheet-corner-cell::after {
   content: "";
   position: absolute;
   right: 3px;
@@ -2040,54 +2040,54 @@
   pointer-events: none;
 }
 
-.corner-cell:hover::after,
-.corner-cell[aria-pressed="true"]::after {
+.js-spreadsheet-corner-cell:hover::after,
+.js-spreadsheet-corner-cell[aria-pressed="true"]::after {
   border-bottom-color: var(--js-spreadsheet-accent);
 }
 
-.column-header {
+.js-spreadsheet-column-header {
   top: 0;
   cursor: pointer;
 }
 
-.row-header {
+.js-spreadsheet-row-header {
   left: 0;
   cursor: pointer;
 }
 
-.corner-cell:hover,
-.corner-cell:focus-visible,
-.column-header:hover,
-.column-header:focus-visible,
-.row-header:hover,
-.row-header:focus-visible {
+.js-spreadsheet-corner-cell:hover,
+.js-spreadsheet-corner-cell:focus-visible,
+.js-spreadsheet-column-header:hover,
+.js-spreadsheet-column-header:focus-visible,
+.js-spreadsheet-row-header:hover,
+.js-spreadsheet-row-header:focus-visible {
   background: #e8f0eb;
   outline: none;
 }
 
 /* Header intersecting the selection: light fill plus an accent edge facing the
    data, mirroring Excel's highlighted headers for any selection. */
-.column-header--hit {
+.js-spreadsheet-column-header--hit {
   background: #e4f1ea;
   color: var(--js-spreadsheet-accent-strong);
   box-shadow: inset 0 -2px 0 var(--js-spreadsheet-accent);
 }
 
-.row-header--hit {
+.js-spreadsheet-row-header--hit {
   background: #e4f1ea;
   color: var(--js-spreadsheet-accent-strong);
   box-shadow: inset -2px 0 0 var(--js-spreadsheet-accent);
 }
 
-.corner-cell[aria-pressed="true"],
-.selected-header {
+.js-spreadsheet-corner-cell[aria-pressed="true"],
+.js-spreadsheet-selected-header {
   background: #d8eee2;
   color: var(--js-spreadsheet-accent-strong);
   box-shadow: inset 0 0 0 1px rgba(34, 121, 93, 0.34);
 }
 
-.column-resize-handle,
-.row-resize-handle {
+.js-spreadsheet-column-resize-handle,
+.js-spreadsheet-row-resize-handle {
   position: absolute;
   border: 0;
   background: transparent;
@@ -2095,7 +2095,7 @@
   cursor: inherit;
 }
 
-.column-resize-handle {
+.js-spreadsheet-column-resize-handle {
   top: 0;
   right: -3px;
   width: 7px;
@@ -2103,7 +2103,7 @@
   cursor: col-resize;
 }
 
-.row-resize-handle {
+.js-spreadsheet-row-resize-handle {
   right: 0;
   bottom: -3px;
   width: 100%;
@@ -2111,19 +2111,19 @@
   cursor: row-resize;
 }
 
-.column-resize-handle:hover,
-.column-resize-handle:focus-visible {
+.js-spreadsheet-column-resize-handle:hover,
+.js-spreadsheet-column-resize-handle:focus-visible {
   background: rgba(34, 121, 93, 0.24);
   outline: none;
 }
 
-.row-resize-handle:hover,
-.row-resize-handle:focus-visible {
+.js-spreadsheet-row-resize-handle:hover,
+.js-spreadsheet-row-resize-handle:focus-visible {
   background: rgba(34, 121, 93, 0.24);
   outline: none;
 }
 
-.cell {
+.js-spreadsheet-cell {
   position: relative;
   display: flex;
   align-items: center;
@@ -2141,12 +2141,12 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .cell:hover {
+  .js-spreadsheet-cell:hover {
     background: #f6faf7;
   }
 }
 
-.cell-context-menu {
+.js-spreadsheet-cell-context-menu {
   position: fixed;
   z-index: 20;
   display: grid;
@@ -2160,7 +2160,7 @@
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
 }
 
-.cell-context-menu-heading {
+.js-spreadsheet-cell-context-menu-heading {
   padding: 5px 8px 6px;
   color: #64748b;
   font-size: 11px;
@@ -2168,7 +2168,7 @@
   letter-spacing: 0.04em;
 }
 
-.cell-context-menu button {
+.js-spreadsheet-cell-context-menu button {
   display: flex;
   align-items: center;
   min-height: 26px;
@@ -2183,18 +2183,18 @@
   cursor: pointer;
 }
 
-.cell-context-menu button:hover,
-.cell-context-menu button:focus-visible {
+.js-spreadsheet-cell-context-menu button:hover,
+.js-spreadsheet-cell-context-menu button:focus-visible {
   background: #eef8f4;
   outline: none;
 }
 
-.cell-context-menu button:disabled {
+.js-spreadsheet-cell-context-menu button:disabled {
   color: #94a3b8;
   cursor: not-allowed;
 }
 
-.cell-context-menu-divider {
+.js-spreadsheet-cell-context-menu-divider {
   height: 1px;
   margin: 5px 4px;
   background: rgba(148, 163, 184, 0.28);
@@ -2204,78 +2204,78 @@
    @starting-style so the enter transition needs no JS; exits stay instant.
    The context menu animates opacity ONLY: it measures its own box to clamp
    inside the viewport on open, and a transform would skew that measurement. */
-.cell-context-menu {
+.js-spreadsheet-cell-context-menu {
   transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.auto-filter-menu,
-.validation-dropdown {
+.js-spreadsheet-auto-filter-menu,
+.js-spreadsheet-validation-dropdown {
   transform-origin: top;
   transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1), transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @starting-style {
-  .cell-context-menu {
+  .js-spreadsheet-cell-context-menu {
     opacity: 0;
   }
 
-  .auto-filter-menu,
-  .validation-dropdown {
+  .js-spreadsheet-auto-filter-menu,
+  .js-spreadsheet-validation-dropdown {
     opacity: 0;
     transform: translateY(-3px) scale(0.98);
   }
 }
 
-.pivot-panel,
-.find-panel,
-.filter-panel,
-.validation-panel,
-.conditional-panel,
-.chart-panel,
-.function-library-panel,
-.named-ranges-panel,
-.go-to-panel,
-.formula-audit-panel {
+.js-spreadsheet-pivot-panel,
+.js-spreadsheet-find-panel,
+.js-spreadsheet-filter-panel,
+.js-spreadsheet-validation-panel,
+.js-spreadsheet-conditional-panel,
+.js-spreadsheet-chart-panel,
+.js-spreadsheet-function-library-panel,
+.js-spreadsheet-named-ranges-panel,
+.js-spreadsheet-go-to-panel,
+.js-spreadsheet-formula-audit-panel {
   transition: opacity 160ms cubic-bezier(0.23, 1, 0.32, 1), transform 160ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @starting-style {
-  .pivot-panel,
-  .find-panel,
-  .filter-panel,
-  .validation-panel,
-  .conditional-panel,
-  .chart-panel,
-  .function-library-panel,
-  .named-ranges-panel,
-  .go-to-panel,
-  .formula-audit-panel {
+  .js-spreadsheet-pivot-panel,
+  .js-spreadsheet-find-panel,
+  .js-spreadsheet-filter-panel,
+  .js-spreadsheet-validation-panel,
+  .js-spreadsheet-conditional-panel,
+  .js-spreadsheet-chart-panel,
+  .js-spreadsheet-function-library-panel,
+  .js-spreadsheet-named-ranges-panel,
+  .js-spreadsheet-go-to-panel,
+  .js-spreadsheet-formula-audit-panel {
     opacity: 0;
     transform: translateY(-4px) scale(0.99);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cell-context-menu,
-  .auto-filter-menu,
-  .validation-dropdown,
-  .pivot-panel,
-  .find-panel,
-  .filter-panel,
-  .validation-panel,
-  .conditional-panel,
-  .chart-panel,
-  .function-library-panel,
-  .named-ranges-panel,
-  .go-to-panel,
-  .formula-audit-panel,
-  .auto-fill-handle,
-  .primary-panel-button {
+  .js-spreadsheet-cell-context-menu,
+  .js-spreadsheet-auto-filter-menu,
+  .js-spreadsheet-validation-dropdown,
+  .js-spreadsheet-pivot-panel,
+  .js-spreadsheet-find-panel,
+  .js-spreadsheet-filter-panel,
+  .js-spreadsheet-validation-panel,
+  .js-spreadsheet-conditional-panel,
+  .js-spreadsheet-chart-panel,
+  .js-spreadsheet-function-library-panel,
+  .js-spreadsheet-named-ranges-panel,
+  .js-spreadsheet-go-to-panel,
+  .js-spreadsheet-formula-audit-panel,
+  .js-spreadsheet-auto-fill-handle,
+  .js-spreadsheet-primary-panel-button {
     transition: none;
   }
 }
 
-.wrapped-cell {
+.js-spreadsheet-wrapped-cell {
   align-items: flex-start;
   padding-top: 4px;
   padding-bottom: 4px;
@@ -2287,15 +2287,15 @@
 /* Excel selection model: the range gets a light tint, one solid border drawn
    around the whole range perimeter (the .selection-outline overlay), and the
    active cell stays white inside it. */
-.selected-cell {
+.js-spreadsheet-selected-cell {
   background: #e9f4ee;
 }
 
-.selected-cell.active-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-active-cell {
   background: #fff;
 }
 
-.selection-outline {
+.js-spreadsheet-selection-outline {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
@@ -2305,7 +2305,7 @@
 
 /* Copied range indicator (shown until Escape or the next paste), like Excel's
    dashed border around the copy source. */
-.copy-marquee {
+.js-spreadsheet-copy-marquee {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
@@ -2314,7 +2314,7 @@
 }
 
 /* Live preview of the pending fill target while dragging the fill handle. */
-.fill-preview-outline {
+.js-spreadsheet-fill-preview-outline {
   position: absolute;
   z-index: 2;
   box-sizing: border-box;
@@ -2322,7 +2322,7 @@
   pointer-events: none;
 }
 
-.auto-fill-handle {
+.js-spreadsheet-auto-fill-handle {
   position: absolute;
   /* Above cells and the selection outline, below sticky headers (z3) and
      frozen cells (z4) so it scrolls under the chrome like the outline does. */
@@ -2344,44 +2344,44 @@
    this tight (12px total): the handle sits on a cell corner, and a larger zone
    swallows mousedowns meant to start a NEW selection from that cell, turning
    them into destructive fill drags. Excel's activation zone is ~6px. */
-.auto-fill-handle::after {
+.js-spreadsheet-auto-fill-handle::after {
   content: "";
   position: absolute;
   inset: -2px;
 }
 
-.auto-fill-handle:hover,
-.auto-fill-handle:focus-visible {
+.js-spreadsheet-auto-fill-handle:hover,
+.js-spreadsheet-auto-fill-handle:focus-visible {
   transform: translate(-50%, -50%) scale(1.4);
   outline: none;
 }
 
-.auto-filter-header-cell > span,
-.auto-filter-header-cell > a {
+.js-spreadsheet-auto-filter-header-cell > span,
+.js-spreadsheet-auto-filter-header-cell > a {
   padding-right: 20px;
 }
 
 /* GridViewport now owns the semantic cell box. Keep source-specific popovers
    visible outside that box while their trigger cells remain virtualized. */
-.auto-filter-header-cell,
-.validation-list-cell {
+.js-spreadsheet-auto-filter-header-cell,
+.js-spreadsheet-validation-list-cell {
   overflow: visible;
 }
 
-.auto-filter-header-cell:has(.auto-filter-menu) {
+.js-spreadsheet-auto-filter-header-cell:has(.js-spreadsheet-auto-filter-menu) {
   z-index: 10;
 }
 
-.validation-list-cell:has(.validation-dropdown) {
+.js-spreadsheet-validation-list-cell:has(.js-spreadsheet-validation-dropdown) {
   z-index: 9;
 }
 
-.auto-filter-menu-open {
+.js-spreadsheet-auto-filter-menu-open {
   overflow: visible;
   z-index: 10;
 }
 
-.auto-filter-toggle {
+.js-spreadsheet-auto-filter-toggle {
   position: absolute;
   top: 50%;
   right: 3px;
@@ -2398,23 +2398,23 @@
   transform: translateY(-50%);
 }
 
-.auto-filter-toggle:hover,
-.auto-filter-toggle:focus-visible,
-.auto-filter-toggle[aria-expanded="true"],
-.filtered-header-cell .auto-filter-toggle {
+.js-spreadsheet-auto-filter-toggle:hover,
+.js-spreadsheet-auto-filter-toggle:focus-visible,
+.js-spreadsheet-auto-filter-toggle[aria-expanded="true"],
+.js-spreadsheet-filtered-header-cell .js-spreadsheet-auto-filter-toggle {
   border-color: rgba(34, 121, 93, 0.5);
   background: #fff;
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.auto-filter-toggle svg {
+.js-spreadsheet-auto-filter-toggle svg {
   width: 12px;
   height: 12px;
   stroke-width: 2.3;
 }
 
-.auto-filter-menu {
+.js-spreadsheet-auto-filter-menu {
   position: absolute;
   top: calc(100% + 2px);
   right: 2px;
@@ -2430,7 +2430,7 @@
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.16);
 }
 
-.auto-filter-menu button {
+.js-spreadsheet-auto-filter-menu button {
   min-width: 0;
   border: 0;
   border-radius: 4px;
@@ -2443,42 +2443,42 @@
   cursor: pointer;
 }
 
-.auto-filter-menu button:hover,
-.auto-filter-menu button:focus-visible,
-.auto-filter-menu button[aria-checked="true"] {
+.js-spreadsheet-auto-filter-menu button:hover,
+.js-spreadsheet-auto-filter-menu button:focus-visible,
+.js-spreadsheet-auto-filter-menu button[aria-checked="true"] {
   background: #eaf7f2;
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.auto-filter-menu button:disabled {
+.js-spreadsheet-auto-filter-menu button:disabled {
   color: #94a3b8;
   cursor: default;
 }
 
-.auto-filter-menu-divider {
+.js-spreadsheet-auto-filter-menu-divider {
   height: 1px;
   margin: 4px 2px;
   background: rgba(148, 163, 184, 0.24);
 }
 
-.auto-filter-choice-list {
+.js-spreadsheet-auto-filter-choice-list {
   display: grid;
   max-height: 120px;
   overflow-y: auto;
 }
 
-.validation-list-cell > span,
-.validation-list-cell > a {
+.js-spreadsheet-validation-list-cell > span,
+.js-spreadsheet-validation-list-cell > a {
   padding-right: 18px;
 }
 
-.validation-dropdown-open {
+.js-spreadsheet-validation-dropdown-open {
   overflow: visible;
   z-index: 9;
 }
 
-.validation-dropdown-toggle {
+.js-spreadsheet-validation-dropdown-toggle {
   position: absolute;
   top: 50%;
   right: 3px;
@@ -2495,21 +2495,21 @@
   transform: translateY(-50%);
 }
 
-.validation-dropdown-toggle:hover,
-.validation-dropdown-toggle:focus-visible,
-.validation-dropdown-toggle[aria-expanded="true"] {
+.js-spreadsheet-validation-dropdown-toggle:hover,
+.js-spreadsheet-validation-dropdown-toggle:focus-visible,
+.js-spreadsheet-validation-dropdown-toggle[aria-expanded="true"] {
   border-color: rgba(34, 121, 93, 0.5);
   background: #fff;
   outline: none;
 }
 
-.validation-dropdown-toggle svg {
+.js-spreadsheet-validation-dropdown-toggle svg {
   width: 12px;
   height: 12px;
   stroke-width: 2.3;
 }
 
-.validation-dropdown {
+.js-spreadsheet-validation-dropdown {
   position: absolute;
   top: calc(100% + 2px);
   right: 2px;
@@ -2526,7 +2526,7 @@
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
 }
 
-.validation-dropdown button {
+.js-spreadsheet-validation-dropdown button {
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -2538,15 +2538,15 @@
   cursor: pointer;
 }
 
-.validation-dropdown button:hover,
-.validation-dropdown button:focus-visible,
-.validation-dropdown button[aria-selected="true"] {
+.js-spreadsheet-validation-dropdown button:hover,
+.js-spreadsheet-validation-dropdown button:focus-visible,
+.js-spreadsheet-validation-dropdown button[aria-selected="true"] {
   background: #eaf7f2;
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.merged-cell {
+.js-spreadsheet-merged-cell {
   /* Above plain cells so the anchor paints over covered cells, but below the
      z2 selection/fill overlays so the range border stays visible on merges. */
   z-index: 1;
@@ -2556,54 +2556,54 @@
   box-shadow: inset 0 0 0 1px rgba(23, 99, 74, 0.2);
 }
 
-.selected-cell.merged-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-merged-cell {
   background: #e9f4ee;
 }
 
-.selected-cell.active-cell.merged-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-active-cell.js-spreadsheet-merged-cell {
   background: #fff;
 }
 
-.merge-covered-cell {
+.js-spreadsheet-merge-covered-cell {
   color: transparent;
   pointer-events: none;
   background: #fff;
   box-shadow: none;
 }
 
-.merge-covered-cell span {
+.js-spreadsheet-merge-covered-cell span {
   visibility: hidden;
 }
 
-.merge-covered-cell.selected-cell {
+.js-spreadsheet-merge-covered-cell.js-spreadsheet-selected-cell {
   box-shadow: none;
   background: #fff;
 }
 
-.invalid-validation-cell {
+.js-spreadsheet-invalid-validation-cell {
   box-shadow: inset 0 0 0 2px #d44949;
   background: #fff7f7;
 }
 
-.invalid-validation-cell.selected-cell {
+.js-spreadsheet-invalid-validation-cell.js-spreadsheet-selected-cell {
   box-shadow: inset 0 0 0 2px #d44949;
 }
 
-.conditional-format-cell {
+.js-spreadsheet-conditional-format-cell {
   box-shadow: inset 0 -1px 0 rgba(138, 75, 0, 0.24);
 }
 
-.conditional-data-bar-cell {
+.js-spreadsheet-conditional-data-bar-cell {
   isolation: isolate;
 }
 
-.conditional-data-bar-cell > span:not(.cell-data-bar),
-.conditional-data-bar-cell > a {
+.js-spreadsheet-conditional-data-bar-cell > span:not(.js-spreadsheet-cell-data-bar),
+.js-spreadsheet-conditional-data-bar-cell > a {
   position: relative;
   z-index: 1;
 }
 
-.cell .cell-data-bar {
+.js-spreadsheet-cell .js-spreadsheet-cell-data-bar {
   position: absolute;
   top: 2px;
   bottom: 2px;
@@ -2616,7 +2616,7 @@
   pointer-events: none;
 }
 
-.hyperlink-cell a {
+.js-spreadsheet-hyperlink-cell a {
   min-width: 0;
   overflow: hidden;
   color: #1d4ed8;
@@ -2624,13 +2624,13 @@
   text-overflow: ellipsis;
 }
 
-.hyperlink-cell a:hover,
-.hyperlink-cell a:focus-visible {
+.js-spreadsheet-hyperlink-cell a:hover,
+.js-spreadsheet-hyperlink-cell a:focus-visible {
   color: #1e40af;
   outline: none;
 }
 
-.read-only-cell {
+.js-spreadsheet-read-only-cell {
   color: #475569;
   background-image: repeating-linear-gradient(
     135deg,
@@ -2641,7 +2641,7 @@
   );
 }
 
-.read-only-cell::before {
+.js-spreadsheet-read-only-cell::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
@@ -2650,11 +2650,11 @@
   pointer-events: none;
 }
 
-.read-only-cell.selected-cell {
+.js-spreadsheet-read-only-cell.js-spreadsheet-selected-cell {
   box-shadow: inset 3px 0 0 rgba(100, 116, 139, 0.38);
 }
 
-.commented-cell::after {
+.js-spreadsheet-commented-cell::after {
   content: "";
   position: absolute;
   top: 0;
@@ -2666,7 +2666,7 @@
   pointer-events: none;
 }
 
-.frozen-top-row-cell {
+.js-spreadsheet-frozen-top-row-cell {
   position: sticky;
   top: var(--js-spreadsheet-column-header-height, 28px);
   z-index: 4;
@@ -2674,7 +2674,7 @@
   box-shadow: inset 0 -1px 0 #b7c4d2;
 }
 
-.frozen-first-column-cell {
+.js-spreadsheet-frozen-first-column-cell {
   position: sticky;
   left: var(--js-spreadsheet-row-header-width, 48px);
   z-index: 4;
@@ -2682,56 +2682,56 @@
   box-shadow: inset -1px 0 0 #b7c4d2;
 }
 
-.frozen-top-row-cell.frozen-first-column-cell {
+.js-spreadsheet-frozen-top-row-cell.js-spreadsheet-frozen-first-column-cell {
   z-index: 6;
   box-shadow: inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
 }
 
 /* Frozen cells are sticky and opaque (z4), so the scrolling selection outline
    passes underneath them; restore a per-cell accent ring there instead. */
-.selected-cell.frozen-top-row-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-frozen-top-row-cell {
   background: #e9f4ee;
   box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset 0 -1px 0 #b7c4d2;
 }
 
-.selected-cell.frozen-first-column-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-frozen-first-column-cell {
   background: #e9f4ee;
   box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset -1px 0 0 #b7c4d2;
 }
 
-.selected-cell.frozen-top-row-cell.frozen-first-column-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-frozen-top-row-cell.js-spreadsheet-frozen-first-column-cell {
   box-shadow: inset 0 0 0 2px var(--js-spreadsheet-accent), inset -1px 0 0 #b7c4d2, inset 0 -1px 0 #b7c4d2;
 }
 
 /* The active cell stays white even inside frozen panes (higher specificity so
    the frozen tint above cannot win the cascade tie). */
-.selected-cell.active-cell.frozen-top-row-cell,
-.selected-cell.active-cell.frozen-first-column-cell,
-.selected-cell.active-cell.frozen-top-row-cell.frozen-first-column-cell {
+.js-spreadsheet-selected-cell.js-spreadsheet-active-cell.js-spreadsheet-frozen-top-row-cell,
+.js-spreadsheet-selected-cell.js-spreadsheet-active-cell.js-spreadsheet-frozen-first-column-cell,
+.js-spreadsheet-selected-cell.js-spreadsheet-active-cell.js-spreadsheet-frozen-top-row-cell.js-spreadsheet-frozen-first-column-cell {
   background: #fff;
 }
 
-.editing-cell,
+.js-spreadsheet-editing-cell,
 .js-spreadsheet-grid__editing-cell {
   overflow: visible;
   z-index: 8;
 }
 
-.cell span {
+.js-spreadsheet-cell span {
   display: block;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.cell-editor-shell {
+.js-spreadsheet-cell-editor-shell {
   position: absolute;
   inset: 0;
   overflow: visible;
   background: #fff;
 }
 
-.cell-editor {
+.js-spreadsheet-cell-editor {
   width: 100%;
   height: 100%;
   border: 2px solid var(--js-spreadsheet-accent);
@@ -2740,7 +2740,7 @@
   outline: none;
 }
 
-.cell-suggestion-layer {
+.js-spreadsheet-cell-suggestion-layer {
   position: absolute;
   top: 0;
   left: 0;
@@ -2749,7 +2749,7 @@
   pointer-events: none;
 }
 
-.cell .formula-suggestions {
+.js-spreadsheet-cell .js-spreadsheet-formula-suggestions {
   top: calc(100% + 2px);
   right: auto;
   left: 1px;
@@ -2759,24 +2759,24 @@
   pointer-events: auto;
 }
 
-.cell .formula-suggestions .formula-suggestion-option--active {
+.js-spreadsheet-cell .js-spreadsheet-formula-suggestions .js-spreadsheet-formula-suggestion-option--active {
   max-width: none;
 }
 
-.cell .formula-suggestions span {
+.js-spreadsheet-cell .js-spreadsheet-formula-suggestions span {
   display: initial;
   width: auto;
   overflow: hidden;
 }
 
-.cell .formula-suggestions .formula-suggestion-main {
+.js-spreadsheet-cell .js-spreadsheet-formula-suggestions .js-spreadsheet-formula-suggestion-main {
   display: flex;
   gap: 8px;
   align-items: baseline;
   min-width: 0;
 }
 
-.sheet-chart-layer {
+.js-spreadsheet-sheet-chart-layer {
   position: absolute;
   right: 16px;
   bottom: 50px;
@@ -2790,7 +2790,7 @@
   pointer-events: none;
 }
 
-.sheet-chart {
+.js-spreadsheet-sheet-chart {
   width: min(320px, calc(100vw - 34px));
   margin: 0;
   border: 1px solid rgba(100, 116, 139, 0.32);
@@ -2801,7 +2801,7 @@
   pointer-events: auto;
 }
 
-.sheet-chart-header {
+.js-spreadsheet-sheet-chart-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2810,13 +2810,13 @@
   margin-bottom: 6px;
 }
 
-.sheet-chart-header span {
+.js-spreadsheet-sheet-chart-header span {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.sheet-chart-header strong {
+.js-spreadsheet-sheet-chart-header strong {
   overflow: hidden;
   color: var(--js-spreadsheet-text);
   font-size: 13px;
@@ -2825,13 +2825,13 @@
   white-space: nowrap;
 }
 
-.sheet-chart-header small {
+.js-spreadsheet-sheet-chart-header small {
   color: var(--js-spreadsheet-muted);
   font-size: 11px;
   font-weight: 700;
 }
 
-.sheet-chart-header button {
+.js-spreadsheet-sheet-chart-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2845,41 +2845,41 @@
   cursor: pointer;
 }
 
-.sheet-chart-header button:hover,
-.sheet-chart-header button:focus-visible {
+.js-spreadsheet-sheet-chart-header button:hover,
+.js-spreadsheet-sheet-chart-header button:focus-visible {
   border-color: rgba(167, 62, 62, 0.36);
   background: #fff3f3;
   color: #a73e3e;
   outline: none;
 }
 
-.sheet-chart-header button svg {
+.js-spreadsheet-sheet-chart-header button svg {
   width: 14px;
   height: 14px;
 }
 
-.sheet-chart-svg {
+.js-spreadsheet-sheet-chart-svg {
   display: block;
   width: 100%;
   height: auto;
 }
 
-.sheet-chart-axis {
+.js-spreadsheet-sheet-chart-axis {
   stroke: #8fa0b2;
   stroke-width: 1;
 }
 
-.sheet-chart-gridline {
+.js-spreadsheet-sheet-chart-gridline {
   stroke: #dbe4ec;
   stroke-width: 1;
   stroke-dasharray: 4 4;
 }
 
-.sheet-chart-bar {
+.js-spreadsheet-sheet-chart-bar {
   fill: #2f7d9f;
 }
 
-.sheet-chart-line {
+.js-spreadsheet-sheet-chart-line {
   fill: none;
   stroke: #8a4b00;
   stroke-linecap: round;
@@ -2887,29 +2887,29 @@
   stroke-width: 3;
 }
 
-.sheet-chart-dot {
+.js-spreadsheet-sheet-chart-dot {
   fill: #fff;
   stroke: #8a4b00;
   stroke-width: 2;
 }
 
-.sheet-chart-pie-slice {
+.js-spreadsheet-sheet-chart-pie-slice {
   stroke: #fff;
   stroke-width: 1.5;
 }
 
-.sheet-chart-pie-key {
+.js-spreadsheet-sheet-chart-pie-key {
   stroke: #fff;
   stroke-width: 1;
 }
 
-.sheet-chart-label {
+.js-spreadsheet-sheet-chart-label {
   fill: #526173;
   font-size: 10px;
   font-weight: 800;
 }
 
-.sheet-chart-empty {
+.js-spreadsheet-sheet-chart-empty {
   min-height: 82px;
   display: grid;
   place-items: center;
@@ -2920,7 +2920,7 @@
   font-weight: 800;
 }
 
-.sheet-tabs {
+.js-spreadsheet-sheet-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2931,8 +2931,8 @@
   overflow-x: auto;
 }
 
-.sheet-tab,
-.add-sheet-tab {
+.js-spreadsheet-sheet-tab,
+.js-spreadsheet-add-sheet-tab {
   height: 28px;
   border: 1px solid #b8c5d3;
   border-radius: 5px;
@@ -2943,25 +2943,25 @@
   cursor: pointer;
 }
 
-.sheet-tab {
+.js-spreadsheet-sheet-tab {
   border-top-width: 3px;
   border-top-color: transparent;
 }
 
-.active-sheet-tab {
+.js-spreadsheet-active-sheet-tab {
   border-color: var(--js-spreadsheet-accent);
   border-top-color: transparent;
   color: var(--js-spreadsheet-accent-strong);
   background: var(--js-spreadsheet-accent-soft);
 }
 
-.add-sheet-tab {
+.js-spreadsheet-add-sheet-tab {
   width: 30px;
   padding: 0;
   font-size: 16px;
 }
 
-.status-bar {
+.js-spreadsheet-status-bar {
   display: flex;
   align-items: center;
   gap: 18px;
@@ -2977,7 +2977,7 @@
   white-space: nowrap;
 }
 
-.status-persistence {
+.js-spreadsheet-status-persistence {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -2988,7 +2988,7 @@
   box-shadow: inset 0 0 0 1px rgba(95, 110, 130, 0.2);
 }
 
-.status-persistence::before {
+.js-spreadsheet-status-persistence::before {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -2996,18 +2996,18 @@
   content: "";
 }
 
-.status-persistence-saving {
+.js-spreadsheet-status-persistence-saving {
   color: var(--js-spreadsheet-accent-strong);
   background: var(--js-spreadsheet-accent-soft);
 }
 
-.status-persistence-failed {
+.js-spreadsheet-status-persistence-failed {
   color: var(--js-spreadsheet-danger, #b42318);
   background: #fff3f2;
   box-shadow: inset 0 0 0 1px rgba(180, 35, 24, 0.18);
 }
 
-.status-zoom {
+.js-spreadsheet-status-zoom {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -3015,7 +3015,7 @@
   padding-left: 10px;
 }
 
-.status-zoom button {
+.js-spreadsheet-status-zoom button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3030,44 +3030,44 @@
   cursor: pointer;
 }
 
-.status-zoom button:hover,
-.status-zoom button:focus-visible {
+.js-spreadsheet-status-zoom button:hover,
+.js-spreadsheet-status-zoom button:focus-visible {
   border-color: var(--js-spreadsheet-accent);
   color: var(--js-spreadsheet-accent-strong);
   outline: none;
 }
 
-.status-zoom button[aria-label="Reset zoom"] {
+.js-spreadsheet-status-zoom button[aria-label="Reset zoom"] {
   min-width: 48px;
 }
 
 @media (max-width: 720px) {
-  .app-shell {
+  .js-spreadsheet-app-shell {
     padding: 0;
   }
 
-  .spreadsheet-surface {
+  .js-spreadsheet-spreadsheet-surface {
     height: 100%;
     border: 0;
   }
 
-  .toolbar {
+  .js-spreadsheet-toolbar {
     min-height: 118px;
     padding: 5px 7px 7px;
   }
 
-  .ribbon-header {
+  .js-spreadsheet-ribbon-header {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 6px;
     align-items: end;
   }
 
-  .ribbon-tab {
+  .js-spreadsheet-ribbon-tab {
     min-width: 64px;
     padding: 0 9px;
   }
 
-  .ribbon-panel {
+  .js-spreadsheet-ribbon-panel {
     flex-wrap: nowrap;
     overflow-x: auto;
     padding: 5px;
@@ -3081,25 +3081,25 @@
       #fff;
   }
 
-  .toolbar-group {
+  .js-spreadsheet-toolbar-group {
     min-width: max-content;
   }
 
-  .toolbar-button span {
+  .js-spreadsheet-toolbar-button span {
     display: none;
   }
 
-  .color-control span {
+  .js-spreadsheet-color-control span {
     display: none;
   }
 
-  .toolbar-button {
+  .js-spreadsheet-toolbar-button {
     width: 32px;
     justify-content: center;
     padding: 0;
   }
 
-  .color-control {
+  .js-spreadsheet-color-control {
     width: 44px;
     max-width: 44px;
     justify-content: center;
@@ -3107,107 +3107,107 @@
     padding: 0 4px;
   }
 
-  .color-control input {
+  .js-spreadsheet-color-control input {
     width: 18px;
   }
 
-  .brand {
+  .js-spreadsheet-brand {
     padding-right: 0;
   }
 
-  .brand span:last-child {
+  .js-spreadsheet-brand span:last-child {
     display: none;
   }
 
-  .formula-input-wrap input {
+  .js-spreadsheet-formula-input-wrap input {
     padding-right: 10px;
   }
 
-  .formula-suggestions {
+  .js-spreadsheet-formula-suggestions {
     right: auto;
     left: 0;
     width: min(320px, calc(100vw - 16px));
     max-width: min(320px, calc(100vw - 16px));
   }
 
-  .cell .formula-suggestions {
+  .js-spreadsheet-cell .js-spreadsheet-formula-suggestions {
     right: auto;
     left: 1px;
     width: min(300px, calc(100vw - 16px));
     max-width: min(300px, calc(100vw - 16px));
   }
 
-  .pivot-panel {
+  .js-spreadsheet-pivot-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .find-panel {
+  .js-spreadsheet-find-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .filter-panel {
+  .js-spreadsheet-filter-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .validation-panel {
+  .js-spreadsheet-validation-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .conditional-panel {
+  .js-spreadsheet-conditional-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .chart-panel {
+  .js-spreadsheet-chart-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .function-library-panel {
+  .js-spreadsheet-function-library-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .named-ranges-panel {
+  .js-spreadsheet-named-ranges-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .go-to-panel {
+  .js-spreadsheet-go-to-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .formula-audit-panel {
+  .js-spreadsheet-formula-audit-panel {
     top: 92px;
     right: 8px;
     left: 8px;
     width: auto;
   }
 
-  .sheet-chart-layer {
+  .js-spreadsheet-sheet-chart-layer {
     right: 8px;
     bottom: 48px;
     left: 8px;
@@ -3215,7 +3215,7 @@
     max-height: calc(100% - 168px);
   }
 
-  .sheet-chart {
+  .js-spreadsheet-sheet-chart {
     width: min(320px, 100%);
   }
 }
@@ -3225,12 +3225,12 @@
     background: #fff;
   }
 
-  .app-shell {
+  .js-spreadsheet-app-shell {
     min-height: auto;
     padding: 0;
   }
 
-  .spreadsheet-surface {
+  .js-spreadsheet-spreadsheet-surface {
     display: block;
     height: auto;
     min-height: 0;
@@ -3240,36 +3240,36 @@
     overflow: visible;
   }
 
-  .toolbar,
-  .hidden-file-input,
-  .formula-bar,
-  .pivot-panel,
-  .find-panel,
-  .filter-panel,
-  .validation-panel,
-  .conditional-panel,
-  .chart-panel,
-  .function-library-panel,
-  .named-ranges-panel,
-  .go-to-panel,
-  .formula-audit-panel,
-  .cell-context-menu,
-  .sheet-tabs,
-  .status-bar {
+  .js-spreadsheet-toolbar,
+  .js-spreadsheet-hidden-file-input,
+  .js-spreadsheet-formula-bar,
+  .js-spreadsheet-pivot-panel,
+  .js-spreadsheet-find-panel,
+  .js-spreadsheet-filter-panel,
+  .js-spreadsheet-validation-panel,
+  .js-spreadsheet-conditional-panel,
+  .js-spreadsheet-chart-panel,
+  .js-spreadsheet-function-library-panel,
+  .js-spreadsheet-named-ranges-panel,
+  .js-spreadsheet-go-to-panel,
+  .js-spreadsheet-formula-audit-panel,
+  .js-spreadsheet-cell-context-menu,
+  .js-spreadsheet-sheet-tabs,
+  .js-spreadsheet-status-bar {
     display: none !important;
   }
 
-  .grid-scroll {
+  .js-spreadsheet-grid-scroll {
     overflow: visible;
   }
 
-  .spreadsheet-grid {
+  .js-spreadsheet-spreadsheet-grid {
     min-width: 0;
   }
 
-  .corner-cell,
-  .column-header,
-  .row-header {
+  .js-spreadsheet-corner-cell,
+  .js-spreadsheet-column-header,
+  .js-spreadsheet-row-header {
     position: static;
   }
 }
@@ -3277,17 +3277,17 @@
 
 /* Workbook structured tables are intentionally root-scoped so embedding the
    spreadsheet cannot leak ribbon, field, or cell styles into the host page. */
-.js-spreadsheet-root.js-spreadsheet-workbook .ribbon-tab--contextual {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-ribbon-tab--contextual {
   border-top-color: color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 52%, transparent);
   color: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent-strong));
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .ribbon-tab--contextual[aria-selected="true"] {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-ribbon-tab--contextual[aria-selected="true"] {
   background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-accent-soft));
   box-shadow: inset 0 2px 0 var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .spreadsheet-table-tab {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-spreadsheet-table-tab {
   display: flex;
   align-items: flex-start;
   gap: 8px 14px;
@@ -3297,22 +3297,22 @@
   padding: 1px 8px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-tab-fields,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-style-options,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-tab-fields,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-style-options,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-actions {
   display: flex;
   align-items: end;
   gap: 6px;
   flex-wrap: wrap;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-tab-fields,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-style-options {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-tab-fields,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-style-options {
   padding-right: 12px;
   border-right: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field {
   display: grid;
   gap: 3px;
   min-width: 104px;
@@ -3321,8 +3321,8 @@
   font-weight: 700;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > input,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > select {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field > input,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field > select {
   width: 132px;
   min-height: 30px;
   border: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
@@ -3334,15 +3334,15 @@
   font-weight: 500;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > input:focus-visible,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field > select:focus-visible,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:focus-visible {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field > input:focus-visible,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field > select:focus-visible,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-actions > button:focus-visible {
   border-color: var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
   outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 24%, transparent);
   outline-offset: 1px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-check {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-check {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3353,7 +3353,7 @@
   white-space: nowrap;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-actions > button {
   min-height: 30px;
   border: 1px solid var(--js-spreadsheet-border, var(--js-spreadsheet-border));
   border-radius: 5px;
@@ -3365,17 +3365,17 @@
   cursor: pointer;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:hover:not(:disabled) {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-actions > button:hover:not(:disabled) {
   border-color: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent));
   background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-accent-soft));
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-actions > button:disabled {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-actions > button:disabled {
   opacity: 0.48;
   cursor: not-allowed;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-popover {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-popover {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(116px, max-content));
   align-items: end;
@@ -3388,26 +3388,26 @@
   padding: 8px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-field-error,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-field-error,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-issue-summary {
   margin: 0;
   color: var(--js-spreadsheet-danger, #b42318);
   font-size: 11px;
   font-weight: 650;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-issue-summary {
   flex: 1 1 100%;
   border-left: 3px solid var(--js-spreadsheet-danger, #b42318);
   background: color-mix(in srgb, var(--js-spreadsheet-danger, #b42318) 8%, transparent);
   padding: 5px 8px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-issue-summary > p {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-issue-summary > p {
   margin: 0;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .visually-hidden {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-visually-hidden {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -3420,30 +3420,30 @@
   border: 0;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--header {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell--header {
   background: var(--js-spreadsheet-surface-muted, #e7f3ee);
   color: var(--js-spreadsheet-text, var(--js-spreadsheet-text));
   font-weight: 750;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--body.structured-table-cell--striped,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--body[data-striped="true"] {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell--body.js-spreadsheet-structured-table-cell--striped,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell--body[data-striped="true"] {
   background: color-mix(in srgb, var(--js-spreadsheet-selection, var(--js-spreadsheet-accent)) 7%, #fff);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell--totals {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell--totals {
   border-top: 2px solid var(--js-spreadsheet-selection, var(--js-spreadsheet-accent));
   background: var(--js-spreadsheet-surface-muted, var(--js-spreadsheet-chrome));
   font-weight: 750;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell[data-structured-table-style^="TableStyleMedium"].structured-table-cell--header,
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-cell[data-structured-table-style^="TableStyleDark"].structured-table-cell--header {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell[data-structured-table-style^="TableStyleMedium"].js-spreadsheet-structured-table-cell--header,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-cell[data-structured-table-style^="TableStyleDark"].js-spreadsheet-structured-table-cell--header {
   background: var(--js-spreadsheet-accent, var(--js-spreadsheet-accent));
   color: var(--js-spreadsheet-accent-contrast, #fff);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-filter-affordance {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-filter-affordance {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3454,7 +3454,7 @@
   opacity: 0.72;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .structured-table-filter-affordance > svg {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-structured-table-filter-affordance > svg {
   width: 12px;
   height: 12px;
 }
@@ -3525,7 +3525,7 @@
   border-radius: 0;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .file-drop-overlay {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-file-drop-overlay {
   position: fixed;
   inset: 0;
   z-index: 60;
@@ -3542,7 +3542,7 @@
   pointer-events: none;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-dialog {
   width: min(620px, calc(100vw - 32px));
   max-width: none;
   max-height: min(760px, calc(100dvh - 32px));
@@ -3559,53 +3559,53 @@
     0 28px 72px rgb(15 23 42 / 18%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-trigger {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-trigger {
   min-height: 40px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog::backdrop {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-dialog::backdrop {
   background: rgb(15 23 42 / 46%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-form {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-form {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   max-height: min(760px, calc(100dvh - 32px));
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-actions {
   padding: 18px 20px;
   background: var(--js-spreadsheet-surface, #fff);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header {
   border-bottom: 1px solid var(--js-spreadsheet-border, #cbd5e1);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header h2,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header p,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section h3,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section p,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-alert,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-progress {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header h2,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header p,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-section h3,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-section p,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-alert,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-progress {
   margin: 0;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header h2 {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header h2 {
   font-size: 20px;
   line-height: 1.25;
   text-wrap: balance;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header p {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header p {
   margin-top: 6px;
   color: var(--js-spreadsheet-text-muted, #5f6e82);
   line-height: 1.5;
   text-wrap: pretty;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-body {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-body {
   display: grid;
   gap: 12px;
   min-height: 0;
@@ -3615,7 +3615,7 @@
   overscroll-behavior: contain;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-section {
   display: grid;
   gap: 10px;
   border-radius: 8px;
@@ -3624,20 +3624,20 @@
   box-shadow: 0 0 0 1px rgb(15 23 42 / 7%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section h3 {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-section h3 {
   font-size: 14px;
   line-height: 1.35;
   text-wrap: balance;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-section-heading {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-section-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-origin {
   display: block;
   width: 100%;
   min-height: 40px;
@@ -3653,22 +3653,22 @@
   cursor: text;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin-status,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-help,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-warning,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-copy-status {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-origin-status,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-help,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-warning,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-copy-status {
   color: var(--js-spreadsheet-text-muted, #5f6e82);
   font-size: 12px;
   line-height: 1.5;
   text-wrap: pretty;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-origin-status.blocked,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-warning {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-origin-status.js-spreadsheet-blocked,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-warning {
   color: var(--js-spreadsheet-text-muted, #5f6e82);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-checklist {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-checklist {
   display: grid;
   gap: 5px;
   margin: 0;
@@ -3678,11 +3678,11 @@
   line-height: 1.45;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-checklist code {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-checklist code {
   overflow-wrap: anywhere;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-field {
   display: grid;
   gap: 6px;
   color: var(--js-spreadsheet-text, #172033);
@@ -3690,7 +3690,7 @@
   font-weight: 700;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-field input {
   width: 100%;
   min-height: 40px;
   border: 1px solid var(--js-spreadsheet-border-strong, #94a3b8);
@@ -3700,24 +3700,24 @@
   background: var(--js-spreadsheet-surface, #fff);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input:focus-visible {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-field input:focus-visible {
   border-color: var(--js-spreadsheet-accent, #22795d);
   outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-accent, #22795d) 24%, transparent);
   outline-offset: 1px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input[readonly] {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-field input[readonly] {
   color: var(--js-spreadsheet-text-muted, #5f6e82);
   background: var(--js-spreadsheet-surface-muted, #f8fafc);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-field input:disabled,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:disabled {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-field input:disabled,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:disabled {
   opacity: 0.58;
   cursor: not-allowed;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-alert {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-alert {
   border-radius: 7px;
   padding: 10px 12px;
   color: var(--js-spreadsheet-danger, #b42318);
@@ -3727,7 +3727,7 @@
   line-height: 1.45;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-progress {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-progress {
   border-radius: 7px;
   padding: 11px 12px;
   color: var(--js-spreadsheet-accent-strong, #17634a);
@@ -3735,19 +3735,19 @@
   font-weight: 700;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions,
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-inline-actions {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-actions,
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-inline-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-actions {
   border-top: 1px solid var(--js-spreadsheet-border, #cbd5e1);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button {
   min-height: 40px;
   border: 0;
   border-radius: 6px;
@@ -3759,13 +3759,13 @@
   transition-timing-function: ease-out;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.primary {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button.js-spreadsheet-primary {
   color: var(--js-spreadsheet-accent-contrast, #fff);
   background: var(--js-spreadsheet-accent, #22795d);
   box-shadow: 0 1px 2px rgb(15 23 42 / 14%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.secondary {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button.js-spreadsheet-secondary {
   color: var(--js-spreadsheet-text, #172033);
   background: var(--js-spreadsheet-surface, #fff);
   box-shadow:
@@ -3773,54 +3773,54 @@
     0 1px 2px rgb(15 23 42 / 7%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button.danger {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button.js-spreadsheet-danger {
   color: var(--js-spreadsheet-danger, #b42318);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:hover:not(:disabled),
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:focus-visible:not(:disabled) {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:hover:not(:disabled),
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:focus-visible:not(:disabled) {
   box-shadow:
     0 0 0 1px rgb(15 23 42 / 14%),
     0 2px 5px rgb(15 23 42 / 11%);
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:focus-visible {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--js-spreadsheet-accent, #22795d) 38%, transparent);
   outline-offset: 2px;
 }
 
-.js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:active:not(:disabled) {
+.js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:active:not(:disabled) {
   transform: scale(0.96);
 }
 
 @media (max-width: 540px) {
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-dialog {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-dialog {
     width: calc(100vw - 16px);
     max-height: calc(100dvh - 16px);
   }
 
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-form {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-form {
     max-height: calc(100dvh - 16px);
   }
 
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-header,
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions,
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-body {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-header,
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-actions,
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-body {
     padding-right: 14px;
     padding-left: 14px;
   }
 
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-actions .google-sheets-import-button {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-actions .js-spreadsheet-google-sheets-import-button {
     flex: 1 1 180px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button {
     transition-duration: 0ms;
   }
 
-  .js-spreadsheet-root.js-spreadsheet-workbook .google-sheets-import-button:active:not(:disabled) {
+  .js-spreadsheet-root.js-spreadsheet-workbook .js-spreadsheet-google-sheets-import-button:active:not(:disabled) {
     transform: none;
   }
 }

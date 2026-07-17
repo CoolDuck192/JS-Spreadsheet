@@ -25,23 +25,23 @@ export function NamedRangesPanel({
   }
 
   return (
-    <aside className="named-ranges-panel" aria-label="Named ranges">
-      <div className="named-ranges-panel-header">
+    <aside className="js-spreadsheet-named-ranges-panel" aria-label="Named ranges">
+      <div className="js-spreadsheet-named-ranges-panel-header">
         <strong>Named Ranges</strong>
         <button type="button" aria-label="Close named ranges" onClick={onClose}>
           <X />
         </button>
       </div>
-      <p className="named-ranges-summary">{namedRanges.length === 1 ? "1 named range" : `${namedRanges.length} named ranges`}</p>
-      <div className="named-ranges-list" role="list" aria-label="Named range list">
+      <p className="js-spreadsheet-named-ranges-summary">{namedRanges.length === 1 ? "1 named range" : `${namedRanges.length} named ranges`}</p>
+      <div className="js-spreadsheet-named-ranges-list" role="list" aria-label="Named range list">
         {namedRanges.length > 0 ? (
           namedRanges.map((namedRange) => (
-            <article key={namedRange.name} className="named-range-item" role="listitem">
+            <article key={namedRange.name} className="js-spreadsheet-named-range-item" role="listitem">
               <div>
                 <strong>{namedRange.name}</strong>
                 <code>{formatNamedRangeReference(namedRange, sheets)}</code>
               </div>
-              <div className="named-range-actions">
+              <div className="js-spreadsheet-named-range-actions">
                 <button type="button" aria-label={`Select ${namedRange.name}`} onClick={() => onSelect(namedRange)}>
                   Select
                 </button>
@@ -52,7 +52,7 @@ export function NamedRangesPanel({
             </article>
           ))
         ) : (
-          <p className="named-ranges-empty">No named ranges</p>
+          <p className="js-spreadsheet-named-ranges-empty">No named ranges</p>
         )}
       </div>
     </aside>

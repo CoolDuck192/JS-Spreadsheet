@@ -23,8 +23,8 @@ export function FunctionLibraryPanel({ isOpen, onClose, onInsert }: FunctionLibr
   }
 
   return (
-    <aside className="function-library-panel" aria-label="Function library">
-      <div className="function-library-panel-header">
+    <aside className="js-spreadsheet-function-library-panel" aria-label="Function library">
+      <div className="js-spreadsheet-function-library-panel-header">
         <strong>Function Library</strong>
         <button type="button" aria-label="Close function library" onClick={onClose}>
           <X />
@@ -39,16 +39,16 @@ export function FunctionLibraryPanel({ isOpen, onClose, onInsert }: FunctionLibr
           onChange={(event) => setQuery(event.currentTarget.value)}
         />
       </label>
-      <p className="function-library-summary">
+      <p className="js-spreadsheet-function-library-summary">
         {FORMULA_SUGGESTIONS.length} functions, {matches.length} shown
       </p>
-      <div className="function-library-results" role="list" aria-label="Function results">
+      <div className="js-spreadsheet-function-library-results" role="list" aria-label="Function results">
         {matches.length > 0 ? (
           matches.map((suggestion) => (
             <FunctionLibraryItem key={suggestion.name} suggestion={suggestion} onInsert={onInsert} />
           ))
         ) : (
-          <p className="function-library-empty">No functions found</p>
+          <p className="js-spreadsheet-function-library-empty">No functions found</p>
         )}
       </div>
     </aside>
@@ -63,7 +63,7 @@ function FunctionLibraryItem({
   onInsert: (name: string) => void;
 }) {
   return (
-    <article className="function-library-item" role="listitem">
+    <article className="js-spreadsheet-function-library-item" role="listitem">
       <div>
         <strong>{suggestion.name}</strong>
         <code>{suggestion.syntax}</code>

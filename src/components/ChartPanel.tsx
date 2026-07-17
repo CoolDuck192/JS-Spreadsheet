@@ -24,8 +24,8 @@ export function ChartPanel({ isOpen, onClose, onCreate }: ChartPanelProps) {
   }
 
   return (
-    <aside className="chart-panel" aria-label="Chart builder">
-      <div className="chart-panel-header">
+    <aside className="js-spreadsheet-chart-panel" aria-label="Chart builder">
+      <div className="js-spreadsheet-chart-panel-header">
         <strong>Chart</strong>
         <button type="button" aria-label="Close chart builder" onClick={onClose}>
           <X />
@@ -52,11 +52,11 @@ export function ChartPanel({ isOpen, onClose, onCreate }: ChartPanelProps) {
           placeholder="Auto"
         />
       </label>
-      <div className="chart-panel-actions">
+      <div className="js-spreadsheet-chart-panel-actions">
         <button type="button" onClick={onClose}>
           Cancel
         </button>
-        <button type="button" className="primary-panel-button" onClick={() => onCreate({ type, title: title.trim() })}>
+        <button type="button" className="js-spreadsheet-primary-panel-button" onClick={() => onCreate({ type, title: title.trim() })}>
           Create chart
         </button>
       </div>

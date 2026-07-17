@@ -43,8 +43,8 @@ export function DataValidationPanel({
   const canApply = type === "number" || type === "textLength" ? hasValidBounds : listOptions.length > 0;
 
   return (
-    <aside className="validation-panel" aria-label="Data validation">
-      <div className="validation-panel-header">
+    <aside className="js-spreadsheet-validation-panel" aria-label="Data validation">
+      <div className="js-spreadsheet-validation-panel-header">
         <strong>Data Validation</strong>
         <button type="button" aria-label="Close data validation" onClick={onClose}>
           <X />
@@ -72,7 +72,7 @@ export function DataValidationPanel({
           />
         </label>
       ) : (
-        <div className="validation-number-fields">
+        <div className="js-spreadsheet-validation-number-fields">
           <label>
             <span>{type === "textLength" ? "Min length" : "Min"}</span>
             <input
@@ -93,10 +93,10 @@ export function DataValidationPanel({
           </label>
         </div>
       )}
-      <div className="validation-panel-actions">
+      <div className="js-spreadsheet-validation-panel-actions">
         <button
           type="button"
-          className="primary-panel-button"
+          className="js-spreadsheet-primary-panel-button"
           disabled={!canApply}
           onClick={() => {
             if (type === "list") {
@@ -126,15 +126,15 @@ export function DataValidationPanel({
           Clear validation
         </button>
       </div>
-      <section className="validation-rules-section" aria-label="Data validation rules">
+      <section className="js-spreadsheet-validation-rules-section" aria-label="Data validation rules">
         <h3>Existing rules</h3>
-        <div className="validation-rules-list" role="list">
+        <div className="js-spreadsheet-validation-rules-list" role="list">
           {validationRules.length > 0 ? (
             validationRules.map((summary) => {
               const rangeLabel = formatRangeAddress(summary.range);
               const ruleLabel = formatValidationRule(summary.rule);
               return (
-                <article key={summary.id} className="validation-rule-item" role="listitem">
+                <article key={summary.id} className="js-spreadsheet-validation-rule-item" role="listitem">
                   <div>
                     <strong>{rangeLabel}</strong>
                     <span>{ruleLabel}</span>
@@ -150,7 +150,7 @@ export function DataValidationPanel({
               );
             })
           ) : (
-            <p className="validation-rules-empty">No data validation rules</p>
+            <p className="js-spreadsheet-validation-rules-empty">No data validation rules</p>
           )}
         </div>
       </section>

@@ -62,7 +62,7 @@ export function ColumnHeaderContextMenu({
   return (
     <div
       ref={menuRef}
-      className="cell-context-menu"
+      className="js-spreadsheet-cell-context-menu"
       role="menu"
       aria-label={`Column ${label} context menu`}
       style={{ left: position.left, top: position.top }}
@@ -81,7 +81,7 @@ export function ColumnHeaderContextMenu({
         }
       }}
     >
-      <div className="cell-context-menu-heading">Column {label}</div>
+      <div className="js-spreadsheet-cell-context-menu-heading">Column {label}</div>
       <button
         ref={firstItemRef}
         type="button"

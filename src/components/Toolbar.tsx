@@ -301,7 +301,7 @@ export function Toolbar(props: ToolbarProps) {
 
   return (
     <div
-      className="toolbar"
+      className="js-spreadsheet-toolbar"
       role="toolbar"
       aria-label="Toolbar"
       onFocusCapture={(event) => {
@@ -311,12 +311,12 @@ export function Toolbar(props: ToolbarProps) {
         tableFocusWithinRef.current = isTableRibbonTarget(event.relatedTarget);
       }}
     >
-      <div className="ribbon-header">
-        <div className="brand">
-          <span className="brand-mark">JS</span>
+      <div className="js-spreadsheet-ribbon-header">
+        <div className="js-spreadsheet-brand">
+          <span className="js-spreadsheet-brand-mark">JS</span>
           <span>JavaScript Spreadsheet</span>
         </div>
-        <div className="ribbon-tabs" role="tablist" aria-label="Ribbon tabs">
+        <div className="js-spreadsheet-ribbon-tabs" role="tablist" aria-label="Ribbon tabs">
           {ribbonTabs.map((tab, index) => {
             const selected = tab.id === activeTab;
 
@@ -327,9 +327,9 @@ export function Toolbar(props: ToolbarProps) {
                 id={ribbonTabId(tab.id)}
                 data-ribbon-context={tab.id === "table" ? "table" : undefined}
                 className={[
-                  "ribbon-tab",
-                  selected ? "active-ribbon-tab" : "",
-                  tab.id === "table" ? "ribbon-tab--contextual" : ""
+                  "js-spreadsheet-ribbon-tab",
+                  selected ? "js-spreadsheet-active-ribbon-tab" : "",
+                  tab.id === "table" ? "js-spreadsheet-ribbon-tab--contextual" : ""
                 ].filter(Boolean).join(" ")}
                 type="button"
                 role="tab"
@@ -348,7 +348,7 @@ export function Toolbar(props: ToolbarProps) {
       <div
         id={ribbonPanelId(activeTab)}
         data-ribbon-context={activeTab === "table" ? "table" : undefined}
-        className="ribbon-panel"
+        className="js-spreadsheet-ribbon-panel"
         role="tabpanel"
         aria-label={`${activeTabLabel} ribbon`}
         aria-labelledby={ribbonTabId(activeTab)}
@@ -429,7 +429,7 @@ function WorkbookGroup(props: ToolbarProps) {
           onClick={props.onImportGoogleSheet}
           icon={<Cloud />}
           buttonRef={props.googleSheetsImportButtonRef}
-          additionalClassName="google-sheets-import-trigger"
+          additionalClassName="js-spreadsheet-google-sheets-import-trigger"
         />
       ) : null}
       <ToolbarButton label="Print workbook" onClick={props.onPrint} icon={<Printer />} />
@@ -627,7 +627,7 @@ function FontGroup(props: ToolbarProps) {
         mixed={fontFamilyMixed}
         options={familyOptions}
         compact
-        className="font-family-select"
+        className="js-spreadsheet-font-family-select"
         onChange={(value) => props.onFontFamily(value)}
       />
       <SelectControl
@@ -685,21 +685,21 @@ function NumberGroup(props: ToolbarProps) {
       <ToolbarButton
         label="Currency format"
         onClick={() => props.onNumberFormat("currency")}
-        icon={<span className="glyph-icon">$</span>}
+        icon={<span className="js-spreadsheet-glyph-icon">$</span>}
         pressed={props.selectionFormat.numberFormat === "currency"}
         compact
       />
       <ToolbarButton
         label="Percent format"
         onClick={() => props.onNumberFormat("percent")}
-        icon={<span className="glyph-icon">%</span>}
+        icon={<span className="js-spreadsheet-glyph-icon">%</span>}
         pressed={props.selectionFormat.numberFormat === "percent"}
         compact
       />
       <ToolbarButton
         label="Comma style"
         onClick={() => props.onNumberFormat("number")}
-        icon={<span className="glyph-icon">,</span>}
+        icon={<span className="js-spreadsheet-glyph-icon">,</span>}
         pressed={props.selectionFormat.numberFormat === "number"}
         compact
       />
@@ -902,9 +902,9 @@ function isTableRibbonTarget(target: EventTarget | null): boolean {
 
 function ToolbarGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="toolbar-group" role="group" aria-label={label}>
-      <span className="toolbar-group-label">{label}</span>
-      <div className="toolbar-group-controls">{children}</div>
+    <div className="js-spreadsheet-toolbar-group" role="group" aria-label={label}>
+      <span className="js-spreadsheet-toolbar-group-label">{label}</span>
+      <div className="js-spreadsheet-toolbar-group-controls">{children}</div>
     </div>
   );
 }
@@ -938,10 +938,10 @@ function ToolbarButton({
   const isActive = pressed === true || expanded === true;
   const isMixed = pressed === "mixed";
   const className = [
-    "toolbar-button",
-    isActive ? "active-toolbar-button" : "",
-    isMixed ? "mixed-toolbar-button" : "",
-    compact ? "compact-toolbar-button" : "",
+    "js-spreadsheet-toolbar-button",
+    isActive ? "js-spreadsheet-active-toolbar-button" : "",
+    isMixed ? "js-spreadsheet-mixed-toolbar-button" : "",
+    compact ? "js-spreadsheet-compact-toolbar-button" : "",
     additionalClassName
   ]
     .filter(Boolean)
@@ -1075,10 +1075,10 @@ function SplitButton({
   }
 
   return (
-    <div className="split-button" ref={containerRef}>
+    <div className="js-spreadsheet-split-button" ref={containerRef}>
       <button
         type="button"
-        className="toolbar-button compact-toolbar-button split-button-primary"
+        className="js-spreadsheet-toolbar-button js-spreadsheet-compact-toolbar-button js-spreadsheet-split-button-primary"
         aria-label={primaryAriaLabel ?? label}
         onClick={() => {
           setOpen(false);
@@ -1092,7 +1092,7 @@ function SplitButton({
       <button
         type="button"
         ref={toggleRef}
-        className="split-button-toggle"
+        className="js-spreadsheet-split-button-toggle"
         aria-label={`${label} options`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -1114,7 +1114,7 @@ function SplitButton({
       </button>
       {open ? (
         <div
-          className="split-button-menu"
+          className="js-spreadsheet-split-button-menu"
           role="menu"
           aria-label={`${label} menu`}
           ref={menuRef}
@@ -1160,7 +1160,7 @@ function SelectControl({
 }) {
   return (
     <label
-      className={["select-control", compact ? "compact-select-control" : "", className ?? ""].filter(Boolean).join(" ")}
+      className={["js-spreadsheet-select-control", compact ? "js-spreadsheet-compact-select-control" : "", className ?? ""].filter(Boolean).join(" ")}
       title={label}
     >
       <span>{label}</span>
@@ -1202,7 +1202,7 @@ function ColorControl({
   compact?: boolean;
 }) {
   return (
-    <label className={compact ? "color-control compact-color-control" : "color-control"} title={label}>
+    <label className={compact ? "js-spreadsheet-color-control js-spreadsheet-compact-color-control" : "js-spreadsheet-color-control"} title={label}>
       {icon}
       <span>{label}</span>
       <input

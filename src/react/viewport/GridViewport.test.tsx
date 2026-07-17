@@ -463,7 +463,7 @@ describe("GridViewport", () => {
       "js-spreadsheet-grid__cell",
       "js-spreadsheet-grid__editing-cell"
     );
-    expect(editor.parentElement).not.toHaveClass("cell", "editing-cell");
+    expect(editor.parentElement).not.toHaveClass("js-spreadsheet-cell", "js-spreadsheet-editing-cell");
     expect(editor.parentElement).toHaveStyle({ top: "28px", left: "56px", width: "120px", height: "32px" });
     fireEvent.change(editor, { target: { value: "Ada Lovelace" } });
     fireEvent.keyDown(editor, { key: "Enter" });

@@ -80,7 +80,7 @@ describe("Grid", () => {
     const { rerender } = render(<Grid {...commonProps} editingCell={{ address: "A1", value: "=S" }} />);
 
     const formulaEditor = screen.getByRole("combobox", { name: "Cell editor A1" });
-    const formulaOverlay = formulaEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]');
+    const formulaOverlay = formulaEditor.closest('.js-spreadsheet-cell-editor-shell, [data-grid-editor-overlay="true"]');
     expect(formulaOverlay).not.toBeNull();
     expect(within(formulaOverlay as HTMLElement).getByRole("listbox", { name: "Formula suggestions" })).toBeInTheDocument();
 
@@ -95,7 +95,7 @@ describe("Grid", () => {
       />
     );
     const validationEditor = screen.getByRole("combobox", { name: "Cell editor B1" });
-    expect(validationEditor.closest('.cell-editor-shell, [data-grid-editor-overlay="true"]')).not.toBeNull();
+    expect(validationEditor.closest('.js-spreadsheet-cell-editor-shell, [data-grid-editor-overlay="true"]')).not.toBeNull();
     expect(within(validationEditor).getByRole("option", { name: "(None)" })).toHaveValue("");
     expect(within(validationEditor).getByRole("option", { name: "Open" })).toBeInTheDocument();
   });
@@ -168,7 +168,7 @@ describe("Grid", () => {
     const merged = screen.getByRole("gridcell", { name: "A1 Merged report" });
     expect(merged).toHaveAttribute("aria-colspan", "3");
     expect(merged).toHaveAttribute("aria-rowspan", "2");
-    expect(container.querySelector(".selection-outline")).toHaveStyle({
+    expect(container.querySelector(".js-spreadsheet-selection-outline")).toHaveStyle({
       top: "28px",
       left: "48px",
       width: "288px",
@@ -198,12 +198,12 @@ describe("Grid", () => {
     );
 
     expect(screen.getByRole("gridcell", { name: "A1" })).toHaveClass(
-      "selected-cell",
-      "frozen-top-row-cell",
-      "frozen-first-column-cell"
+      "js-spreadsheet-selected-cell",
+      "js-spreadsheet-frozen-top-row-cell",
+      "js-spreadsheet-frozen-first-column-cell"
     );
-    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("selected-cell", "frozen-top-row-cell");
-    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveClass("selected-cell", "frozen-first-column-cell");
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("js-spreadsheet-selected-cell", "js-spreadsheet-frozen-top-row-cell");
+    expect(screen.getByRole("gridcell", { name: "A2" })).toHaveClass("js-spreadsheet-selected-cell", "js-spreadsheet-frozen-first-column-cell");
   });
 
   it("selects full columns, rows, and the sheet from headers", () => {
@@ -557,7 +557,7 @@ describe("Grid", () => {
     });
     fireEvent.scroll(grid);
 
-    expect(screen.getByRole("gridcell", { name: "A1 Frozen" })).toHaveClass("frozen-first-column-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Frozen" })).toHaveClass("js-spreadsheet-frozen-first-column-cell");
     expect(screen.getByRole("gridcell", { name: `${distantAddress} Distant` })).toBeInTheDocument();
     expect(screen.queryByRole("gridcell", { name: `${hiddenAddress} Hidden` })).not.toBeInTheDocument();
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(20);
@@ -614,7 +614,7 @@ describe("Grid", () => {
     fireEvent.scroll(grid);
 
     const expectedLeft = 48 + 120 + 140 + (targetColumn - 3) * 96;
-    expect(container.querySelector(".selection-outline")).toHaveStyle({
+    expect(container.querySelector(".js-spreadsheet-selection-outline")).toHaveStyle({
       top: `${28 + targetRow * 28}px`,
       left: `${expectedLeft}px`,
       width: "96px",
@@ -693,7 +693,7 @@ describe("Grid", () => {
     });
     fireEvent.scroll(grid);
 
-    expect(screen.getByRole("gridcell", { name: `${anchorAddress} Wide merge` })).toHaveClass("merged-cell");
+    expect(screen.getByRole("gridcell", { name: `${anchorAddress} Wide merge` })).toHaveClass("js-spreadsheet-merged-cell");
     expect(screen.getAllByRole("gridcell").length).toBeLessThan(40);
   });
 
@@ -809,11 +809,11 @@ describe("Grid", () => {
     );
 
     expect(screen.getByRole("gridcell", { name: "A1 Frozen corner" })).toHaveClass(
-      "frozen-top-row-cell",
-      "frozen-first-column-cell"
+      "js-spreadsheet-frozen-top-row-cell",
+      "js-spreadsheet-frozen-first-column-cell"
     );
-    expect(screen.getByRole("gridcell", { name: "B1 Frozen row" })).toHaveClass("frozen-top-row-cell");
-    expect(screen.getByRole("gridcell", { name: "A2 Frozen column" })).toHaveClass("frozen-first-column-cell");
+    expect(screen.getByRole("gridcell", { name: "B1 Frozen row" })).toHaveClass("js-spreadsheet-frozen-top-row-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 Frozen column" })).toHaveClass("js-spreadsheet-frozen-first-column-cell");
   });
 
   it("commits row and column size changes from resize handles", () => {
@@ -1090,9 +1090,9 @@ describe("Grid", () => {
       />
     );
 
-    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
-    expect(screen.getByRole("gridcell", { name: "A2 11" })).toHaveClass("invalid-validation-cell");
-    expect(screen.getByRole("gridcell", { name: "A3 Open" })).toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("js-spreadsheet-invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 11" })).toHaveClass("js-spreadsheet-invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 Open" })).toHaveClass("js-spreadsheet-invalid-validation-cell");
   });
 
   it("collects AutoFilter choices only while open and searches the full capped distinct set", () => {
@@ -1308,13 +1308,13 @@ describe("Grid", () => {
     const header = screen.getByRole("gridcell", { name: "A1 Region" });
     const body = screen.getByRole("gridcell", { name: "A2 West" });
     const totals = screen.getByRole("gridcell", { name: "A3 Total" });
-    expect(header).toHaveClass("structured-table-cell", "structured-table-cell--header");
+    expect(header).toHaveClass("js-spreadsheet-structured-table-cell", "js-spreadsheet-structured-table-cell--header");
     expect(header).toHaveAttribute("data-structured-table-id", "table-sales");
     expect(header).toHaveAttribute("data-structured-table-style", "TableStyleMedium2");
     expect(within(header).getByTestId("structured-table-filter-affordance")).toBeInTheDocument();
-    expect(body).toHaveClass("structured-table-cell--body", "structured-table-cell--striped");
+    expect(body).toHaveClass("js-spreadsheet-structured-table-cell--body", "js-spreadsheet-structured-table-cell--striped");
     expect(body).toHaveAttribute("data-structured-table-row-id", "row-west");
-    expect(totals).toHaveClass("structured-table-cell--totals");
+    expect(totals).toHaveClass("js-spreadsheet-structured-table-cell--totals");
   });
 
   it("combines structured-table visibility with legacy filtering and explicit hidden rows without mutating the sheet", () => {

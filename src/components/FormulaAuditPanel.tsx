@@ -28,18 +28,18 @@ export function FormulaAuditPanel({
   onClose
 }: FormulaAuditPanelProps): ReactElement {
   return (
-    <aside className="formula-audit-panel" aria-label="Formula audit">
-      <div className="formula-audit-panel-header">
+    <aside className="js-spreadsheet-formula-audit-panel" aria-label="Formula audit">
+      <div className="js-spreadsheet-formula-audit-panel-header">
         <strong>Formula Audit</strong>
         <button type="button" aria-label="Close formula audit" onClick={onClose}>
           <X />
         </button>
       </div>
-      <div className="formula-audit-target">
+      <div className="js-spreadsheet-formula-audit-target">
         <span>Selection</span>
         <strong>{selectionLabel}</strong>
       </div>
-      <section className="formula-audit-section" aria-label="Active formula">
+      <section className="js-spreadsheet-formula-audit-section" aria-label="Active formula">
         <h3>{activeAddress}</h3>
         {formula ? <code>{formula}</code> : <p>No formula in active cell</p>}
       </section>
@@ -61,12 +61,12 @@ function FormulaReferenceList({
   onSelectReference: (range: CellRange) => void;
 }) {
   return (
-    <section className="formula-audit-section" aria-label={title}>
+    <section className="js-spreadsheet-formula-audit-section" aria-label={title}>
       <h3>{title}</h3>
       {references.length > 0 ? (
-        <div className="formula-audit-list" role="list" aria-label={`${title} list`}>
+        <div className="js-spreadsheet-formula-audit-list" role="list" aria-label={`${title} list`}>
           {references.map((reference) => (
-            <article key={reference.label} className="formula-audit-item" role="listitem">
+            <article key={reference.label} className="js-spreadsheet-formula-audit-item" role="listitem">
               <div>
                 <strong>{reference.label}</strong>
                 {reference.formula ? <code>{reference.formula}</code> : null}
@@ -78,7 +78,7 @@ function FormulaReferenceList({
           ))}
         </div>
       ) : (
-        <p className="formula-audit-empty">{emptyLabel}</p>
+        <p className="js-spreadsheet-formula-audit-empty">{emptyLabel}</p>
       )}
     </section>
   );

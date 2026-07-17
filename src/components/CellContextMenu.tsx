@@ -68,14 +68,14 @@ export function CellContextMenu({
   return (
     <div
       ref={menuRef}
-      className="cell-context-menu"
+      className="js-spreadsheet-cell-context-menu"
       role="menu"
       aria-label="Cell context menu"
       style={{ left: position.left, top: position.top }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
-      <div className="cell-context-menu-heading">{address}</div>
+      <div className="js-spreadsheet-cell-context-menu-heading">{address}</div>
       <button type="button" role="menuitem" onClick={() => run(onCut)}>
         Cut
       </button>
@@ -91,7 +91,7 @@ export function CellContextMenu({
       <button type="button" role="menuitem" disabled={!canPasteSpecial} onClick={() => run(onPasteFormats)}>
         Paste formats
       </button>
-      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <span className="js-spreadsheet-cell-context-menu-divider" aria-hidden="true" />
       <button type="button" role="menuitem" onClick={() => run(onClearAll)}>
         Clear all
       </button>
@@ -113,7 +113,7 @@ export function CellContextMenu({
       <button type="button" role="menuitem" onClick={() => run(onToggleWrapText)}>
         {isWrapped ? "Unwrap text" : "Wrap text"}
       </button>
-      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <span className="js-spreadsheet-cell-context-menu-divider" aria-hidden="true" />
       <button type="button" role="menuitem" onClick={() => run(onInsertRow)}>
         Insert row above
       </button>
@@ -129,7 +129,7 @@ export function CellContextMenu({
       <button type="button" role="menuitem" onClick={() => run(onDeleteColumn)}>
         Delete column
       </button>
-      <span className="cell-context-menu-divider" aria-hidden="true" />
+      <span className="js-spreadsheet-cell-context-menu-divider" aria-hidden="true" />
       <button type="button" role="menuitem" onClick={() => run(onComment)}>
         Comment
       </button>

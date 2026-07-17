@@ -23,15 +23,15 @@ export function GoToPanel({
   onClose
 }: GoToPanelProps): ReactElement {
   return (
-    <aside className="go-to-panel" aria-label="Go to">
-      <div className="go-to-panel-header">
+    <aside className="js-spreadsheet-go-to-panel" aria-label="Go to">
+      <div className="js-spreadsheet-go-to-panel-header">
         <strong>Go To</strong>
         <button type="button" aria-label="Close go to" onClick={onClose}>
           <X />
         </button>
       </div>
       <form
-        className="go-to-form"
+        className="js-spreadsheet-go-to-form"
         onSubmit={(event) => {
           event.preventDefault();
           onGoToReference();
@@ -46,14 +46,14 @@ export function GoToPanel({
             onChange={(event) => onReferenceChange(event.currentTarget.value)}
           />
         </label>
-        <button type="submit" className="primary-panel-button">
+        <button type="submit" className="js-spreadsheet-primary-panel-button">
           Go
         </button>
       </form>
-      <div className="go-to-list" role="list" aria-label="Go to named ranges">
+      <div className="js-spreadsheet-go-to-list" role="list" aria-label="Go to named ranges">
         {namedRanges.length > 0 ? (
           namedRanges.map((namedRange) => (
-            <article key={namedRange.name} className="go-to-item" role="listitem">
+            <article key={namedRange.name} className="js-spreadsheet-go-to-item" role="listitem">
               <div>
                 <strong>{namedRange.name}</strong>
                 <code>{formatNamedRangeReference(namedRange, sheets)}</code>
@@ -64,7 +64,7 @@ export function GoToPanel({
             </article>
           ))
         ) : (
-          <p className="go-to-empty">No named ranges</p>
+          <p className="js-spreadsheet-go-to-empty">No named ranges</p>
         )}
       </div>
     </aside>

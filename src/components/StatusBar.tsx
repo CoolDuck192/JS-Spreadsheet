@@ -35,11 +35,11 @@ export function StatusBar({
       ? "Saving…"
       : null;
   return (
-    <div className="status-bar" aria-label="Status">
+    <div className="js-spreadsheet-status-bar" aria-label="Status">
       <span>{status}</span>
       {persistenceMessage ? (
         <span
-          className={`status-persistence status-persistence-${persistence.status}`}
+          className={`js-spreadsheet-status-persistence js-spreadsheet-status-persistence-${persistence.status}`}
           role={persistence.status === "failed" ? "alert" : "status"}
           aria-label={`Workbook storage status: ${persistenceMessage}`}
         >
@@ -50,7 +50,7 @@ export function StatusBar({
       <span>{selectedCount} selected</span>
       <span>{selectionSummary}</span>
       <span>{formulaFunctions}</span>
-      <div className="status-zoom" aria-label="Worksheet zoom">
+      <div className="js-spreadsheet-status-zoom" aria-label="Worksheet zoom">
         <button type="button" aria-label="Zoom out" title="Zoom out" onClick={onZoomOut}>
           -
         </button>

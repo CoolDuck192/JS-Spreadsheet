@@ -1,9 +1,26 @@
 import { existsSync, readFileSync } from "node:fs";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import App from "../App";
 import { DataTable } from "../react/DataTable";
 import type { ColumnDef } from "../react/tableTypes";
 import "../entry/styles.css";
+
+/**
+ * Every class selector in a CSS source, namespaced or not.
+ *
+ * Comments and quoted strings (font names, `content:` values, attribute-selector
+ * values) are stripped first, so the only remaining `.foo` tokens are real class
+ * selectors. Nothing else needs exempting: pseudo-classes/elements (`:hover`,
+ * `::before`) and keyframe names never start with a dot, and numeric values like
+ * `.5rem` fail the leading `[A-Za-z_]` requirement.
+ */
+function extractClassSelectors(css: string): string[] {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, " ");
+  const withoutStrings = withoutComments.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+  const names = [...withoutStrings.matchAll(/\.([A-Za-z_][A-Za-z0-9_-]*)/g)].map((match) => match[1]);
+  return [...new Set(names)].sort();
+}
 
 type Person = { id: string; name: string };
 const rows: readonly Person[] = [{ id: "1", name: "Ada" }];
@@ -38,7 +55,7 @@ body {
   min-height: 0 !important;
 }
 
-.js-spreadsheet-standalone .app-shell {
+.js-spreadsheet-standalone .js-spreadsheet-app-shell {
   min-height: 0;
 }`);
 
@@ -52,13 +69,13 @@ body {
     const workbookCss = readFileSync("src/App.css", "utf8");
 
     expect(standaloneCss).toMatch(
-      /\.js-spreadsheet-standalone\s+\.app-shell\s*\{[^}]*min-height:\s*0;[^}]*\}/
+      /\.js-spreadsheet-standalone\s+\.js-spreadsheet-app-shell\s*\{[^}]*min-height:\s*0;[^}]*\}/
     );
     expect(workbookCss).toMatch(
       /\.js-spreadsheet-root\.js-spreadsheet-workbook\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
     );
     expect(workbookCss).toMatch(
-      /@scope \(\.js-spreadsheet-root\.js-spreadsheet-workbook\)[\s\S]*?\.app-shell\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
+      /@scope \(\.js-spreadsheet-root\.js-spreadsheet-workbook\)[\s\S]*?\.js-spreadsheet-app-shell\s*\{[^}]*min-height:\s*420px;[^}]*height:\s*100%;[^}]*\}/
     );
   });
 
@@ -89,15 +106,71 @@ body {
     expect(workbookCss).toContain("@scope (.js-spreadsheet-root.js-spreadsheet-workbook)");
     expect(workbookCss).not.toMatch(/^(?:\s*)(?::root|body|html|button|input|select|\*)\s*[{,]/m);
     expect(workbookCss).toMatch(
-      /@media \(max-width: 720px\)[\s\S]*?\.spreadsheet-surface\s*\{[^}]*height:\s*100%;[^}]*\}/
+      /@media \(max-width: 720px\)[\s\S]*?\.js-spreadsheet-spreadsheet-surface\s*\{[^}]*height:\s*100%;[^}]*\}/
     );
+  });
+
+  it("namespaces every class selector in the workbook CSS sources as js-spreadsheet-*", () => {
+    // Host applications ship CSS for generic names like `.app-shell` or `.toolbar`;
+    // any unprefixed class on this package's DOM is a real production collision
+    // (a host `.app-shell` rule crushed the embedded grid to 0px). `@scope` cannot
+    // prevent host rules from matching generic names, so the names themselves must
+    // be namespaced.
+    const sources = ["src/App.css", "src/standalone.css", "src/styles/data-table.css", "src/styles/tokens.css"];
+    for (const file of sources) {
+      const offenders = extractClassSelectors(readFileSync(file, "utf8")).filter(
+        (name) => !name.startsWith("js-spreadsheet-")
+      );
+      expect(offenders, `${file} must only use js-spreadsheet-* class selectors`).toEqual([]);
+    }
+  });
+
+  it("ships only js-spreadsheet-* class selectors in the published stylesheet", () => {
+    // The published file is compiled from the sources asserted above, but this
+    // guards the bundling path too (App.css reaches dist/lib/styles.css through
+    // src/styles/spreadsheet.css and the vite lib build). The file only exists
+    // after `pnpm build:lib`; when absent, the source-level gate still applies.
+    const published = "dist/lib/styles.css";
+    if (!existsSync(published)) {
+      return;
+    }
+    const offenders = extractClassSelectors(readFileSync(published, "utf8")).filter(
+      (name) => !name.startsWith("js-spreadsheet-")
+    );
+    expect(offenders, `${published} must only use js-spreadsheet-* class selectors`).toEqual([]);
+  });
+
+  it("renders the workbook with only js-spreadsheet-* class tokens", () => {
+    localStorage.clear();
+    try {
+      const { container } = render(<App />);
+      const elements = [container, ...Array.from(container.querySelectorAll("*"))];
+      expect(elements.length).toBeGreaterThan(100);
+
+      const offenders = new Set<string>();
+      for (const element of elements) {
+        for (const token of Array.from(element.classList)) {
+          // lucide-react owns the `lucide` / `lucide-*` classes on its icon SVGs;
+          // they are third-party, unstyled by this package, and not ours to rename.
+          if (token === "lucide" || token.startsWith("lucide-")) {
+            continue;
+          }
+          if (!token.startsWith("js-spreadsheet-")) {
+            offenders.add(token);
+          }
+        }
+      }
+      expect([...offenders].sort(), "workbook DOM must only carry js-spreadsheet-* class tokens").toEqual([]);
+    } finally {
+      localStorage.clear();
+    }
   });
 
   it("keeps visually hidden descriptions compatible with modern and fallback clipping", () => {
     const workbookCss = readFileSync("src/App.css", "utf8");
     const tableCss = readFileSync("src/styles/data-table.css", "utf8");
 
-    expect(workbookCss).toMatch(/\.visually-hidden\s*\{(?=[^}]*clip-path:\s*inset\(50%\);)(?=[^}]*clip:\s*rect\()[^}]*\}/s);
+    expect(workbookCss).toMatch(/\.js-spreadsheet-visually-hidden\s*\{(?=[^}]*clip-path:\s*inset\(50%\);)(?=[^}]*clip:\s*rect\()[^}]*\}/s);
     expect(tableCss).toMatch(/__visually-hidden\s*\{(?=[^}]*clip-path:\s*inset\(50%\);)(?=[^}]*clip:\s*rect\()[^}]*\}/s);
     expect(workbookCss).not.toMatch(/\b(?:currentColor|optimizeLegibility)\b/);
   });

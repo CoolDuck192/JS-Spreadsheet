@@ -351,13 +351,13 @@ describe("App", () => {
     await openRibbonTab(user, "View");
     const gridlinesToggle = screen.getByRole("button", { name: "Gridlines" });
     expect(gridlinesToggle).toHaveAttribute("aria-pressed", "true");
-    expect(gridlinesToggle).toHaveClass("active-toolbar-button");
+    expect(gridlinesToggle).toHaveClass("js-spreadsheet-active-toolbar-button");
 
     await user.click(gridlinesToggle);
 
     expect(grid).toHaveAttribute("data-gridlines", "hidden");
     expect(gridlinesToggle).toHaveAttribute("aria-pressed", "false");
-    expect(gridlinesToggle).not.toHaveClass("active-toolbar-button");
+    expect(gridlinesToggle).not.toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Gridlines hidden");
 
     await user.click(gridlinesToggle);
@@ -387,7 +387,7 @@ describe("App", () => {
     expect(screen.queryByRole("columnheader", { name: "Column A" })).not.toBeInTheDocument();
     expect(screen.queryByRole("rowheader", { name: "Row 1" })).not.toBeInTheDocument();
     expect(headersToggle).toHaveAttribute("aria-pressed", "false");
-    expect(headersToggle).not.toHaveClass("active-toolbar-button");
+    expect(headersToggle).not.toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Headers hidden");
     expect(screen.getByRole("gridcell", { name: "A1" })).toBeInTheDocument();
 
@@ -415,7 +415,7 @@ describe("App", () => {
     expect(screen.queryByRole("group", { name: "Formula bar" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Formula input")).not.toBeInTheDocument();
     expect(formulaBarToggle).toHaveAttribute("aria-pressed", "false");
-    expect(formulaBarToggle).not.toHaveClass("active-toolbar-button");
+    expect(formulaBarToggle).not.toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Formula bar hidden");
 
     await editCell(user, "A2", "=A1*2");
@@ -449,7 +449,7 @@ describe("App", () => {
     await user.click(showFormulasToggle);
 
     expect(showFormulasToggle).toHaveAttribute("aria-pressed", "true");
-    expect(showFormulasToggle).toHaveClass("active-toolbar-button");
+    expect(showFormulasToggle).toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByRole("gridcell", { name: "A3 =SUM(A1:A2)" })).toHaveTextContent("=SUM(A1:A2)");
     expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveTextContent("10");
     expect(screen.getByLabelText("Formula input")).toHaveValue("=SUM(A1:A2)");
@@ -549,13 +549,13 @@ describe("App", () => {
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Comment" }));
 
-    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveClass("commented-cell");
+    expect(screen.getByRole("gridcell", { name: "A1" })).toHaveClass("js-spreadsheet-commented-cell");
     expect(screen.getByRole("gridcell", { name: "A1" })).toHaveAttribute("title", "Comment: Follow up with finance");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Added comment to A1");
 
     await user.click(screen.getByRole("button", { name: "Comment" }));
 
-    expect(screen.getByRole("gridcell", { name: "A1" })).not.toHaveClass("commented-cell");
+    expect(screen.getByRole("gridcell", { name: "A1" })).not.toHaveClass("js-spreadsheet-commented-cell");
     expect(screen.getByRole("gridcell", { name: "A1" })).not.toHaveAttribute("title");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Removed comment from A1");
   });
@@ -572,13 +572,13 @@ describe("App", () => {
 
     const link = screen.getByRole("link", { name: "Report" });
     expect(link).toHaveAttribute("href", "https://example.com/report");
-    expect(screen.getByRole("gridcell", { name: "A1 Report" })).toHaveClass("hyperlink-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Report" })).toHaveClass("js-spreadsheet-hyperlink-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Added link to A1");
 
     await user.click(screen.getByRole("button", { name: "Unlink" }));
 
     expect(screen.queryByRole("link", { name: "Report" })).not.toBeInTheDocument();
-    expect(screen.getByRole("gridcell", { name: "A1 Report" })).not.toHaveClass("hyperlink-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Report" })).not.toHaveClass("js-spreadsheet-hyperlink-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Removed link from A1");
   });
 
@@ -604,7 +604,7 @@ describe("App", () => {
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Lock cells" }));
 
-    expect(screen.getByRole("gridcell", { name: "A1 Locked" })).toHaveClass("read-only-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Locked" })).toHaveClass("js-spreadsheet-read-only-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Locked A1");
 
     await user.dblClick(screen.getByRole("gridcell", { name: "A1 Locked" }));
@@ -620,7 +620,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Unlock cells" }));
     await editCell(user, "A1", "Editable");
 
-    expect(screen.getByRole("gridcell", { name: "A1 Editable" })).not.toHaveClass("read-only-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Editable" })).not.toHaveClass("js-spreadsheet-read-only-cell");
     expect(screen.getByRole("gridcell", { name: "A1 Editable" })).toHaveTextContent("Editable");
   });
 
@@ -635,9 +635,9 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Unlock cells" }));
     await user.click(screen.getByRole("button", { name: "Protect sheet" }));
 
-    expect(screen.getByRole("button", { name: "Protect sheet" })).toHaveClass("active-toolbar-button");
-    expect(screen.getByRole("gridcell", { name: "A1 Formula" })).toHaveClass("read-only-cell");
-    expect(screen.getByRole("gridcell", { name: "B1 Input" })).not.toHaveClass("read-only-cell");
+    expect(screen.getByRole("button", { name: "Protect sheet" })).toHaveClass("js-spreadsheet-active-toolbar-button");
+    expect(screen.getByRole("gridcell", { name: "A1 Formula" })).toHaveClass("js-spreadsheet-read-only-cell");
+    expect(screen.getByRole("gridcell", { name: "B1 Input" })).not.toHaveClass("js-spreadsheet-read-only-cell");
 
     await user.dblClick(screen.getByRole("gridcell", { name: "A1 Formula" }));
     expect(screen.queryByLabelText("Cell editor A1")).not.toBeInTheDocument();
@@ -710,15 +710,15 @@ describe("App", () => {
     await user.type(nameBox, "C5{Enter}");
 
     expect(nameBox).toHaveValue("C5");
-    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveClass("js-spreadsheet-selected-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Selected C5");
 
     await user.clear(nameBox);
     await user.type(nameBox, "B2:C3{Enter}");
 
     expect(nameBox).toHaveValue("B2:C3");
-    expect(screen.getByRole("gridcell", { name: "B2" })).toHaveClass("selected-cell");
-    expect(screen.getByRole("gridcell", { name: "C3" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "B2" })).toHaveClass("js-spreadsheet-selected-cell");
+    expect(screen.getByRole("gridcell", { name: "C3" })).toHaveClass("js-spreadsheet-selected-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Selected B2:C3");
   });
 
@@ -731,7 +731,7 @@ describe("App", () => {
     await user.type(within(panel).getByLabelText("Go to reference"), "C5{Enter}");
 
     expect(screen.getByLabelText("Name box")).toHaveValue("C5");
-    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "C5" })).toHaveClass("js-spreadsheet-selected-cell");
     expect(screen.queryByRole("complementary", { name: "Go to" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Selected C5");
 
@@ -740,8 +740,8 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Go" }));
 
     expect(screen.getByLabelText("Name box")).toHaveValue("B2:C3");
-    expect(screen.getByRole("gridcell", { name: "B2" })).toHaveClass("selected-cell");
-    expect(screen.getByRole("gridcell", { name: "C3" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "B2" })).toHaveClass("js-spreadsheet-selected-cell");
+    expect(screen.getByRole("gridcell", { name: "C3" })).toHaveClass("js-spreadsheet-selected-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Selected B2:C3");
   });
 
@@ -764,8 +764,8 @@ describe("App", () => {
     await user.click(within(panel).getByRole("button", { name: "Go to Sales" }));
 
     expect(screen.getByLabelText("Name box")).toHaveValue("Sales");
-    expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveClass("selected-cell");
-    expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).toHaveClass("js-spreadsheet-selected-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveClass("js-spreadsheet-selected-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Selected Sales");
   });
 
@@ -777,14 +777,14 @@ describe("App", () => {
 
     expect(screen.getByLabelText("Name box")).toHaveValue("B1:B100");
     expect(screen.getByLabelText("Status")).toHaveTextContent("100 selected");
-    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("js-spreadsheet-selected-cell");
 
     await user.click(screen.getByRole("rowheader", { name: "Row 3" }));
 
     expect(screen.getByLabelText("Name box")).toHaveValue("A3:Z3");
     expect(screen.getByLabelText("Status")).toHaveTextContent("26 selected");
-    expect(screen.getByRole("gridcell", { name: "A3" })).toHaveClass("selected-cell");
-    expect(screen.getByRole("gridcell", { name: "Z3" })).toHaveClass("selected-cell");
+    expect(screen.getByRole("gridcell", { name: "A3" })).toHaveClass("js-spreadsheet-selected-cell");
+    expect(screen.getByRole("gridcell", { name: "Z3" })).toHaveClass("js-spreadsheet-selected-cell");
 
     await user.click(screen.getByRole("button", { name: "Select sheet" }));
 
@@ -833,16 +833,16 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Merge cells" }));
 
     const mergedCell = screen.getByRole("gridcell", { name: "A1 Quarterly report" });
-    expect(mergedCell).toHaveClass("merged-cell");
+    expect(mergedCell).toHaveClass("js-spreadsheet-merged-cell");
     expect(mergedCell).toHaveAttribute("aria-colspan", "2");
     expect(mergedCell).toHaveAttribute("aria-rowspan", "2");
-    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("merge-covered-cell");
+    expect(screen.getByRole("gridcell", { name: "B1" })).toHaveClass("js-spreadsheet-merge-covered-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Merged A1:B2");
 
     await user.click(screen.getByRole("button", { name: "Unmerge cells" }));
 
-    expect(screen.getByRole("gridcell", { name: "A1 Quarterly report" })).not.toHaveClass("merged-cell");
-    expect(screen.getByRole("gridcell", { name: "B1" })).not.toHaveClass("merge-covered-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Quarterly report" })).not.toHaveClass("js-spreadsheet-merged-cell");
+    expect(screen.getByRole("gridcell", { name: "B1" })).not.toHaveClass("js-spreadsheet-merge-covered-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Unmerged A1:B2");
   });
 
@@ -1425,7 +1425,7 @@ describe("App", () => {
     const { container } = render(
       <Spreadsheet storage={false} services={{ importers: { xlsx: importer } }} />
     );
-    const shell = container.querySelector("main.app-shell")!;
+    const shell = container.querySelector("main.js-spreadsheet-app-shell")!;
 
     fireEvent.drop(shell, {
       dataTransfer: { files: [new File(["unsupported"], "notes.txt")] }
@@ -1460,7 +1460,7 @@ describe("App", () => {
 
   it("explains that dropped legacy XLS files must be re-saved", () => {
     const { container } = render(<App />);
-    const shell = container.querySelector("main.app-shell")!;
+    const shell = container.querySelector("main.js-spreadsheet-app-shell")!;
 
     fireEvent.drop(shell, {
       dataTransfer: { files: [new File(["legacy"], "budget.xls")] }
@@ -1492,7 +1492,7 @@ describe("App", () => {
       type: "application/vnd.ms-excel.sheet.macroEnabled.12"
     });
     const { container } = render(<App />);
-    const shell = container.querySelector("main.app-shell")!;
+    const shell = container.querySelector("main.js-spreadsheet-app-shell")!;
 
     fireEvent.drop(shell, { dataTransfer: { files: [file] } });
 
@@ -1991,15 +1991,15 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Wrap text" }));
 
     const wrappedCell = screen.getByRole("gridcell", { name: "A1 Line one Line two Line three" });
-    expect(wrappedCell).toHaveClass("wrapped-cell");
+    expect(wrappedCell).toHaveClass("js-spreadsheet-wrapped-cell");
     expect(wrappedCell).toHaveStyle({ whiteSpace: "normal" });
-    expect(screen.getByRole("button", { name: "Wrap text" })).toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Wrap text" })).toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Wrapped text");
 
     await user.click(screen.getByRole("button", { name: "Wrap text" }));
 
-    expect(screen.getByRole("gridcell", { name: "A1 Line one Line two Line three" })).not.toHaveClass("wrapped-cell");
-    expect(screen.getByRole("button", { name: "Wrap text" })).not.toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("gridcell", { name: "A1 Line one Line two Line three" })).not.toHaveClass("js-spreadsheet-wrapped-cell");
+    expect(screen.getByRole("button", { name: "Wrap text" })).not.toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Unwrapped text");
   });
 
@@ -2016,8 +2016,8 @@ describe("App", () => {
     fireEvent.keyDown(grid, { key: "i", ctrlKey: true });
     const formattedCell = screen.getByRole("gridcell", { name: "A1 Report" });
     expect(formattedCell).toHaveStyle({ fontWeight: "700", fontStyle: "italic" });
-    expect(screen.getByRole("button", { name: "Bold" })).toHaveClass("active-toolbar-button");
-    expect(screen.getByRole("button", { name: "Italic" })).toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Bold" })).toHaveClass("js-spreadsheet-active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Italic" })).toHaveClass("js-spreadsheet-active-toolbar-button");
 
     fireEvent.keyDown(grid, { key: "k", ctrlKey: true });
     expect(screen.getByRole("link", { name: "Report" })).toHaveAttribute("href", "https://example.com/report");
@@ -2713,10 +2713,10 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Formula input"), "=");
 
     const suggestions = screen.getByRole("listbox", { name: "Formula suggestions" });
-    expect(suggestions).toHaveClass("formula-suggestions--excel");
+    expect(suggestions).toHaveClass("js-spreadsheet-formula-suggestions--excel");
     expect(suggestions).toHaveAttribute("aria-orientation", "vertical");
     expect(within(suggestions).getAllByRole("option")).toHaveLength(6);
-    expect(within(suggestions).getByRole("option", { name: "SUM" })).toHaveClass("formula-suggestion-option--active");
+    expect(within(suggestions).getByRole("option", { name: "SUM" })).toHaveClass("js-spreadsheet-formula-suggestion-option--active");
     expect(within(suggestions).getByText("SUM(number1, [number2], ...)")).toBeInTheDocument();
     expect(within(suggestions).getByText("Adds numbers or ranges.")).toBeInTheDocument();
   });
@@ -2983,7 +2983,7 @@ describe("App", () => {
     fireEvent.input(screen.getByLabelText("Fill color"), { target: { value: "#1f6feb" } });
 
     await user.click(screen.getByRole("button", { name: "Format painter" }));
-    expect(screen.getByRole("button", { name: "Format painter" })).toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Format painter" })).toHaveClass("js-spreadsheet-active-toolbar-button");
 
     await user.click(screen.getByRole("gridcell", { name: "B1 Target" }));
 
@@ -2995,7 +2995,7 @@ describe("App", () => {
       color: "#ffffff",
       backgroundColor: "#1f6feb"
     });
-    expect(screen.getByRole("button", { name: "Format painter" })).not.toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Format painter" })).not.toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Painted format to B1");
   });
 
@@ -3015,7 +3015,7 @@ describe("App", () => {
     await user.click(screen.getByRole("gridcell", { name: "B1 Locked" }));
 
     expect(screen.getByRole("gridcell", { name: "B1 Locked" })).not.toHaveStyle({ fontWeight: "700" });
-    expect(screen.getByRole("button", { name: "Format painter" })).toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Format painter" })).toHaveClass("js-spreadsheet-active-toolbar-button");
     expect(screen.getByLabelText("Status")).toHaveTextContent("B1 is read-only");
   });
 
@@ -3035,7 +3035,7 @@ describe("App", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "Wrap text" }));
 
     expect(screen.queryByRole("menu", { name: "Cell context menu" })).not.toBeInTheDocument();
-    expect(screen.getByRole("gridcell", { name: "A1 Context menu note" })).toHaveClass("wrapped-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Context menu note" })).toHaveClass("js-spreadsheet-wrapped-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Wrapped text");
   });
 
@@ -3102,7 +3102,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
     const highlightedCell = screen.getByRole("gridcell", { name: "A1 12" });
-    expect(highlightedCell).toHaveClass("conditional-format-cell");
+    expect(highlightedCell).toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(highlightedCell).toHaveStyle({ fontStyle: "italic" });
 
     fireEvent.contextMenu(highlightedCell, {
@@ -3117,7 +3117,7 @@ describe("App", () => {
 
     const clearedCell = screen.getByRole("gridcell", { name: "A1 12" });
     expect(clearedCell).toHaveTextContent("12");
-    expect(clearedCell).not.toHaveClass("conditional-format-cell");
+    expect(clearedCell).not.toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(clearedCell).toHaveStyle({ fontStyle: "italic" });
     expect(screen.getByLabelText("Status")).toHaveTextContent("Cleared conditional formatting");
   });
@@ -3159,7 +3159,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Apply validation" }));
 
     const invalidCell = screen.getByRole("gridcell", { name: "A1 20" });
-    expect(invalidCell).toHaveClass("invalid-validation-cell");
+    expect(invalidCell).toHaveClass("js-spreadsheet-invalid-validation-cell");
 
     fireEvent.contextMenu(invalidCell, {
       clientX: 120,
@@ -3169,7 +3169,7 @@ describe("App", () => {
 
     const clearedCell = screen.getByRole("gridcell", { name: "A1 20" });
     expect(clearedCell).toHaveTextContent("20");
-    expect(clearedCell).not.toHaveClass("invalid-validation-cell");
+    expect(clearedCell).not.toHaveClass("js-spreadsheet-invalid-validation-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Cleared data validation");
   });
 
@@ -3242,7 +3242,7 @@ describe("App", () => {
     await openRibbonTab(user, "Review");
     await user.click(screen.getByRole("button", { name: "Comment" }));
     const commentedCell = screen.getByRole("gridcell", { name: "A1 Forecast" });
-    expect(commentedCell).toHaveClass("commented-cell");
+    expect(commentedCell).toHaveClass("js-spreadsheet-commented-cell");
     expect(commentedCell).toHaveAttribute("title", "Comment: Review the forecast");
 
     fireEvent.contextMenu(commentedCell, {
@@ -3252,7 +3252,7 @@ describe("App", () => {
     await user.click(within(screen.getByRole("menu", { name: "Cell context menu" })).getByRole("menuitem", { name: "Clear comments" }));
 
     expect(screen.getByRole("gridcell", { name: "A1 Forecast" })).toHaveTextContent("Forecast");
-    expect(screen.getByRole("gridcell", { name: "A1 Forecast" })).not.toHaveClass("commented-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 Forecast" })).not.toHaveClass("js-spreadsheet-commented-cell");
     expect(screen.getByRole("gridcell", { name: "A1 Forecast" })).not.toHaveAttribute("title");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Cleared comments");
   });
@@ -3402,7 +3402,7 @@ describe("App", () => {
 
     await user.click(filterButton);
     expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: "Filter" })).toHaveClass("active-toolbar-button");
+    expect(screen.getByRole("button", { name: "Filter" })).toHaveClass("js-spreadsheet-active-toolbar-button");
 
     await user.click(screen.getByRole("button", { name: "Filter" }));
     expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("aria-expanded", "false");
@@ -3524,7 +3524,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Apply validation" }));
 
     await editCell(user, "A1", "=5+5");
-    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 10" })).not.toHaveClass("js-spreadsheet-invalid-validation-cell");
     await editCell(user, "B1", "=A1*2");
     expect(screen.getByRole("gridcell", { name: "B1 20" })).toBeInTheDocument();
 
@@ -3565,7 +3565,7 @@ describe("App", () => {
     await user.clear(screen.getByLabelText("Cell editor A1"));
     await user.type(screen.getByLabelText("Cell editor A1"), "West{Enter}");
 
-    expect(screen.getByRole("gridcell", { name: "A1 West" })).not.toHaveClass("invalid-validation-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 West" })).not.toHaveClass("js-spreadsheet-invalid-validation-cell");
 
     await user.click(screen.getByRole("button", { name: "Data validation" }));
     const rules = screen.getByLabelText("Data validation rules");
@@ -3643,12 +3643,12 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Conditional value"), "10");
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "A2 12" })).toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 12" })).toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(screen.getByRole("gridcell", { name: "A2 12" })).toHaveStyle({
       backgroundColor: "#fff1d6",
       color: "#8a4b00"
     });
-    expect(screen.getByRole("gridcell", { name: "A1 5" })).not.toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A1 5" })).not.toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(screen.getByLabelText("Status")).toHaveTextContent("Applied conditional formatting");
   });
 
@@ -3672,8 +3672,8 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "B3" })).toHaveClass("conditional-format-cell");
-    expect(screen.getByRole("gridcell", { name: "B2 Done" })).not.toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "B3" })).toHaveClass("js-spreadsheet-conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "B2 Done" })).not.toHaveClass("js-spreadsheet-conditional-format-cell");
 
     await user.click(screen.getByRole("button", { name: "Conditional formatting" }));
     const rules = screen.getByLabelText("Conditional format rules");
@@ -3700,9 +3700,9 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "A2 West" })).toHaveClass("conditional-format-cell");
-    expect(screen.getByRole("gridcell", { name: "A4 West" })).toHaveClass("conditional-format-cell");
-    expect(screen.getByRole("gridcell", { name: "A3 East" })).not.toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 West" })).toHaveClass("js-spreadsheet-conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A4 West" })).toHaveClass("js-spreadsheet-conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 East" })).not.toHaveClass("js-spreadsheet-conditional-format-cell");
 
     await user.click(screen.getByRole("button", { name: "Conditional formatting" }));
     const rules = screen.getByLabelText("Conditional format rules");
@@ -3731,9 +3731,9 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveClass("conditional-format-cell");
-    expect(screen.getByRole("gridcell", { name: "A5 30" })).toHaveClass("conditional-format-cell");
-    expect(screen.getByRole("gridcell", { name: "A4 20" })).not.toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A3 30" })).toHaveClass("js-spreadsheet-conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A5 30" })).toHaveClass("js-spreadsheet-conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A4 20" })).not.toHaveClass("js-spreadsheet-conditional-format-cell");
 
     await user.click(screen.getByRole("button", { name: "Conditional formatting" }));
     const rules = screen.getByLabelText("Conditional format rules");
@@ -3762,10 +3762,10 @@ describe("App", () => {
     fireEvent.input(screen.getByLabelText("Data bar color"), { target: { value: "#2f7d9f" } });
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    const firstBar = screen.getByRole("gridcell", { name: "A2 10" }).querySelector<HTMLElement>(".cell-data-bar");
-    const lastBar = screen.getByRole("gridcell", { name: "A4 30" }).querySelector<HTMLElement>(".cell-data-bar");
+    const firstBar = screen.getByRole("gridcell", { name: "A2 10" }).querySelector<HTMLElement>(".js-spreadsheet-cell-data-bar");
+    const lastBar = screen.getByRole("gridcell", { name: "A4 30" }).querySelector<HTMLElement>(".js-spreadsheet-cell-data-bar");
 
-    expect(screen.getByRole("gridcell", { name: "A2 10" })).toHaveClass("conditional-data-bar-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 10" })).toHaveClass("js-spreadsheet-conditional-data-bar-cell");
     expect(firstBar).toHaveStyle({ width: "33%" });
     expect(lastBar).toHaveStyle({ width: "100%" });
 
@@ -3798,7 +3798,7 @@ describe("App", () => {
     fireEvent.input(screen.getByLabelText("Maximum color"), { target: { value: "#000000" } });
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "A2 10" })).toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 10" })).toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(screen.getByRole("gridcell", { name: "A2 10" })).toHaveStyle({ backgroundColor: "#ffffff" });
     expect(screen.getByRole("gridcell", { name: "A3 20" })).toHaveStyle({ backgroundColor: "#808080" });
     expect(screen.getByRole("gridcell", { name: "A4 30" })).toHaveStyle({ backgroundColor: "#000000" });
@@ -3825,7 +3825,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Conditional value"), "10");
     await user.click(screen.getByRole("button", { name: "Apply conditional format" }));
 
-    expect(screen.getByRole("gridcell", { name: "A2 12" })).toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 12" })).toHaveClass("js-spreadsheet-conditional-format-cell");
 
     await user.click(screen.getByRole("button", { name: "Conditional formatting" }));
     expect(screen.getByRole("heading", { name: "Existing rules" })).toBeInTheDocument();
@@ -3834,7 +3834,7 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete conditional format rule A1:A3 Greater than 10" }));
 
-    expect(screen.getByRole("gridcell", { name: "A2 12" })).not.toHaveClass("conditional-format-cell");
+    expect(screen.getByRole("gridcell", { name: "A2 12" })).not.toHaveClass("js-spreadsheet-conditional-format-cell");
     expect(screen.getByText("No conditional format rules")).toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Deleted conditional format rule");
   });
