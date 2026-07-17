@@ -85,6 +85,9 @@ export function formatDisplayValue(value: string, format: CellFormat | undefined
   }
 
   if (format.numberFormat === "accounting") {
+    // Deliberately matches Excel numFmt section-selection: zero-detection is EXACT (number === 0) and
+    // parenthesization is SIGN-BASED pre-rounding — so -0.004 renders ($0.00), not "$ -", matching what
+    // the exported XLSX renders in Excel/LibreOffice; on-screen and exported output agree by construction.
     if (number === 0) {
       return "$ -";
     }

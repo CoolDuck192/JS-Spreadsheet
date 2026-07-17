@@ -43,6 +43,11 @@ describe("displayFormat", () => {
       expect(formatDisplayValue("0", { numberFormat: "accounting" })).toBe("$ -");
     });
 
+    it("accounting: near-zero and negative zero follow Excel section-selection", () => {
+      expect(formatDisplayValue("-0.004", { numberFormat: "accounting" })).toBe("($0.00)");
+      expect(formatDisplayValue("-0", { numberFormat: "accounting" })).toBe("$ -");
+    });
+
     it("unknown numberFormat returns the raw value (no percent fallthrough)", () => {
       expect(formatDisplayValue("12", { numberFormat: "bogus" as never })).toBe("12");
     });
