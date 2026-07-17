@@ -34,7 +34,8 @@
     "test": "vitest run --config vite.config.ts",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "namespace-css": "node scripts/namespace-css.mjs"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.10",

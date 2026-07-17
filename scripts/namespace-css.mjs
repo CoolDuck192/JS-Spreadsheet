@@ -11,16 +11,28 @@
  * What it rewrites (and nothing else):
  *   - class selectors in src/App.css + src/standalone.css (comments left untouched);
  *   - className-bearing string literals / template chunks in src/App.tsx and
- *     src/components/*.tsx (JSX `className=`/`*ClassName=` attributes, `const
- *     <x>ClassName =` initializers, `className:` object properties) — every
- *     whitespace-separated token, word-boundary exact;
+ *     src/components/** (a RECURSIVE walk, so subdirectories like
+ *     src/components/grid/ are included): JSX `className=`/`*ClassName=`
+ *     attributes, `const <x>ClassName =` initializers, `className:` object
+ *     properties — every whitespace-separated token, word-boundary exact.
+ *     src/react/** is deliberately excluded: that surface was already
+ *     BEM-namespaced (`js-spreadsheet-data-table__*`, `js-spreadsheet-grid__*`)
+ *     before this codemod existed, and the isolation gate still covers it;
  *   - test selectors in unit tests and e2e specs: `.name` inside string literals,
  *     `\.name` inside regex literals, string/regex arguments to toHaveClass /
  *     classList.contains|add|remove|toggle, and className props (exact rename-map
  *     matches only, so host-supplied classNames in tests stay untouched).
  *
- * It does NOT rewrite comments, aria-labels, titles, roles, test names, or any other
- * prose — a word like "toolbar" outside a class context must not change.
+ * It does NOT rewrite comments, aria-labels, titles, roles, or prose in source
+ * files — a word like "toolbar" outside a class context must not change. One
+ * caveat: in TEST files, dotted selector occurrences (`.name`) are rewritten in
+ * ANY string literal, including test titles, since a dotted map name in a test
+ * file is treated as a selector reference wherever it appears.
+ *
+ * Naming convention: NEW workbook code should use BEM-style
+ * `js-spreadsheet-<block>__<element>` names (the data-table/grid convention);
+ * the flat `js-spreadsheet-<legacy>` names produced here are the mechanical
+ * rename of pre-existing classes, not a pattern to extend.
  *
  * Idempotent: a second run performs zero replacements.
  */
@@ -600,3 +612,4 @@ if (report.manual.length > 0) {
 } else {
   console.log("namespace-css: nothing left for manual review");
 }
+if (report.manual.length > 0) process.exitCode = 1;

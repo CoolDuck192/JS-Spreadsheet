@@ -528,6 +528,11 @@ component root or a wrapping host class to keep multiple embedded instances
 independent. Keep visible focus styles and sufficient contrast when overriding
 the defaults.
 
+New workbook code should use BEM-style `js-spreadsheet-<block>__<element>` class
+names (the data-table/grid convention); the flat `js-spreadsheet-<legacy>` names
+are the mechanical rename of pre-existing workbook classes, not a pattern to
+extend.
+
 The grid includes keyboard navigation, selection, editing, copy/paste,
 virtualized rows and columns, grid semantics, live status announcements, and
 reduced-motion handling. Use a meaningful `aria-label` on every standalone

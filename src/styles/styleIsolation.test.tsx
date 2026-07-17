@@ -121,24 +121,31 @@ body {
       const offenders = extractClassSelectors(readFileSync(file, "utf8")).filter(
         (name) => !name.startsWith("js-spreadsheet-")
       );
-      expect(offenders, `${file} must only use js-spreadsheet-* class selectors`).toEqual([]);
+      expect(
+        offenders,
+        `${file} must only use js-spreadsheet-* class selectors — prefix by hand or run \`node scripts/namespace-css.mjs\``
+      ).toEqual([]);
     }
   });
 
-  it("ships only js-spreadsheet-* class selectors in the published stylesheet", () => {
-    // The published file is compiled from the sources asserted above, but this
-    // guards the bundling path too (App.css reaches dist/lib/styles.css through
-    // src/styles/spreadsheet.css and the vite lib build). The file only exists
-    // after `pnpm build:lib`; when absent, the source-level gate still applies.
-    const published = "dist/lib/styles.css";
-    if (!existsSync(published)) {
-      return;
+  // The published file is compiled from the sources asserted above, but this
+  // guards the bundling path too (App.css reaches dist/lib/styles.css through
+  // src/styles/spreadsheet.css and the vite lib build). The file only exists
+  // after `pnpm build:lib`; when absent, this reports as skipped and the
+  // source-level gate still applies.
+  it.skipIf(!existsSync("dist/lib/styles.css"))(
+    "ships only js-spreadsheet-* class selectors in the published stylesheet",
+    () => {
+      const published = "dist/lib/styles.css";
+      const offenders = extractClassSelectors(readFileSync(published, "utf8")).filter(
+        (name) => !name.startsWith("js-spreadsheet-")
+      );
+      expect(
+        offenders,
+        `${published} must only use js-spreadsheet-* class selectors — prefix by hand or run \`node scripts/namespace-css.mjs\``
+      ).toEqual([]);
     }
-    const offenders = extractClassSelectors(readFileSync(published, "utf8")).filter(
-      (name) => !name.startsWith("js-spreadsheet-")
-    );
-    expect(offenders, `${published} must only use js-spreadsheet-* class selectors`).toEqual([]);
-  });
+  );
 
   it("renders the workbook with only js-spreadsheet-* class tokens", () => {
     localStorage.clear();
@@ -160,7 +167,10 @@ body {
           }
         }
       }
-      expect([...offenders].sort(), "workbook DOM must only carry js-spreadsheet-* class tokens").toEqual([]);
+      expect(
+        [...offenders].sort(),
+        "workbook DOM must only carry js-spreadsheet-* class tokens — prefix by hand or run `node scripts/namespace-css.mjs`"
+      ).toEqual([]);
     } finally {
       localStorage.clear();
     }
