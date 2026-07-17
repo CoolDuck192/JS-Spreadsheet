@@ -35,7 +35,7 @@ export type CellFormat = {
   fontSize?: number;
   textColor?: string;
   backgroundColor?: string;
-  numberFormat?: "general" | "number" | "currency" | "percent" | "date" | "dateTime";
+  numberFormat?: "general" | "number" | "currency" | "percent" | "date" | "dateTime" | "financial" | "financial2" | "accounting";
   horizontalAlign?: "left" | "center" | "right";
   verticalAlign?: "top" | "middle" | "bottom";
   wrapText?: boolean;

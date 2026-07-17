@@ -89,7 +89,7 @@ export type ColumnDef<
 );
 
 export type TableCellFormat = {
-  numberFormat?: "general" | "number" | "currency" | "percent" | "date" | "datetime";
+  numberFormat?: "general" | "number" | "currency" | "percent" | "date" | "datetime" | "financial" | "financial2" | "accounting";
   textColor?: string;
   backgroundColor?: string;
   bold?: boolean;

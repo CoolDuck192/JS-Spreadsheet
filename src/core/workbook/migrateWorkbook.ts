@@ -261,7 +261,7 @@ function migrateCellFormat(value: unknown): CellFormat | null {
     if (!optionalString(value[key])) return null;
   }
   if (value.fontSize !== undefined && (typeof value.fontSize !== "number" || !Number.isFinite(value.fontSize) || value.fontSize <= 0)) return null;
-  if (value.numberFormat !== undefined && !["general", "number", "currency", "percent", "date", "dateTime"].includes(value.numberFormat as string)) return null;
+  if (value.numberFormat !== undefined && !["general", "number", "currency", "percent", "date", "dateTime", "financial", "financial2", "accounting"].includes(value.numberFormat as string)) return null;
   if (value.horizontalAlign !== undefined && !["left", "center", "right"].includes(value.horizontalAlign as string)) return null;
   if (value.verticalAlign !== undefined && !["top", "middle", "bottom"].includes(value.verticalAlign as string)) return null;
   const borders = migrateCellBorders(value.borders);

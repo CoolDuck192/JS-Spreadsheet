@@ -133,7 +133,7 @@ const invalidCommands: readonly Readonly<{
   },
   {
     name: "conditional format with an unknown number format",
-    command: conditionalFormatCommand({ format: { numberFormat: "accounting" } })
+    command: conditionalFormatCommand({ format: { numberFormat: "bogus" } })
   },
   {
     name: "conditional format with a non-thin border",

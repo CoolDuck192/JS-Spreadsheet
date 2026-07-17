@@ -18,7 +18,7 @@ type QuickToolField =
   | "readOnly";
 
 type QuickToolValues = {
-  numberFormat: "general" | "number" | "currency" | "percent" | "date" | "datetime";
+  numberFormat: "general" | "number" | "currency" | "percent" | "date" | "datetime" | "financial" | "financial2" | "accounting";
   bold: boolean;
   fillColor: string;
   validationList: string;
@@ -282,7 +282,7 @@ export function DataTableToolbar<TRow>({
               markTouched("numberFormat");
               updateQuickToolValue("numberFormat", event.currentTarget.value as QuickToolValues["numberFormat"]);
             }}>
-              {(["general", "number", "currency", "percent", "date", "datetime"] as const).map((value) => (
+              {(["general", "number", "currency", "percent", "date", "datetime", "financial", "financial2", "accounting"] as const).map((value) => (
                 <option key={value} value={value}>{value}</option>
               ))}
             </select>

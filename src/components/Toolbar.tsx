@@ -84,7 +84,10 @@ const NUMBER_FORMAT_OPTIONS = [
   { value: "currency", label: "Currency" },
   { value: "percent", label: "Percent" },
   { value: "date", label: "Date" },
-  { value: "dateTime", label: "Date and time" }
+  { value: "dateTime", label: "Date and time" },
+  { value: "financial", label: "Financial" },
+  { value: "financial2", label: "Financial (2 dp)" },
+  { value: "accounting", label: "Accounting" }
 ] as const;
 
 const FONT_FAMILY_OPTIONS = [

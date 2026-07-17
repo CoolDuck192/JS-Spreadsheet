@@ -41,7 +41,10 @@ const XLSX_NUMBER_FORMATS: Record<NonNullable<CellFormat["numberFormat"]>, strin
   currency: "$#,##0.00",
   percent: "0.########%",
   date: "mmm d, yyyy",
-  dateTime: "mmm d, yyyy h:mm AM/PM"
+  dateTime: "mmm d, yyyy h:mm AM/PM",
+  financial: "#,##0_);(#,##0)",
+  financial2: "#,##0.00_);(#,##0.00)",
+  accounting: '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)'
 };
 let excelJsPromise: Promise<typeof ExcelJS> | null = null;
 

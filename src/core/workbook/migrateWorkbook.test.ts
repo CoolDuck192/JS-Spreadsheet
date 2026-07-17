@@ -150,6 +150,27 @@ describe("workbook model migration", () => {
     })).toBeNull();
   });
 
+  it("accepts financial preset number formats and rejects unknown ones", () => {
+    const fixture = createBlankWorkbook();
+    const ruleWithNumberFormat = (numberFormat: string) => ({
+      id: "rule-1",
+      range: cellRange(),
+      condition: { type: "greaterThan" as const, value: "1" },
+      format: { numberFormat }
+    });
+
+    const migrated = migrateWorkbookModel({
+      ...fixture,
+      sheets: [{ ...fixture.sheets[0], conditionalFormats: [ruleWithNumberFormat("financial")] }]
+    });
+    expect(migrated?.sheets[0].conditionalFormats[0].format).toEqual({ numberFormat: "financial" });
+
+    expect(migrateWorkbookModel({
+      ...fixture,
+      sheets: [{ ...fixture.sheets[0], conditionalFormats: [ruleWithNumberFormat("bogus")] }]
+    })).toBeNull();
+  });
+
   it("accepts finite text-length bounds supported by the public workbook model", () => {
     const fixture = createBlankWorkbook();
     const migrated = migrateWorkbookModel({

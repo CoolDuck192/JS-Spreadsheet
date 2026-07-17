@@ -14,6 +14,13 @@ const PERCENT_FORMATTER = new Intl.NumberFormat("en-US", {
   style: "percent",
   maximumFractionDigits: 2
 });
+const FINANCIAL_FORMATTER = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0
+});
+const FINANCIAL2_FORMATTER = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+});
 const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -69,7 +76,30 @@ export function formatDisplayValue(value: string, format: CellFormat | undefined
     return CURRENCY_FORMATTER.format(number);
   }
 
-  return PERCENT_FORMATTER.format(number);
+  if (format.numberFormat === "financial") {
+    return parenthesizeNegative(FINANCIAL_FORMATTER.format(Math.abs(number)), number < 0);
+  }
+
+  if (format.numberFormat === "financial2") {
+    return parenthesizeNegative(FINANCIAL2_FORMATTER.format(Math.abs(number)), number < 0);
+  }
+
+  if (format.numberFormat === "accounting") {
+    if (number === 0) {
+      return "$ -";
+    }
+    return parenthesizeNegative(`$${FINANCIAL2_FORMATTER.format(Math.abs(number))}`, number < 0);
+  }
+
+  if (format.numberFormat === "percent") {
+    return PERCENT_FORMATTER.format(number);
+  }
+
+  return value;
+}
+
+function parenthesizeNegative(formatted: string, negative: boolean): string {
+  return negative ? `(${formatted})` : formatted;
 }
 
 function parseNumberValue(value: string): number | null {

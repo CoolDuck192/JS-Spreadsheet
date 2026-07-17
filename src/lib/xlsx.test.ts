@@ -214,6 +214,42 @@ describe("xlsx", () => {
     ]);
   });
 
+  it("round-trips financial, financial2, and accounting number formats through XLSX", async () => {
+    let workbook = createBlankWorkbook();
+    const sheetId = workbook.activeSheetId;
+    workbook = setCellContent(workbook, sheetId, "A1", -1234567.4);
+    workbook = setCellContent(workbook, sheetId, "A2", 1234.5);
+    workbook = setCellContent(workbook, sheetId, "A3", -1234.5);
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 0, column: 0 }, end: { row: 0, column: 0 } },
+      { numberFormat: "financial" }
+    );
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 1, column: 0 }, end: { row: 1, column: 0 } },
+      { numberFormat: "financial2" }
+    );
+    workbook = setCellFormat(
+      workbook,
+      sheetId,
+      { start: { row: 2, column: 0 }, end: { row: 2, column: 0 } },
+      { numberFormat: "accounting" }
+    );
+
+    const data = await exportWorkbookToXlsx(workbook);
+    const imported = await importWorkbookFromXlsx(data);
+    const importedSheetId = imported.sheets[0].id;
+
+    expect(["A1", "A2", "A3"].map((address) => getCellFormat(imported, importedSheetId, address).numberFormat)).toEqual([
+      "financial",
+      "financial2",
+      "accounting"
+    ]);
+  });
+
   it("round-trips the active sheet through XLSX", async () => {
     let workbook = createBlankWorkbook();
     workbook = setCellContent(workbook, workbook.activeSheetId, "A1", "First sheet");
